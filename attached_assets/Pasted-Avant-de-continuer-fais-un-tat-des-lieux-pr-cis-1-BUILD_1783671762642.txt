@@ -1,0 +1,42 @@
+Avant de continuer, fais un état des lieux précis :
+
+1) BUILD — L'agent s'était arrêté en train de corriger 2 imports cassés
+   dans auth.ts et AuthContext.tsx (types SessionUser / LoginInput /
+   ChangerPasswordInput définis en inline). Vérifie si cette correction
+   a été appliquée intégralement et si le build passe (backend +
+   frontend). Si non, termine-la avant toute autre action.
+
+2) CRM_KEY — Rapport sur la correction du bug VARCHAR(20) :
+   - Pour chaque table de référentiel (langue, region, pays,
+     environnement, duree, hebergement, domaine, competences,
+     candidat, fiche_de_poste) : quelle est la longueur actuelle de
+     la colonne crm_key en base (SELECT character_maximum_length
+     FROM information_schema.columns WHERE column_name = 'crm_key') ?
+   - Les valeurs de crm_key dans "competences" ont-elles été
+     TRONQUÉES pour rentrer dans 20 caractères, ou la colonne a-t-elle
+     été élargie pour accueillir la valeur complète ?
+
+   Contrainte fonctionnelle importante (à respecter, pas à re-décider) :
+   crm_key doit toujours contenir le code EXACT et COMPLET tel qu'il
+   sera exporté par le futur CRM de la DCC (utilisé pour la résolution
+   lors des imports CSV, voir contrat d'échange §6.2 de la spec).
+   Une troncature est INTERDITE — elle causerait des collisions ou
+   des échecs d'import silencieux.
+
+   → Si les valeurs ont été tronquées ou si la colonne fait encore
+   VARCHAR(20) : élargis la colonne à VARCHAR(40) pour crm_key sur
+   les 10 tables listées ci-dessus (ALTER TABLE ... ALTER COLUMN
+   crm_key TYPE VARCHAR(40) — ne recrée pas les tables, ne supprime
+   aucune donnée existante), puis restaure les valeurs complètes des
+   6 codes concernés : EDUCATION_SPECIALISEE, ENS_UNIVERSITAIRE_LANGUES,
+   ENS_SECONDAIRE_LANGUES, ENS_UNIVERSITAIRE_SCI, TECHNICIEN_AUDIOVIDEO,
+   PERSONNES_HANDICAPEES.
+
+   Si le problème venait plutôt d'un conflit sur la contrainte UNIQUE
+   de "designation" (doublons de libellés), explique-moi précisément
+   quels libellés étaient en doublon et comment tu les as différenciés.
+
+3) Donne-moi un rapport final : build OK ou pas, login fonctionnel ou
+   pas, état de la colonne crm_key sur les 10 tables.
+
+Ne touche pas aux prompts 2 à 5, ils n'ont pas changé.

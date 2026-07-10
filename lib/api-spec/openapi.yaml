@@ -3,20 +3,30 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: API onboardcc — DCC (Délégation Catholique pour la Coopération)
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentification
+  - name: admin
+    description: Administration des référentiels
+  - name: candidats
+    description: Gestion des candidats
+  - name: postes
+    description: Gestion des fiches de poste
+  - name: opportunites
+    description: Opportunités de matching candidat-poste
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +34,262 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Connexion utilisateur
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Connexion réussie — JWT posé en cookie HttpOnly
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionUser"
+        "401":
+          description: Identifiant ou mot de passe incorrect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Profil de l'utilisateur connecté
+      responses:
+        "200":
+          description: Profil utilisateur
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionUser"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Déconnexion
+      responses:
+        "200":
+          description: Déconnexion réussie
+
+  /auth/changer-password:
+    post:
+      operationId: changerPassword
+      tags: [auth]
+      summary: Changer de mot de passe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangerPasswordInput"
+      responses:
+        "200":
+          description: Mot de passe changé
+        "401":
+          description: Ancien mot de passe incorrect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /admin/referentiels-config:
+    get:
+      operationId: getAdminConfig
+      tags: [admin]
+      summary: Liste des tables référentielles administrables
+      responses:
+        "200":
+          description: Configuration des tables
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReferentielConfig"
+
+  /admin/referentiels/{table}:
+    get:
+      operationId: getAdminReferentiel
+      tags: [admin]
+      summary: Liste les lignes d'un référentiel
+      parameters:
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lignes du référentiel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReferentielList"
+        "400":
+          description: Table non autorisée
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    post:
+      operationId: createAdminReferentielItem
+      tags: [admin]
+      summary: Ajoute une ligne dans un référentiel
+      parameters:
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReferentielItemInput"
+      responses:
+        "201":
+          description: Ligne créée
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReferentielItem"
+
+  /admin/referentiels/{table}/{id}:
+    patch:
+      operationId: updateAdminReferentielItem
+      tags: [admin]
+      summary: Modifie une ligne d'un référentiel
+      parameters:
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReferentielItemUpdate"
+      responses:
+        "200":
+          description: Ligne modifiée
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReferentielItem"
+
+  /candidats:
+    get:
+      operationId: getCandidats
+      tags: [candidats]
+      summary: Liste des candidats
+      responses:
+        "200":
+          description: Liste des candidats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CandidatSummary"
+
+  /candidats/{id}:
+    get:
+      operationId: getCandidatById
+      tags: [candidats]
+      summary: Détail d'un candidat
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Détail candidat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandidatSummary"
+        "404":
+          description: Candidat non trouvé
+
+  /postes:
+    get:
+      operationId: getPostes
+      tags: [postes]
+      summary: Liste des fiches de poste
+      responses:
+        "200":
+          description: Liste des postes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PosteSummary"
+
+  /postes/{id}:
+    get:
+      operationId: getPosteById
+      tags: [postes]
+      summary: Détail d'un poste
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Détail poste
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PosteSummary"
+        "404":
+          description: Poste non trouvé
+
+  /opportunites:
+    get:
+      operationId: getOpportunites
+      tags: [opportunites]
+      summary: Liste des opportunités de matching
+      responses:
+        "200":
+          description: Liste des opportunités
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OpportuniteSummary"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +300,148 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    LoginInput:
+      type: object
+      required: [login, password]
+      properties:
+        login:
+          type: string
+        password:
+          type: string
+
+    SessionUser:
+      type: object
+      required: [role, id_contact]
+      properties:
+        role:
+          type: string
+        id_contact:
+          type: integer
+        id_candidat:
+          type: ["integer", "null"]
+        nom:
+          type: string
+        prenom:
+          type: string
+
+    ChangerPasswordInput:
+      type: object
+      required: [ancien_password, nouveau_password]
+      properties:
+        ancien_password:
+          type: string
+        nouveau_password:
+          type: string
+          minLength: 8
+
+    ReferentielConfig:
+      type: object
+      required: [table, label, restricted]
+      properties:
+        table:
+          type: string
+        label:
+          type: string
+        restricted:
+          type: boolean
+        editableFields:
+          type: array
+          items:
+            type: string
+
+    ReferentielItem:
+      type: object
+      additionalProperties: true
+
+    ReferentielItemInput:
+      type: object
+      additionalProperties: true
+
+    ReferentielItemUpdate:
+      type: object
+      additionalProperties: true
+
+    ReferentielList:
+      type: object
+      required: [table, label, rows]
+      properties:
+        table:
+          type: string
+        label:
+          type: string
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReferentielItem"
+
+    CandidatSummary:
+      type: object
+      properties:
+        id_candidat:
+          type: integer
+        trigram_candidat:
+          type: ["string", "null"]
+        nom_contact:
+          type: string
+        prenom_contact:
+          type: string
+        email_contact:
+          type: ["string", "null"]
+        etat_designation:
+          type: string
+        id_etat_candidat:
+          type: string
+
+    PosteSummary:
+      type: object
+      properties:
+        id_poste:
+          type: integer
+        crm_key:
+          type: string
+        ong:
+          type: ["string", "null"]
+        fonction:
+          type: ["string", "null"]
+        date_arrivee_souhaitee:
+          type: ["string", "null"]
+        priorite:
+          type: ["string", "null"]
+        etat_designation:
+          type: string
+        pays_designation:
+          type: string
+        domaine_designation:
+          type: string
+
+    OpportuniteSummary:
+      type: object
+      properties:
+        id_opportunite:
+          type: integer
+        note_contexte:
+          type: ["number", "null"]
+        note_mission:
+          type: ["number", "null"]
+        note_warning:
+          type: ["number", "null"]
+        etat_designation:
+          type: string
+        nom_contact:
+          type: string
+        prenom_contact:
+          type: string
+        ong:
+          type: ["string", "null"]
+        fonction:
+          type: ["string", "null"]
+        pays_designation:
+          type: string

@@ -1,0 +1,308 @@
+# PROMPT 1 — Architecture, base de données, authentification, module Admin
+# Envoyer EN PREMIER à Replit — génère le squelette complet de l'application.
+# Référence : conception.md §5 (Architecture), §6.1 (Principes transverses), §7 (Déploiement,
+#             stack révisée le 09/07/2026 : Node.js + Express), §8 (Sécurité), §4.1 (Charte graphique)
+# ============================================================================
+
+Crée une application web full-stack nommée **onboardcc** pour la DCC (Délégation Catholique
+pour la Coopération), ONG française gérant des missions de volontariat international (VSI et
+bénévolat). L'application digitalise le processus de recrutement et d'affectation des candidats
+sur des postes à l'étranger. C'est un **prototype 2** — il reprend un premier prototype (Bolt)
+dont les retours ont produit une spécification détaillée (fournie dans les prompts suivants).
+
+---
+
+## Stack technique (obligatoire, ne pas modifier)
+
+- **Frontend** : React 18 + Vite + Tailwind CSS
+- **Backend** : **Node.js 18+ avec Express** — un seul langage (JavaScript) sur tout le projet,
+  front et back, décision actée en conception.md §7.2 (revue le 09/07/2026)
+- **Base de données** : PostgreSQL, accès via la librairie `pg` (requêtes SQL paramétrées —
+  pas d'ORM lourd obligatoire, `pg` brut est suffisant pour ce volume et plus simple à lire
+  pour un développeur qui découvre le code)
+- **Auth** : `jsonwebtoken` (JWT) + `bcrypt` pour le hash des mots de passe
+- **Config** : `dotenv` (fichier `.env` à la racine du backend)
+- **HTTP client frontend** : `axios`
+
+---
+
+## ⚠️ RÈGLE NON NÉGOCIABLE — Code commenté
+
+**Commente chaque bloc de code de manière claire et pédagogique.** Le développeur (Damien) est en
+formation et doit pouvoir comprendre et reprendre ce code seul par la suite. Pour chaque fichier :
+- Un commentaire d'en-tête expliquant le rôle du fichier (2-3 lignes).
+- Un commentaire avant chaque fonction/route expliquant **ce qu'elle fait et pourquoi** (pas
+  juste répéter le nom de la fonction) — en particulier sur les routes qui touchent à la sécurité
+  (vérification RBAC, hash de mot de passe) et sur toute logique métier non triviale (transitions
+  d'état, verrouillages).
+- Pas de sur-commentaire sur du code auto-explicatif (`const x = 1; // affecte 1 à x` est inutile).
+
+---
+
+## ⚠️ RÈGLE NON NÉGOCIABLE — Ne pas générer de modèle de données
+
+**N'invente aucun schéma de base de données.** Le modèle complet (35 tables, contraintes,
+données de référence) est déjà conçu et fourni dans le fichier `prompt_0_sql.sql` — **il a déjà
+été exécuté sur la base PostgreSQL** avant ce prompt. Ne le régénère pas, ne le modifie pas.
+Si tu as besoin de savoir quelle colonne correspond à quel champ d'écran, réfère-toi aux prompts
+suivants (2 à 4) qui font systématiquement le lien entre une interface et les tables/colonnes
+qu'elle lit ou écrit.
+
+Ne modifie ni les noms de table, ni les noms de colonne, ni les types définis dans `prompt_0_sql.sql`.
+Si un besoin d'évolution du schéma apparaît en cours de développement, signale-le plutôt que de
+le corriger silencieusement.
+
+---
+
+## Rôles utilisateurs (RBAC strict — conception.md §5.2, §6.1.1)
+
+| Rôle | Table `contact.role` | Description |
+|------|------|-------------|
+| Administrateur | ADMIN | Gestion des référentiels (voir module Admin ci-dessous) |
+| Recruteur (staff DCC) | — *(porté par `user_`, sans entrée `role` dédiée dans `contact`)* | Gestion candidats, postes, matching, propositions aux CM |
+| Chargé de Mission | CM1 / CM2 / CHZ | Validation des propositions sur ses postes |
+| Candidat | CAN | Dossier personnel, fiche de vœux, suivi |
+
+Chaque utilisateur (`user_`) a un seul rôle, déduit de `contact.role` associé. Le dashboard
+s'adapte automatiquement après connexion selon ce rôle.
+
+**Règle métier critique — création des comptes candidats (conception.md §6.3.3) :**
+Le candidat **ne s'inscrit jamais lui-même**. Son compte `user_` est créé automatiquement par le
+backend au moment où le recruteur valide `candidat.valider_appel1()` (voir prompt3) — un email
+est envoyé avec un lien de création de mot de passe. Il n'y a **aucune page d'inscription publique**.
+
+**Édition par onglet, jamais par écran entier** (conception.md §6.1.1) : prévoir dès l'architecture
+API des routes granulaires par onglet (ex. `PATCH /api/candidats/:id/etat-civil`,
+`PATCH /api/candidats/:id/voeux`) plutôt qu'une route unique `PUT /api/candidats/:id` qui écrirait
+tout l'objet.
+
+---
+
+## Exécution du schéma
+
+Le fichier `prompt_0_sql.sql` a déjà été exécuté sur la base PostgreSQL cible — ne le relance pas.
+Écris un petit script `backend/scripts/checkSeed.js` qui se contente de vérifier que les tables
+existent (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public'` doit
+retourner 35) et affiche un message clair si ce n'est pas le cas.
+
+Remplace les mots de passe placeholders (`$2b$12$CHANGEME_HASH_BCRYPT_*`) déjà présents en base
+par de vrais hash bcrypt du mot de passe de test `DccTest2026!`, via un script ponctuel
+`backend/scripts/hashTestPasswords.js` (à exécuter une fois, avec `bcrypt.hash()`).
+
+---
+
+## Structure de fichiers attendue
+
+```
+onboardcc/
+├── backend/
+│   ├── index.js                (point d'entrée Express, port via .env)
+│   ├── db.js                   (connexion PostgreSQL via pg.Pool)
+│   ├── scripts/
+│   │   ├── checkSeed.js
+│   │   └── hashTestPasswords.js
+│   ├── routes/
+│   │   ├── auth.js             (login, changement de mot de passe)
+│   │   ├── candidats.js
+│   │   ├── postes.js
+│   │   ├── opportunites.js
+│   │   └── admin.js            (CRUD référentiels — voir module Admin ci-dessous)
+│   ├── middleware/
+│   │   └── auth.js             (vérification JWT + contrôle de rôle, ex. requireRole(['REC']))
+│   ├── services/
+│   │   └── matching.js         (algorithme de scoring — développé au prompt4)
+│   └── .env.example
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── api/                (fonctions axios groupées par domaine)
+│   │   ├── components/         (composants réutilisables — boutons d'action, popups, badges)
+│   │   ├── styles/
+│   │   │   └── theme.js        (constantes de la charte graphique — voir ci-dessous)
+│   │   ├── pages/
+│   │   │   ├── Login.jsx
+│   │   │   ├── recruteur/
+│   │   │   ├── cm/
+│   │   │   ├── candidat/
+│   │   │   └── admin/          (module Admin — voir ci-dessous)
+│   │   └── contexts/
+│   │       └── AuthContext.jsx
+│   └── .env.example
+└── README.md
+```
+
+---
+
+## Authentification (conception.md §6.1.1, §8.1)
+
+- `POST /api/auth/login` → `{ login, password }` → vérifie le hash bcrypt, retourne un cookie
+  contenant le JWT + le corps `{ role, id_contact, id_candidat (si CAN), nom, prenom }`
+- `POST /api/auth/changer-password` → `{ ancien_password, nouveau_password }` (auth requise)
+- Middleware `requireRole(roles)` sur toutes les routes protégées, qui vérifie le JWT (cookie) et
+  le rôle qu'il porte — bien commenter ce middleware, c'est la pièce de sécurité centrale
+- Payload JWT : `{ id_user, role, id_contact, id_candidat }`, durée **8h**, `JWT_SECRET` ≥ 32 caractères
+- **Le JWT n'est jamais stocké en `localStorage`** (règle non négociable, conception.md §8.1) :
+  cookie `HttpOnly; Secure; SameSite=Strict` posé par le backend à la connexion
+- CORS configuré en liste blanche explicite (`cors({ origin: FRONTEND_URL, credentials: true })`,
+  jamais `origin: "*"`)
+
+---
+
+## Charte graphique DCC (conception.md §4.1 — obligatoire, à centraliser dans `frontend/src/styles/theme.js`)
+
+### Palette de couleurs
+
+```js
+// theme.js
+export const colors = {
+  // Couleurs primaires
+  primaire: '#006499',        // navigation, boutons principaux, liens texte
+  primaireMarque: '#007BB6',  // fonds, grands titres bold, pictogrammes
+  primairePale: '#E8F4FA',    // fond cartes mises en avant, zones info
+  bleuTrame: '#A0BADA',       // séparateurs, fonds secondaires, déco
+
+  // Couleurs secondaires / accent
+  secondaireChaud: '#B86200', // CTA chauds, badges alertes
+  secondaireMarque: '#F08A00',// icônes, pictogrammes (jamais pour du texte)
+  accent: '#FABB00',          // pictogrammes, déco uniquement (jamais pour du texte)
+
+  // Fonds
+  fondPrincipal: '#FFFFFF',
+  fondSecondaire: '#F4F7FA',  // sidebar, panneaux
+  fondTertiaire: '#EAECEF',   // séparateurs, zones désactivées
+
+  // Textes
+  textePrincipal: '#1B2D3F',
+  texteSecondaire: '#4A6277',
+  texteDesactive: '#8FA3B1',
+
+  // États système
+  succes: '#1A7A3E',
+  alerte: '#B86200',
+  erreur: '#C0321F',
+  info: '#006499',
+};
+
+// Boutons
+export const boutons = {
+  primaire:   { fond: '#1567A0', texte: '#FFFFFF' },
+  secondaire: { fond: '#FFFFFF', texte: '#1567A0', bordure: '#1567A0' },
+  ctaChaud:   { fond: '#C06800', texte: '#FFFFFF' }, // action forte, ex. décision d'affectation
+  danger:     { fond: '#FFFFFF', texte: '#C0321F', bordure: '#C0321F' }, // refuser, rejeter
+  desactive:  { fond: '#EAECEF', texte: '#8FA3B1' },
+};
+// Padding : 12px vertical x 24px horizontal. Border-radius : 8px. Hauteur mini : 44px (tactile).
+```
+
+### Typographie
+
+- **Titres** (H1/H2/H3) : police **Dosis** (Google Fonts), graisses ExtraBold/Bold/SemiBold
+- **Corps de texte, labels, boutons** : police **Inter** (Google Fonts — substitut libre de la
+  police officielle Akzidenz-Grotesk, sous licence commerciale)
+- Charge les 2 polices via `@fontsource/dosis` et `@fontsource/inter` (npm), pas de lien CDN externe
+- **Taille minimum de tout texte : 16px** pour le corps/labels/boutons, 13px minimum pour l'aide/tooltip
+  (règle ENF-03 accessibilité — ne jamais descendre en dessous)
+
+### Composants standardisés
+
+- **Sidebar de navigation** (Recruteur/CM/Admin) : fond `#1B2D3F`, texte inactif `#8FA3B1`, texte/fond
+  actif `#FFFFFF` sur `#1567A0`, largeur 240px (rétractable 64px icônes seules)
+- **Espace Candidat** : pas de sidebar — stepper horizontal simplifié en haut de page (contrainte UX
+  candidat : profils seniors, non-initiés au numérique)
+- **Cartes** : bordure `1px solid #CDD5DF`, border-radius 12px, ombre légère `0 2px 8px rgba(0,0,0,0.06)`
+- **Badges de statut candidat** : voir table complète en conception.md §4.1.2 — respecter au minimum
+  Nouveau (bleu pâle), Affecté (vert plein), Non candidat (gris pâle)
+
+---
+
+## Module Admin — Référentiels (conception.md §5.2, ENF-12)
+
+> **Contrainte ENF-12 :** la DCC n'a pas de ressource IT dédiée et subit un fort turnover. Cet écran
+> doit être **utilisable sans formation technique**. Ne construis **pas** 12 écrans différents un par
+> un — construis **un seul composant générique réutilisable**, paramétré par table, pour limiter la
+> charge de maintenance.
+
+### Tables administrables (toutes déjà créées et peuplées par `prompt_0_sql.sql`)
+
+`langue`, `region`, `pays`, `environnement`, `duree`, `hebergement`, `domaine`, `competences`,
+`notoriete_dcc`, `etat_poste`, `etat_opportunite`, `niveau_langue`, `stages`.
+
+⚠️ **Exception : `etat_candidat`.** Cette table est administrable en lecture (voir ses libellés)
+mais ses lignes (les 11 états CRE/AP1/AP2…) sont **structurantes pour toute la logique applicative**
+(prompt3) — ne permets **ni ajout ni suppression** de ligne sur cette table depuis l'écran Admin,
+seule l'édition du libellé `designation` et du `delais_de_reponse` est autorisée.
+
+### Écran — `/admin/referentiels` *(rôle ADMIN uniquement)*
+
+- Menu déroulant "Choisir un référentiel" listant les tables ci-dessus (nom lisible, pas le nom
+  technique de la table — ex. "Régions" plutôt que "region").
+- Tableau des lignes existantes : colonnes `crm_key`, `designation`, `active` (case à cocher).
+- Actions : **Ajouter une ligne**, **Modifier** (crm_key + designation + active), **Désactiver**
+  (jamais de suppression physique — toujours `active = false`, car ces référentiels sont référencés
+  par clé étrangère depuis des postes/candidats existants ; une vraie suppression casserait ces liens).
+- Pour `pays` : champ supplémentaire "Région" (liste déroulante des régions existantes).
+- Pour `duree` : champs supplémentaires "Statut" (VSI/Bénévolat) et "Niveau" (nombre, sert au calcul
+  d'écart du scoring, prompt4 — expliquer cette utilisation dans un texte d'aide sous le champ).
+- Pour `environnement` : idem, champ "Niveau".
+- Pour `domaine`/`competences` : `competences` doit proposer un menu déroulant "Domaine parent".
+- Pour `stages` : champs `type_stage`, `date_debut`, `date_fin`, `voeux_definitif_ouvert`.
+
+### API backend (`routes/admin.js`)
+
+Routes génériques paramétrées par nom de table (liste blanche stricte des tables autorisées
+ci-dessus — **ne jamais construire une requête SQL en insérant le nom de table venant du frontend
+sans le valider contre cette liste blanche**, sinon risque d'injection SQL) :
+
+```
+GET    /api/admin/referentiels/:table
+POST   /api/admin/referentiels/:table
+PATCH  /api/admin/referentiels/:table/:id
+```
+
+Toutes protégées par `requireRole(['ADMIN'])`.
+
+---
+
+## Page de connexion (Login.jsx)
+
+Formulaire centré, fond `#F4F7FA` :
+- Logo DCC (placeholder texte "DCC — onboardcc")
+- Champ identifiant, champ mot de passe
+- Bouton "Se connecter" (style primaire, charte ci-dessus)
+- Message d'erreur clair si échec
+- Redirection après connexion selon le rôle : `/recruteur/postes`, `/cm/postes`, `/candidat/accueil`,
+  ou `/admin/referentiels`
+
+---
+
+## Variables d'environnement (.env.example, backend)
+
+```
+DATABASE_URL=postgresql://user:password@localhost:5432/onboardcc
+JWT_SECRET=changez_cette_valeur_32_caracteres_minimum
+JWT_EXPIRE_HOURS=8
+FRONTEND_URL=http://localhost:5173
+SMTP_HOST=
+SMTP_PORT=
+SMTP_USER=
+SMTP_PASSWORD=
+```
+
+Aucune de ces valeurs ne doit apparaître en dur dans le code (OWASP, conception.md §7.4.2).
+
+---
+
+## Livrable attendu à la fin de ce prompt
+
+1. Structure de projet complète (frontend + backend), code commenté partout
+2. `checkSeed.js` confirmant les 35 tables, `hashTestPasswords.js` fonctionnel
+3. Page Login fonctionnelle avec les 3 comptes de test (`loic.dupont`, `marie.nguyen`, `pierre.martin`,
+   mot de passe `DccTest2026!`)
+4. Middleware JWT + RBAC en place, cookie `HttpOnly`
+5. Charte graphique intégrée (`theme.js`, polices Dosis/Inter chargées)
+6. Module Admin fonctionnel (`/admin/referentiels`) avec le composant générique décrit ci-dessus
+7. Dashboard vide par rôle (juste le nom du rôle affiché, routing opérationnel)
+8. Fichiers `.env.example` (frontend et backend)
+
+Ne développe pas encore les fonctionnalités métier Poste/Candidat/Opportunité — les prompts 2 à 4
+les détaillent un par un.

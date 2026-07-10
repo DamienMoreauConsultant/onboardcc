@@ -1,0 +1,40 @@
+import { api } from './client';
+
+// Types alignés sur la réponse du backend (routes/auth.ts)
+export type SessionUser = {
+  role: 'REC' | 'CM1' | 'CM2' | 'CHZ' | 'CAN' | 'ADMIN';
+  id_contact: number;
+  id_candidat: number | null;
+  nom: string;
+  prenom: string;
+};
+
+export type LoginInput = {
+  login: string;
+  password: string;
+};
+
+export type ChangerPasswordInput = {
+  ancien_password: string;
+  nouveau_password: string;
+};
+
+export const authApi = {
+  login: async (credentials: LoginInput): Promise<SessionUser> => {
+    const { data } = await api.post<SessionUser>('/auth/login', credentials);
+    return data;
+  },
+  
+  logout: async (): Promise<void> => {
+    await api.post('/auth/logout');
+  },
+  
+  getMe: async (): Promise<SessionUser> => {
+    const { data } = await api.get<SessionUser>('/auth/me');
+    return data;
+  },
+  
+  changerPassword: async (input: ChangerPasswordInput): Promise<void> => {
+    await api.post('/auth/changer-password', input);
+  }
+};
