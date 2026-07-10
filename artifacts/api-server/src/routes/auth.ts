@@ -77,12 +77,19 @@ router.post('/login', async (req, res) => {
       return;
     }
 
-    // Détermine le rôle applicatif via une liste blanche explicite.
-    // Tout rôle absent de la liste → 'REC' (staff DCC, recruteur interne).
-    // Cela protège contre des rôles mal formés ou non prévus stockés en base.
-    const KNOWN_ROLES = ['CAN', 'CM1', 'CM2', 'CHZ', 'ADMIN'] as const;
-    type KnownRole = typeof KNOWN_ROLES[number];
-    const role: string = KNOWN_ROLES.includes(user.role as KnownRole) ? user.role : 'REC';
+    // Liste blanche stricte des rôles reconnus par l'application.
+    // 'REC' est un rôle explicite (staff DCC sans rôle spécifique), pas un repli par défaut.
+    // Un rôle absent de cette liste → refus d'accès immédiat (jamais de repli silencieux
+    // vers un rôle plus ou moins privilégié — cela masquerait une corruption de données).
+    const ALLOWED_ROLES = ['REC', 'CAN', 'CM1', 'CM2', 'CHZ', 'ADMIN'] as const;
+    type AllowedRole = typeof ALLOWED_ROLES[number];
+    if (!ALLOWED_ROLES.includes(user.role as AllowedRole)) {
+      res.status(403).json({
+        error: `Rôle '${user.role ?? 'null'}' non reconnu. Accès refusé. Contactez l'administrateur.`,
+      });
+      return;
+    }
+    const role = user.role as AllowedRole;
 
     // Crée le payload du JWT (jamais stocker d'informations sensibles dans le JWT)
     const payload = {
