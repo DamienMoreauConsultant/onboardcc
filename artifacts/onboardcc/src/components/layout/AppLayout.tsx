@@ -17,12 +17,14 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       case 'REC':
         return [
           { label: 'Pipeline Candidats', href: '/recruteur', icon: Users },
+          { label: 'Postes', href: '/recruteur/postes', icon: Briefcase },
         ];
       case 'CM1':
       case 'CM2':
       case 'CHZ':
         return [
           { label: 'Missions', href: '/cm', icon: Briefcase },
+          { label: 'Mes postes', href: '/cm/postes', icon: Briefcase },
         ];
       case 'CAN':
         return [

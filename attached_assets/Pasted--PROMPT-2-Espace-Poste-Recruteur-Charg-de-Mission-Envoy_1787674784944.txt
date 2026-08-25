@@ -1,0 +1,172 @@
+# PROMPT 2 — Espace Poste (Recruteur + Chargé de Mission)
+# Envoyer APRÈS validation du prompt 1
+# Référence : conception.md §6.2 (Spécification — Poste)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Commente le code
+# (blocs et fonctions non triviales) comme demandé au prompt1 : ça reste valable pour tous les prompts.
+# ============================================================================
+
+Implémente l'ensemble des écrans et de la logique backend liés à l'objet **Poste**
+(table `fiche_de_poste`), pour les rôles **Recruteur** et **Chargé de Mission (CM)**.
+
+Rappel de contexte (conception.md §6.2.2) : onboardcc **n'est pas le référentiel maître** des
+postes — ils proviennent d'un import CSV (le futur CRM n'existe pas encore). Il n'y a donc
+**aucune création manuelle de poste** dans l'application : le seul canal d'entrée est l'import.
+
+---
+
+## Table de référence
+
+`fiche_de_poste` (schéma déjà créé par `prompt_0_sql.sql`, ne pas le régénérer) + tables liées :
+`etat_poste`, `langue_poste`, `evolue_dans`, `recherche`, `gere_poste`, `pays`, `region`,
+`hebergement`, `duree`, `domaine`, `competences`, `environnement`, `contact`.
+
+---
+
+## 1. Écran — Import de poste(s) *(Front · Recruteur, conception.md §6.2.3)*
+
+Route : `/recruteur/postes/import`
+
+- Bouton **"Télécharger le template CSV"** : génère un fichier vide avec pour ligne d'en-tête
+  exactement les 41 colonnes du contrat d'échange ci-dessous (une colonne = un attribut du modèle).
+- Zone d'upload d'un fichier `.csv`.
+- **Aucun bouton "Nouveau poste"** — l'import est le seul canal (voir écran Liste, §3 ci-dessous).
+
+### Contrat d'échange — colonnes attendues (conception.md §6.2.2)
+
+| # | Colonne CSV | Contrainte | Colonne BDD cible |
+|---|---|---|---|
+| 1 | ref_poste | Mandatory | `fiche_de_poste.crm_key` (clé d'upsert) |
+| 2 | date_demarrage | Mandatory | `date_arrivee_souhaitee` |
+| 3 | date_demande | Optional | `date_demande` |
+| 4 | priorite | Optional | `priorite` |
+| 5 | statut_volontaire | Mandatory | `statut_volontaire` |
+| 6 | partenaire_ong | Mandatory | `ong` (texte libre, pas de FK) |
+| 7 | candidat_preaffecte | Mandatory | `candidat_preaffecte` (booléen) |
+| 8 | nom_candidat_preaffecte | Optional (requis si col.7=TRUE) | `nom_candidat` |
+| 9 | fonction | Mandatory | `fonction` |
+| 10 | pays | Mandatory | résout `pays.crm_key` → `id_pays` |
+| 11 | hebergement | Mandatory | résout `hebergement.crm_key` → `id_hebergement` |
+| 12 | langue_requise | Optional | résout `langue.crm_key` → `langue_poste.id_langue` |
+| 13 | niveau_langue_requis | Optional | `langue_poste.niveau_requis` |
+| 14 | duree_mission | Mandatory | résout `duree.crm_key` → `id_duree` |
+| 15 | domaine | Mandatory | résout `domaine.crm_key` → `id_domaine` |
+| 16 | competences_recherchees | Optional, liste `;` | résout `competences.crm_key` (n) → table `recherche` |
+| 17 | environnement | Optional, liste `;` | résout `environnement.crm_key` (n) → table `evolue_dans` |
+| 18 | zone_orange | Optional | `flag_zone_orange` |
+| 19 | conditions_spartiates | Optional | `flag_condition_spartiates` |
+| 20 | hopital_proche | Optional | `flag_hopital_proche` |
+| 21 | billet_avion | Optional | `billet_avion` |
+| 22 | indemnite_mensuelle_partenaire | Optional | `indemnite_mensuelle_partenaire` |
+| 23 | indemnite_mensuelle_dcc | Optional | `indemnite_mensuelle_dcc` |
+| 24 | gite_et_couvert | Optional | `gite_et_couvert` |
+| 25 | detail_hebergement | Optional | `hebergement_detail` |
+| 26 | preference_genre | Optional | `preference_genre` |
+| 27 | deuxieme_poste_partenaire | Optional | `deuxieme_poste_possible_partenaire` |
+| 28 | deuxieme_poste_alentour | Optional | `deuxieme_poste_possible_alentour` |
+| 29 | nouveau_poste | Optional | `nouveau_poste` |
+| 30 | nom_ancien_volontaire | Optional | `nom_ancien_volontaire` |
+| 31 | odd_lie | Optional | `odd_lie` |
+| 32 | contexte_mission | Optional | `contexte_mission` |
+| 33 | objectifs_mission | Optional | `objectifs_mission` |
+| 34 | taches | Optional | `taches` |
+| 35 | detail_competences | Optional | `competences_detail` |
+| 36 | dimension_ecclesiale | Optional | `dimension_ecclesial` |
+| 37 | cm_principal | Optional | résout `contact.crm_key` (rôle CM1) → `gere_poste` |
+| 38 | cm_secondaire | Optional | résout `contact.crm_key` (rôle CM2) → `gere_poste` |
+| 39 | chz | Optional | résout `contact.crm_key` (rôle CHZ) → `gere_poste` |
+| 40 | contact_mission | Optional | résout `contact.crm_key` (rôle MIS) |
+| 41 | contact_partenaire | Optional | résout `contact.crm_key` (rôle PAR) |
+
+Un fichier de test conforme (50 lignes) est fourni : `Data/postes_import_test_v1.csv` — utilise-le
+pour valider l'import de bout en bout.
+
+---
+
+## 2. Import de poste(s) *(Back — API)*
+
+Endpoint en **2 temps**, jamais d'écriture directe :
+
+**`POST /api/postes/import/verifier`** *(multipart file upload)*
+- Parse le CSV, valide chaque ligne indépendamment.
+- Retourne un tableau `{ ligne, statut: "ok"|"erreur", message }` :
+  - `erreur` si un champ Mandatory est vide, ou si une donnée référencée par `crm_key`
+    (pays, hébergement, durée, domaine, compétence, environnement, contact CM/CHZ/MIS/PAR)
+    **n'existe pas en base** → message explicite ("CM inconnu : crm_key=XXX — créez-le d'abord").
+  - Aucune écriture en base à cette étape.
+
+**`POST /api/postes/import/executer`** *(même fichier, appelé seulement si 0 ligne en erreur)*
+- Transaction globale : **tout ou rien** — si une seule ligne échoue à l'exécution, rollback complet.
+- Pour chaque ligne :
+  - `crm_key` inconnu → `INSERT` dans `fiche_de_poste`, `flag_create_opportunity = true`, `id_etat_poste` = "À pourvoir" (ou "Pré-affecté" si `candidat_preaffecte = true`, auquel cas passer directement à "Pourvu" sans circuit de matching — conception.md §2.2.2).
+  - `crm_key` existant → `UPDATE` non comparatif (écrase tous les champs, y compris ceux vides dans le fichier), `flag_update_score = true`.
+  - Après le commit, appelle `matching_algo()` (développé au prompt4) pour chaque poste impacté.
+
+Front (`/recruteur/postes/import`) : affiche le rapport de l'étape "vérifier" ligne par ligne
+(✅ vert / ❌ rouge + raison) **avant** d'activer le bouton "Confirmer l'import".
+
+---
+
+## 3. Écran — Liste des postes *(Front · Recruteur, conception.md §6.2.5)*
+
+Route : `/recruteur/postes`
+
+- Filtre d'état : liste déroulante **multi-select**, valeurs = `etat_poste.designation` (libellés
+  complets, jamais de code). Valeur par défaut : tous les états **sauf "Fermé"**.
+- Colonnes, dans l'ordre : Poste (`crm_key`) · Pays (`pays.designation`) · Type (`statut_volontaire`) ·
+  Fonction · État · Opportunité à qualifier *(nb opportunités liées en état "Non qualifié" ou
+  "Proposée au CM")* · Opportunité approuvée *(nb en "Approuvé CM")* · En cours d'affectation
+  *(nb en "Mise en lien"/"Accord de principe"/"Accepté"/"Affecté")*.
+- Pas de bouton "Nouveau poste".
+- Clic sur une ligne → écran détail (§5).
+
+## 4. Écran — Liste des postes *(Front · Chargé de Mission, conception.md §6.2.6)*
+
+Route : `/cm/postes` — identique à l'écran Recruteur ci-dessus, avec un filtre additionnel
+côté backend : n'afficher que les postes où le contact du user connecté apparaît dans `gere_poste`
+(peu importe le rôle CM1/CM2/CHZ — les 3 doivent voir le poste, item validé conception.md §6.2.6).
+
+---
+
+## 5. Écran — Détail d'un poste *(Front · Recruteur, conception.md §6.2.7)*
+
+Route : `/recruteur/postes/:id` — **toutes les données en lecture seule**, aucune édition directe
+de champ (le RBAC ne permet plus la modification manuelle du poste, contrairement au prototype 1).
+
+```
+Bandeau "Identification" (toujours visible)
+  id_poste, crm_key, pays, statut_volontaire, etat_poste, ong, candidat_preaffecte,
+  nom_candidat, fonction
+  ├─ Bouton [FERMER LE POSTE]   visible si état ∈ {À pourvoir, Pré-affecté, Pré-réservé, Réservé}
+  │     → popup avec commentaire OBLIGATOIRE (justification de la fermeture) + jusqu'à 2 pièces
+  │       jointes (pattern générique §6.1.1) → PATCH /api/postes/:id/fermer → etat_poste = "Fermé"
+  │       → insertion d'une ligne `etape` avec le commentaire
+  └─ Bouton [RÉOUVRIR LE POSTE] visible si état ∈ {Pré-affecté, Fermé}
+        → même pattern popup + commentaire obligatoire → PATCH /api/postes/:id/reouvrir →
+          etat_poste = "À pourvoir" → insertion `etape`
+
+Onglet "Critères et conditions"
+  contact_cm1, contact_cm2, contact_cz, contact_mission, contact_partenaire (via gere_poste),
+  date_demande, priorite, billet_avion, indemnite_mensuelle_partenaire, indemnite_mensuelle_dcc,
+  gite_et_couvert, hebergement_detail, odd_lie
+
+Onglet "Détail du poste"
+  contexte_mission, objectifs_mission, taches, competences_detail, dimension_ecclesial
+
+Onglet "Liste des opportunités"
+  → développé en détail dans le prompt4 (§ Onglet Opportunités — Poste)
+```
+
+## 6. Écran — Détail d'un poste *(Front · Chargé de Mission, conception.md §6.2.8)*
+
+Route : `/cm/postes/:id` — identique à l'écran Recruteur, sauf l'onglet "Liste des opportunités"
+qui n'affiche que les opportunités où `flag_opportunite_proposee_a_cm = true`.
+
+---
+
+## Points de vigilance signalés en spécification (à respecter, pas à re-décider)
+
+- Import **tout ou rien** — jamais d'état intermédiaire en base (conception.md §6.1.1).
+- `Fiche_de_poste` n'a **aucun champ éditable manuellement** en dehors des 2 boutons FERMER/RÉOUVRIR
+  du bandeau — ne génère pas de formulaire d'édition sur les autres champs.
+- Les libellés d'état affichés dans les filtres et les colonnes viennent **toujours** de la table
+  `etat_poste.designation` — ne jamais coder en dur "APO", "PRA" etc. dans le frontend.

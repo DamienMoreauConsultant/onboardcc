@@ -1,0 +1,1 @@
+- [Historique des postes](poste-history.md) — `etape` est candidat-only ; les actions de fiche de poste ont un historique dédié.

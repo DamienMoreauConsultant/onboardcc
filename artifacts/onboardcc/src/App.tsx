@@ -12,6 +12,9 @@ import Recruiter from '@/pages/Recruiter';
 import ChargeMission from '@/pages/ChargeMission';
 import Candidate from '@/pages/Candidate';
 import AdminReferentiels from '@/pages/admin/AdminReferentiels';
+import PostesList from '@/pages/postes/PostesList';
+import PosteImport from '@/pages/postes/PosteImport';
+import PosteDetail from '@/pages/postes/PosteDetail';
 
 const queryClient = new QueryClient();
 
@@ -27,12 +30,37 @@ function Router() {
           </AppLayout>
         </RoleGuard>
       </Route>
+      <Route path="/recruteur/postes/import">
+        <RoleGuard allowedRoles={['REC']}>
+          <AppLayout><PosteImport /></AppLayout>
+        </RoleGuard>
+      </Route>
+      <Route path="/recruteur/postes/:id">
+        <RoleGuard allowedRoles={['REC']}>
+          <AppLayout><PosteDetail mode="recruteur" /></AppLayout>
+        </RoleGuard>
+      </Route>
+      <Route path="/recruteur/postes">
+        <RoleGuard allowedRoles={['REC']}>
+          <AppLayout><PostesList mode="recruteur" /></AppLayout>
+        </RoleGuard>
+      </Route>
 
       <Route path="/cm">
         <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}>
           <AppLayout>
             <ChargeMission />
           </AppLayout>
+        </RoleGuard>
+      </Route>
+      <Route path="/cm/postes/:id">
+        <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}>
+          <AppLayout><PosteDetail mode="cm" /></AppLayout>
+        </RoleGuard>
+      </Route>
+      <Route path="/cm/postes">
+        <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}>
+          <AppLayout><PostesList mode="cm" /></AppLayout>
         </RoleGuard>
       </Route>
 
