@@ -1,0 +1,155 @@
+Une tentative précédente de ce prompt a été interrompue très tôt (seul le fichier postes.ts avait été créé, rien d'autre). Ignore cette ébauche partielle et repars proprement depuis le début avec la version ci-dessous du prompt 2 (elle inclut une correction sur le point Fermer/Réouvrir un poste par rapport à la version précédente). Si postes.ts contient déjà du code qui ne correspond pas à cette version, réécris-le entièrement.
+
+Free
+1 hour ago
+Starting fresh with updates
+
+Starting fresh with updates
+Je repars proprement avec la version jointe : je relis le prompt exact, puis je vérifie l’état réel des fichiers et des dépendances avant de remplacer l’ébauche et d’implémenter tout le module.
+
+
+
+8 actions
+La version précédente contient plusieurs écarts à corriger, notamment l’état initial pré-affecté, les commentaires obligatoires et l’historisation etape. Je charge les consignes web/workflow puis j’inspecte uniquement les composants et tables nécessaires avant de réécrire.
+
+
+
+13 actions
+Je vais conserver le schéma existant : etape ne possède actuellement aucune colonne id_poste et exige un id_candidat, donc une insertion d’historique de fermeture/réouverture y serait incohérente et rejetée par PostgreSQL. Je vais enregistrer ces événements dans une table d’historique dédiée au poste, sans inventer de candidat ni altérer le schéma métier existant.
+
+
+
+10 actions
+L’interface et les routes sont maintenant branchées. Je lance les vérifications TypeScript/build, puis je corrige les erreurs runtime éventuelles avant de tester les endpoints d’import et les actions de statut.
+
+
+
+8 actions
+Le typage backend/frontend est vert. Le build Vite manuel a échoué uniquement parce que la configuration exige les variables de workflow PORT et BASE_PATH; je relance avec les valeurs de l’artifact, puis je redémarre les deux services et teste l’API réelle.
+
+
+
+5 actions
+Le premier test de vérification a correctement rejeté la ligne : COMMUNICATION est une compétence, pas un domaine dans le référentiel actuel. Je relance avec GESTION_PROJET, qui est bien un domaine, puis je teste l’import transactionnel, le filtrage CM et les deux actions avec commentaire obligatoire.
+
+
+
+2 actions
+Les tests fonctionnels ont validé l’import, le détail et les deux transitions. Le nettoyage du poste de test a rencontré une contrainte attendue sur les tables liées (langue_poste, etc.) ; je supprime proprement ses relations puis le poste, et j’ajoute l’historique au détail pour le rendre consultable.
+
+
+
+4 actions
+Le nettoyage est terminé et le poste de test n’existe plus. Je fais une dernière passe de validation après l’ajout de l’historique, puis je vérifie visuellement le frontend dans le preview.
+
+
+
+8 actions
+J’ai corrigé le comportement du multi-select : tous les états ouverts sont sélectionnés par défaut, le poste fermé est exclu, et une sélection vide signifie bien “aucun résultat” plutôt que “tous”. Je termine par les checks et les logs.
+
+
+
+6 actions
+Le build final est vert et les workflows sont sains. L’installation précédente a ajouté par erreur python-base-3.13 à .replit, sans rapport avec ce prompt ; je retire uniquement cette modification parasite avant de conclure.
+
+
+
+5 actions
+La configuration .replit est revenue à son état initial via la validation prévue. Je fais le dernier contrôle Git et j’enregistre seulement la contrainte durable du schéma d’historique pour éviter une incohérence lors des prochains prompts.
+
+
+
+6 actions
+Prompt 2 est implémenté proprement depuis la version jointe.
+
+Backend
+Réécriture complète de routes/postes.ts
+Import CSV en deux étapes :
+POST /api/postes/import/verifier
+POST /api/postes/import/executer
+Validation des 41 colonnes du contrat CSV
+Vérification des champs obligatoires et des crm_key
+Messages d’erreur explicites pour les référentiels ou contacts inconnus
+Import transactionnel global avec rollback complet
+Upsert sur fiche_de_poste.crm_key
+Gestion des tables liées :
+langue_poste
+recherche
+evolue_dans
+gere_poste
+État initial :
+poste normal → À pourvoir
+poste pré-affecté → Pourvu, conformément à la correction du prompt
+Liste des postes avec :
+filtre multi-états
+exclusion de Fermé par défaut
+restriction CM aux postes présents dans gere_poste
+compteurs d’opportunités
+Détail complet d’un poste
+Actions :
+fermeture
+réouverture
+commentaire obligatoire
+maximum de 2 pièces jointes
+contrôle des états autorisés
+Historique fermeture / réouverture
+Le schéma existant de etape est exclusivement lié aux candidats :
+
+id_candidat obligatoire
+aucune colonne id_poste
+Il est donc impossible d’y enregistrer correctement une action de poste sans créer une fausse relation candidat. Une table historique_poste dédiée est utilisée à la place, avec :
+
+le poste concerné
+l’acteur
+l’action
+le commentaire
+les métadonnées des pièces jointes
+la date de l’événement
+Frontend
+Nouvelles routes :
+
+/recruteur/postes
+/recruteur/postes/import
+/recruteur/postes/:id
+/cm/postes
+/cm/postes/:id
+Écrans ajoutés :
+
+liste des postes Recruteur
+liste des postes CM
+import CSV avec rapport ligne par ligne
+détail en lecture seule
+onglets :
+Critères et conditions
+Détail du poste
+Liste des opportunités, préparée pour le prompt 4
+popup de fermeture/réouverture avec commentaire obligatoire et pièces jointes
+Les liens ont également été ajoutés à la navigation latérale.
+
+Vérifications
+TypeScript backend : ✅
+TypeScript frontend : ✅
+Build backend : ✅
+Build frontend : ✅
+Workflows API et frontend : ✅
+Template CSV généré avec exactement 41 colonnes : ✅
+Import de test vérifié et exécuté avec succès : ✅
+Filtrage CM vérifié : ✅
+Fermeture et réouverture testées avec historique : ✅
+Poste de test supprimé après validation : ✅
+Le fichier CSV de test mentionné dans le prompt (Data/postes_import_test_v1.csv) n’était pas présent dans le dépôt, donc un fichier de test équivalent a été créé temporairement pour la validation puis supprimé.
+
+
+
+Worked for 5 minutes
+Time worked
+5 minutes
+Work done
+59 actions
+Items read
+2,307 lines
+
+Checkpoint made
+55 minutes ago
+Update api server dependencies and implement routes logic
+Aug 25, 2026, 6:29 PM
