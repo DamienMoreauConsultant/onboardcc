@@ -112,6 +112,38 @@ function parseIntOrNull(val: string | undefined | null): number | null {
 }
 
 /**
+ * Convertit une date du contrat CRM (JJ/MM/AAAA) vers le format ISO attendu
+ * par PostgreSQL. La vérification calendaire empêche les dates comme
+ * 31/02/2027 d'être acceptées silencieusement.
+ */
+function parseFrenchDate(value: string | undefined | null): {
+  iso: string | null;
+  valid: boolean;
+} {
+  const raw = value?.trim() ?? '';
+  if (!raw) return { iso: null, valid: true };
+
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw);
+  if (!match) return { iso: null, valid: false };
+
+  const [, dayText, monthText, yearText] = match;
+  const day = Number(dayText);
+  const month = Number(monthText);
+  const year = Number(yearText);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return { iso: null, valid: false };
+  }
+
+  return { iso: `${yearText}-${monthText}-${dayText}`, valid: true };
+}
+
+/**
  * Valide une seule ligne CSV.
  * Vérifie les champs obligatoires, les clés référentielles et les règles conditionnelles.
  * Retourne un objet { ligne, statut, message } — aucune écriture en base.
@@ -131,6 +163,15 @@ function validateRow(
   for (const col of mandatoryFields) {
     if (!row[col]?.trim()) {
       errors.push(`Champ obligatoire manquant : ${col}`);
+    }
+  }
+
+  // Les deux dates du fichier CRM sont en JJ/MM/AAAA ; on valide ici,
+  // avant toute possibilité d'écriture dans l'étape d'exécution.
+  for (const col of ['date_demarrage', 'date_demande']) {
+    const parsedDate = parseFrenchDate(row[col]);
+    if (!parsedDate.valid) {
+      errors.push(`Date invalide ligne ${lineNum} : ${col}="${row[col]?.trim() ?? ''}" — format attendu JJ/MM/AAAA`);
     }
   }
 
@@ -340,6 +381,11 @@ router.post(
 
       for (const row of parsed.data) {
         const isPreaffecte = parseBool(row.candidat_preaffecte);
+        // La validation ci-dessus garantit que ces conversions sont valides.
+        // On réutilise toutefois la même fonction au moment de l'écriture :
+        // PostgreSQL ne reçoit ainsi jamais une date française brute.
+        const dateDemande = parseFrenchDate(row.date_demande);
+        const dateDemarrage = parseFrenchDate(row.date_demarrage);
 
         /**
          * État initial du poste à l'import (conception.md §2.2.2) :
@@ -422,8 +468,8 @@ router.post(
             isPreaffecte,
             row.nom_candidat_preaffecte?.trim()     || null,
             row.fonction?.trim()                    || null,
-            row.date_demande?.trim()                || null,
-            row.date_demarrage?.trim()              || null,
+            dateDemande.iso,
+            dateDemarrage.iso,
             row.priorite?.trim()                    || null,
             parseBool(row.billet_avion),
             parseIntOrNull(row.indemnite_mensuelle_partenaire),
