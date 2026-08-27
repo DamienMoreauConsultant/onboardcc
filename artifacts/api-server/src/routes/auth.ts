@@ -47,7 +47,7 @@ router.post('/login', async (req, res) => {
     const result = await pool.query(
       `SELECT
          u.id_user,
-         u.password AS hash,
+         u.password AS hash, u.active,
          c.id_contact,
          c.role,
          c.nom_contact      AS nom,
@@ -68,6 +68,10 @@ router.post('/login', async (req, res) => {
     }
 
     const user = result.rows[0];
+    if (user.active === false) {
+      res.status(401).json({ error: 'Identifiant ou mot de passe incorrect.' });
+      return;
+    }
 
     // Vérifie le mot de passe contre le hash bcrypt stocké en base
     // bcrypt.compare est résistant aux attaques par timing (constant-time comparison)

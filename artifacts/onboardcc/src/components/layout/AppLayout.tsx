@@ -16,7 +16,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     switch (user.role) {
       case 'REC':
         return [
-          { label: 'Pipeline Candidats', href: '/recruteur', icon: Users },
+          { label: 'Candidats', href: '/recruteur/candidats', icon: Users },
           { label: 'Postes', href: '/recruteur/postes', icon: Briefcase },
         ];
       case 'CM1':
@@ -29,6 +29,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       case 'CAN':
         return [
           { label: 'Mon espace', href: '/candidat/accueil', icon: GraduationCap },
+          { label: 'Ma fiche de vœux', href: '/candidat/voeux', icon: User },
         ];
       case 'ADMIN':
         return [

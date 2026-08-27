@@ -17,6 +17,7 @@ import multer from 'multer';
 import Papa from 'papaparse';
 import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
+import { parseFrenchDate } from '../lib/frenchDate';
 
 const router = Router();
 
@@ -116,32 +117,6 @@ function parseIntOrNull(val: string | undefined | null): number | null {
  * par PostgreSQL. La vérification calendaire empêche les dates comme
  * 31/02/2027 d'être acceptées silencieusement.
  */
-function parseFrenchDate(value: string | undefined | null): {
-  iso: string | null;
-  valid: boolean;
-} {
-  const raw = value?.trim() ?? '';
-  if (!raw) return { iso: null, valid: true };
-
-  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw);
-  if (!match) return { iso: null, valid: false };
-
-  const [, dayText, monthText, yearText] = match;
-  const day = Number(dayText);
-  const month = Number(monthText);
-  const year = Number(yearText);
-  const date = new Date(Date.UTC(year, month - 1, day));
-
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return { iso: null, valid: false };
-  }
-
-  return { iso: `${yearText}-${monthText}-${dayText}`, valid: true };
-}
 
 /**
  * Valide une seule ligne CSV.

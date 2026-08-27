@@ -1,0 +1,396 @@
+# PROMPT 3 — Espace Candidat (Recruteur + Candidat)
+# Envoyer APRÈS validation du prompt 2
+# Référence : conception.md §6.3 (Spécification — Candidat, révisée 25/08/2026 — point 1)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+Implémente la classe objet **Candidat**, l'import CSV candidat, ses écrans côté Recruteur, et
+l'espace Candidat (rôle CAN). Tables concernées : `candidat`, `fiche_de_voeux`, `etat_candidat`,
+`etape`, `contact`, `adresse`, `est_conjoint_de`, `est_parent_de`, `stages`, `inscrit_a`, `parle`,
+`veut_partir_pour`, `a_etudie_dans`, `a_travaille_dans`, `veut_vivre_dans`, `veut_aller_a`,
+`veut_habiter_dans`, `a_la_competence_de`, `notoriete_dcc`, `connait_la_dcc_par`, `user_`.
+
+**Rappel de contexte — révision validée DCC (25/08/2026, voir conception.md §6.3.2) :** passerelle
+n'est **pas** le référentiel maître des candidats — c'est uniquement un outil de gestion des
+opportunités. Le parcours Créé → 1er appel → 2ème appel se déroule **entièrement sur le site web**
+de la DCC, hors passerelle. Le candidat n'est importé dans passerelle **qu'à partir de l'état
+"2ème appel téléphonique" (AP2)**, via **import CSV** — exactement le même principe que l'import
+des postes (prompt2, §1-§2). **Il n'y a donc aucune création manuelle de candidat, et aucun bouton
+"Charger candidat"** dans cette version — l'import CSV remplace entièrement ces deux anciens
+mécanismes.
+
+---
+
+## 1. Classe objet `Candidat` *(Back)*
+
+Attributs = colonnes de `candidat` + `contact` associé + `fiche_de_voeux` active (si elle existe).
+
+**Constructeur / lecture** : une fonction qui charge un candidat complet (état civil + dernière
+fiche de vœux + dernière ligne de `etape`) — appelée une seule fois par navigation vers l'écran
+détail, jamais recalculée à chaque clic d'onglet (perf).
+
+**Méthodes de transition d'état** (chacune suit le pattern générique — conception.md §6.1.2 :
+popup avec commentaire obligatoire + jusqu'à 2 pièces jointes + description, puis mise à jour
+d'état + insertion dans `etape`) :
+
+| Méthode | Précondition (`etat_candidat`) | Effet |
+|---|---|---|
+| `rejeter()` | **AP2 uniquement** — ET `fiche_de_voeux.flag_candidat_deja_mis_en_lien = false` | → NEL ("Non éligible"), désactive le compte `user_` |
+| `valider_appel2()` | AP2 | → CHO, pose `fiche_de_voeux.flag_fiche_de_voeux_soumise = false` |
+| `annulerCandidature()` | **CHO, ATA uniquement** — aucune autre précondition | → **NCA** ("Non candidat"), désactive le compte `user_`, **ET** pose `flag_opportunite_non_retenu = true` sur **toutes les opportunités de ce candidat** (quel que soit leur état) — condition validée DCC : "toutes ses opportunités doivent cesser d'être présentées" |
+| `valider_session_choisir()` ⚠️ *(nom à confirmer)* | CHO — **ET** `fiche_de_voeux.date_voeux_definitifs` renseignée (vœux définitifs soumis — condition sine qua non, validée DCC 25/08/2026, point 2) | → ATA |
+
+✅ **Clarification majeure validée DCC (26/08/2026, point 3-b) — à bien distinguer, ne jamais confondre :**
+- **`annulerCandidature()` = arrêt complet du processus de candidature.** Le candidat **ne peut pas
+  l'actionner lui-même dans l'application** — s'il veut arrêter, il contacte la DCC et c'est le
+  **recruteur** qui déclenche cette méthode. Résultat : candidat → NCA, **et toutes ses opportunités
+  doivent cesser d'être présentées** pour un poste (`flag_opportunite_non_retenu`, voir effet ci-dessus).
+- **`opportunite.refuser_candidat()` / `refuser_partenaire()` (prompt4, règle R7) = tout autre
+  chose** : ça n'annule PAS la candidature, ça libère uniquement le poste et le candidat d'**une
+  mise en lien précise** pour permettre de nouvelles mises en lien ailleurs. Le candidat reste actif,
+  retourne à "Attente affectation". **Déjà implémenté correctement dans prompt4.txt §3** (déverrouillage
+  R7 : `flag_opportunite_retenue`, `flag_candidat_deja_mis_en_lien`, `flag_poste_deja_mis_en_lien`
+  tous repassés à `false`, candidat → ATA) — rien à changer côté prompt4.
+- **Ordre de séquence obligatoire, validé DCC 26/08/2026** : si un candidat est engagé dans un
+  sous-processus d'affectation (états MEL, ACP, ACC) et souhaite retirer complètement sa
+  candidature, `annulerCandidature()` **ne s'applique pas directement** à ces états. Le recruteur
+  doit d'abord **refuser l'opportunité en cours** (`refuser_candidat()`/`refuser_partenaire()` selon
+  le cas — ramène le candidat à "Attente affectation"), **puis seulement ensuite** appeler
+  `annulerCandidature()` (désormais possible, l'état étant passé à ATA). C'est pourquoi
+  `annulerCandidature()` ne liste que **CHO et ATA** comme préconditions — jamais MEL/ACP/ACC
+  directement.
+
+⚠️ **Révision 25/08/2026** : les méthodes `valider_inscription()` (CRE→AP1) et `valider_appel1()`
+(AP1→AP2) qui existaient dans une version antérieure de ce prompt **n'existent plus** — ces
+transitions se déroulent sur le site web, hors passerelle. Un candidat n'existe **jamais** en base
+passerelle aux états CRE ou AP1 : le premier état réel est directement AP2, posé par l'import (§2).
+De même, `rejeter()` ne s'applique plus qu'à l'état AP2 (avant, la précondition incluait aussi
+CRE/AP1, désormais impossibles).
+
+**Méthodes déclenchées côté candidat (pas de changement direct de `candidat.etat`, seulement
+sur les Opportunités liées — développées au prompt4) :**
+- `soumettre_voeux_provisoire()` — actif en AP2
+- `soumettre_voeux_definitif()` — actif en CHO
+- `SaveFichedeVoeux()` — recruteur, bouton MODIFIER + SAVE sur la fiche de vœux
+
+---
+
+## 1bis. Mécanisme d'alerte — dossiers qui stagnent *(Back + Front, validé DCC 26/08/2026, point 10)*
+
+**Principe :** pas de tâche planifiée (cron) — tout est calculé **à la volée** à l'affichage, plus
+simple à maintenir (ENF-12) et toujours exact.
+
+**Stockage :** nouvelle colonne `candidat.date_revue DATE` (+ `date_revue_modifiee_par VARCHAR(50)`,
+`date_revue_modifiee_le DATE` pour la traçabilité — à ajouter dans `prompt_0_sql.sql`).
+
+**Calcul automatique — règle unique appliquée à TOUTES les méthodes de transition d'état du §1**
+(`valider_appel2()`, `rejeter()`, `annulerCandidature()`, `valider_session_choisir()`) **ainsi qu'à
+l'import (§2, arrivée à AP2)** :
+```
+candidat.date_revue = CURRENT_DATE + etat_candidat.delais_de_reponse (du NOUVEL état)
+# Si delais_de_reponse est NULL (états sans délai : NEL, NCA, AFF) → date_revue = NULL,
+# aucune alerte possible sur un dossier terminé.
+```
+
+**Apparition de l'alerte** (calcul à l'affichage, écran Liste des candidats §5 et détail §6) :
+```
+alerte visible SI candidat.date_revue IS NOT NULL ET candidat.date_revue <= CURRENT_DATE
+```
+
+**Disparition de l'alerte :** automatique — dès qu'une méthode de transition change l'état du
+candidat, `date_revue` est recalculée pour le nouvel état (généralement dans le futur), donc la
+condition ci-dessus redevient fausse. **Aucune action explicite de "suppression" n'est nécessaire.**
+
+**Modification manuelle par le recruteur (le "top" que tu demandes) :** nouvelle méthode
+`candidat.reviserDateRevue(nouvelleDate)` — **Recruteur uniquement, sans précondition d'état**
+(disponible à tout moment) :
+```
+candidat.date_revue = nouvelleDate
+candidat.date_revue_modifiee_par = recruteur.nom
+candidat.date_revue_modifiee_le = CURRENT_DATE
+```
+Écran : petite icône crayon à côté de la date de revue affichée (bandeau détail candidat, §6) →
+popup avec sélecteur de date (pas de commentaire obligatoire ici, contrairement aux autres
+transitions — c'est un simple ajustement de planification, pas une décision métier).
+
+**Affichage recommandé :** colonne "Prochaine revue" dans l'écran Liste des candidats (§5),
+avec un badge/couleur (ex. rouge) quand `date_revue <= aujourd'hui`, pour un repérage visuel
+immédiat sans avoir à ouvrir chaque dossier.
+
+---
+
+## 2. Import de candidat(s) *(Back — API)*
+
+**Mécanisme identique à l'import des postes (prompt2, §2)** : endpoint en 2 temps, jamais
+d'écriture directe.
+
+**`POST /api/candidats/import/verifier`** *(multipart file upload)*
+- Parse le CSV, valide chaque ligne indépendamment.
+- Retourne un tableau `{ ligne, statut: "ok"|"erreur", message }` :
+  - `erreur` si un champ Mandatory est vide, si un champ conditionnel requis manque (ex.
+    `nom_prenom_conjoint` absent alors que `depart_en_couple=TRUE`), ou si une donnée référencée
+    par `crm_key`/`designation` (pays, durée, domaine, langue, notoriété DCC) **n'existe pas en
+    base** → message explicite ("Domaine inconnu : crm_key=XXX — créez-le d'abord").
+  - **Toutes les dates sont au format `JJ/MM/AAAA`** (même règle que prompt2, même fonction de
+    parsing/conversion ISO réutilisée — voir prompt2 §2, correctif date déjà appliqué).
+  - Aucune écriture en base à cette étape.
+
+**`POST /api/candidats/import/executer`** *(même fichier, appelé seulement si 0 ligne en erreur)*
+- Transaction globale : **tout ou rien** — si une seule ligne échoue à l'exécution, rollback complet.
+- Pour chaque ligne :
+  - `web_key` inconnu → `INSERT` : `contact` (état civil), `adresse`, `candidat` (état initial =
+    "2ème appel téléphonique" / AP2, `perso_*`, **`date_revue` = CURRENT_DATE +
+    `etat_candidat.delais_de_reponse` de AP2 — voir §1bis**), `fiche_de_voeux` (avec
+    `date_depart_souhaite` + résolution
+    `veut_partir_pour`/`a_etudie_dans`/`a_travaille_dans`/`parle`/`connait_la_dcc_par`),
+    **puis création du compte `user_`** (login = email, mot de passe temporaire haché bcrypt, à
+    régénérer via le flux "mot de passe oublié" à la première connexion) **et envoi de l'email
+    d'invitation** — le tout dans la **même transaction** que l'insertion candidat (RP-13).
+  - `web_key` existant → `UPDATE` non comparatif (écrase tous les champs), ne recrée pas de compte
+    `user_` s'il existe déjà.
+- Après le commit, appelle `creer_nouvelle_opportunites_candidat()` (développé au prompt4) pour
+  chaque candidat importé.
+
+### Contrat d'échange — colonnes attendues (conception.md §6.3.2)
+
+| # | Colonne CSV | Contrainte | Colonne BDD cible |
+|---|---|---|---|
+| 1 | ref_candidat | Mandatory (clé d'upsert) | `candidat.web_key` |
+| 2 | nom | Mandatory | `contact.nom_contact` |
+| 3 | nom_naissance | Optional | `contact.nom_naissance` |
+| 4 | prenom | Mandatory | `contact.prenom_contact` |
+| 5 | genre | Mandatory | `contact.genre` |
+| 6 | date_naissance | Mandatory — format `JJ/MM/AAAA` | `contact.date_naissance` |
+| 7 | lieu_naissance | Mandatory | `contact.lieu_naissance` |
+| 8 | nationalite | Mandatory | `contact.nationalite` |
+| 9 | telephone | Mandatory | `contact.tel_contact` |
+| 10 | email | Mandatory | `contact.email_contact` — sert aussi de login `user_` |
+| 11 | adresse1 | Mandatory | `adresse.adresse1` |
+| 12 | adresse2 | Optional | `adresse.adresse2` |
+| 13 | code_postal | Mandatory | `adresse.code_postal` |
+| 14 | ville | Mandatory | `adresse.ville` |
+| 15 | pays | Mandatory | résout `pays.crm_key` → `adresse.id_pays` |
+| 16 | etat_de_vie | Mandatory | `candidat.perso_etat_de_vie` |
+| 17 | date_mariage | Optional (requis si etat_de_vie="Marié") — format `JJ/MM/AAAA` | `candidat.perso_date_mariage` |
+| 18 | depart_en_couple | Mandatory (TRUE/FALSE) | `candidat.perso_depart_en_couple` |
+| 19 | nom_prenom_conjoint | Optional (requis si depart_en_couple=TRUE) | `candidat.perso_nom_prenom_conjoint` |
+| 20 | est_parent | Mandatory (TRUE/FALSE) | `candidat.perso_est_parent` |
+| 21 | pars_avec_enfants | Optional (requis si est_parent=TRUE) | `candidat.perso_pars_avec_enfants` |
+| 22 | date_disponibilite | Mandatory — format `JJ/MM/AAAA` | `fiche_de_voeux.date_depart_souhaite` |
+| 23 | duree_souhaitee | Mandatory | résout `duree.crm_key` → `veut_partir_pour` |
+| 24 | duree_precision_si_autre | Optional (requis si duree_souhaitee="AUTRE") | `veut_partir_pour.projet_duree_specifique` |
+| 25 | domaines_formation | Optional, liste `;` | résout `domaine.crm_key` (n) → `a_etudie_dans` |
+| 26 | domaines_experience_pro | Optional, liste `;` | résout `domaine.crm_key` (n) → `a_travaille_dans` |
+| 27 | langues | Optional, liste `code:niveau;` (ex. `FR:Natif;ANG:Courant`) | résout `langue.crm_key` (n) + niveau → `parle` |
+| 28 | references_offres | Optional | `candidat.projet_numero_offre_mission` (≤250, déjà élargi) |
+| 29 | motivations | Mandatory | `candidat.projet_motivations` |
+| 30 | questionnements | Optional | `candidat.projet_questionnements` |
+| 31 | avancement_demarche | Mandatory | `candidat.projet_avancement` |
+| 32 | experience_interculturelle | Mandatory | `candidat.projet_experience_interculturelle` |
+| 33 | formation_dialogue_interculturel | Optional | `candidat.projet_formation_dialogue_interculturel` |
+| 34 | experience_volontariat | Optional | `candidat.projet_experience_de_volontariat` |
+| 35 | raison_depart_dcc | Mandatory | `candidat.projet_raison_du_depart_avec_la_dcc` |
+| 36 | connait_dcc_par | Optional, liste `;` | résout `notoriete_dcc.designation` (n) → `connait_la_dcc_par` |
+| 37 | connait_dcc_detail | Optional | `connait_la_dcc_par.detail` / `autre_designation` |
+| 38 | attentes_dcc | Mandatory | `candidat.projet_attente_de_la_dcc` |
+| 39 | lien_autre_structure | Mandatory (TRUE/FALSE) | `candidat.projet_lien_avec_une_autre_structure` |
+| 40 | lien_autre_structure_detail | Optional (requis si lien_autre_structure=TRUE) | `candidat.projet_lien_avec_une_autre_structure_detail` |
+| 41 | statut_professionnel | Mandatory | `candidat.profil_statut` |
+| 42 | administration_tutelle | Optional (requis si statut_professionnel="Fonctionnaire") | `candidat.profil_statut_administration_de_tutelle` |
+| 43 | experience_engagement | Mandatory (TRUE/FALSE) | `candidat.profil_experience_engagement` |
+| 44 | experience_engagement_detail | Optional (requis si experience_engagement=TRUE) | `candidat.profil_experience_engagement_detail` (≤1000, déjà élargi) |
+| 45 | info_complementaire | Optional | `candidat.candidature_information_du_candidat` |
+| 46 | disponibilites_contact | Mandatory | `candidat.candidature_disponibilite_du_candidat` |
+| 47 | sessions_choisir_preference | Mandatory | `candidat.candidature_preference_session_choisir` (≤250) |
+
+⚠️ **Enfants (jusqu'à 5) : colonne pas encore incluse dans ce contrat** — format d'import en attente
+de décision (JSON vs relationnel `contact`/`est_parent_de`). Ne pas développer cette partie tant que
+ce point n'est pas tranché.
+
+**Champs volontairement absents** (n'apparaissent pas dans le formulaire de candidature DCC —
+restent vides à l'import, complétés plus tard par le candidat via `[EDITER VOEUX]`) :
+`fiche_de_voeux.zone_orange`, `conditions_spartiates`, `hopital_proche`, `nouveau_poste`,
+`nouvelle_langue`, `competences_a_developper`, `centres_interet`.
+
+---
+
+## 3. Écran — Import de candidat(s) *(Front · Recruteur)*
+
+Route : `/recruteur/candidats/import` — **même structure que l'écran d'import des postes**
+(prompt2, §1) :
+- Bouton **"Télécharger le template CSV"** : génère un fichier vide avec les 47 colonnes du
+  contrat ci-dessus en en-tête.
+- Zone d'upload d'un fichier `.csv`.
+- Affiche le rapport de l'étape "vérifier" ligne par ligne (✅/❌ + raison) avant d'activer le
+  bouton "Confirmer l'import".
+
+---
+
+## 4. Référentiel `etat_candidat` — rappel des libellés (déjà peuplé par prompt_0_sql.sql)
+
+Candidat créé → 1er appel téléphonique → 2ème appel téléphonique → Session choisir →
+Attente affectation → Mis en lien → Accord de principe → Accepté → Affecté
+(états terminaux annexes : Non éligible, Non candidat)
+
+⚠️ **Les 2 premiers états ("Candidat créé", "1er appel téléphonique") ne correspondent à aucune
+ligne réelle dans `candidat`** (voir §1) — conservés dans le référentiel pour cohérence de la
+nomenclature uniquement. Le premier état réellement atteint est "2ème appel téléphonique" (AP2),
+posé par l'import (§2).
+
+⚠️ **Non candidat n'est atteint par aucune méthode listée ci-dessus** — table présente en base,
+mais son déclencheur reste à spécifier. Ne pas y toucher pour l'instant, ne pas l'exposer comme
+action de bouton.
+
+---
+
+## 5. Écran — Liste des candidats *(Front · Recruteur, conception.md §6.3.5)*
+
+Route : `/recruteur/candidats`
+
+- Filtre d'état : multi-select, valeurs = `etat_candidat.designation`. Défaut : tous sauf les
+  états terminaux (Affecté, Non éligible, Non candidat). En pratique, "Candidat créé" et "1er
+  appel téléphonique" n'auront jamais de résultat (voir §4) — n'empêche pas de les garder dans le
+  filtre pour cohérence visuelle avec le référentiel.
+- Bouton **"Importer des candidats"** (§2-§3) — **pas de bouton "Nouveau candidat", pas de bouton
+  "Charger candidat"** (les deux mécanismes de la version précédente de ce prompt sont remplacés
+  par l'import CSV).
+- Colonnes : Nom · Prénom · Domaine *(concaténation `a_etudie_dans`/`a_travaille_dans` distincts)* ·
+  Région *(concaténation `veut_aller_a`)* · Durée · Langue *(concaténation `parle`)* · État ·
+  **Prochaine revue** *(`candidat.date_revue`, badge rouge si `<= aujourd'hui` — voir §1bis)* ·
+  Opportunité à qualifier · Opportunité approuvée · En cours d'affectation.
+- Pagination : 20 lignes par page.
+
+---
+
+## 6. Écran — Détail d'un candidat *(Front · Recruteur, conception.md §6.3.6)*
+
+Route : `/recruteur/candidats/:id`
+
+```
+Bandeau (lecture seule + boutons d'action du §1, visibles selon etat_candidat)
+  Nom, prénom, domaine, région, date de disponibilité, durée, état
+
+Onglet "État civil"  (ex-Profil)          [bouton Edit — RECRUTEUR SEUL]
+  Nom, nom de naissance, prénom, genre, date/lieu de naissance, nationalité,
+  état de vie, conjoint (via est_conjoint_de), date de mariage,
+  adresse, téléphone, email, liste des enfants (via est_parent_de)
+
+Onglet "Projet"                            [bouton Edit — RECRUTEUR SEUL]
+  Numéro d'offre, motivations, questionnements, avancement, expérience interculturelle,
+  formations suivies, expérience de volontariat, raison DCC, canal de découverte,
+  attentes, lien structure préaffectée, disponibilités,
+  dates de session Choisir proposées (via stages/inscrit_a)
+  ⚠️ Révisé 26/08/2026 (point 7) : cet onglet est ENTIÈREMENT en table `candidat` → RECRUTEUR SEUL,
+  **jamais éditable par le candidat**, contrairement à une version antérieure de ce prompt.
+
+Onglet "Vœux" — 2 sections côte à côte     [bouton Edit — champs mixtes, voir détail ci-dessous]
+  Gauche "Profil" : statut (candidat.profil_statut — RECRUTEUR SEUL), engagements
+                    (candidat.engagements — RECRUTEUR SEUL), compétences tirées
+                    (candidat.profil_experience_engagement_detail — RECRUTEUR SEUL),
+                    domaines étudiés/travaillés (a_etudie_dans/a_travaille_dans — candidat
+                    éditable, voir fenêtre §7), langues parlées (parle — candidat éditable)
+  Droite "Vœux" : date de départ (fiche_de_voeux.date_depart_souhaite — candidat éditable),
+                  durée (veut_partir_pour — candidat éditable), destinations (veut_aller_a —
+                  candidat éditable), zone orange/conditions spartiates/hôpital proche
+                  (fiche_de_voeux.* — candidat éditable), milieu (veut_vivre_dans — candidat
+                  éditable), logement (veut_habiter_dans, affiché seulement si part_seul = true —
+                  candidat éditable, MAIS **`part_seul` lui-même est RECRUTEUR SEUL**, voir
+                  remarque ⚠️ ci-dessous), compétences à mettre au service (a_la_competence_de —
+                  candidat éditable), annonces repérées (candidat.annonces_recherchees —
+                  **RECRUTEUR SEUL**), nouveau poste/nouvelle langue (fiche_de_voeux.* — candidat
+                  éditable)
+
+  ⚠️ **`fiche_de_voeux.part_seul` — exception validée DCC 26/08/2026 (point 7) :** bien qu'il
+  s'agisse d'un champ `fiche_de_voeux` (normalement candidat-éditable), **seul le recruteur peut
+  le modifier**, pour des cas exceptionnels (ex. conjoint absent quelques mois → part_seul
+  temporairement vrai malgré le mariage ; personne non mariée voyageant avec un tiers → part_seul
+  faux). Auto-positionné à l'import : `FALSE` si `candidat.perso_depart_en_couple = TRUE`
+  (marié/en couple), `TRUE` sinon — copie initiale, mais **`candidat.perso_depart_en_couple` reste
+  la donnée d'origine figée** (site web, jamais modifiée), alors que `part_seul` est la donnée
+  opérationnelle utilisée par le matching (MATCH-01, prompt4), modifiable par le recruteur.
+  → Ce champ doit rester **grisé même en mode édition candidat**, éditable uniquement côté
+  recruteur.
+
+  ⚠️ **Note similaire — `candidat.projet_date_depart_souhaitee` vs `fiche_de_voeux.date_depart_souhaite`
+  (point 7, confusion 2) :** le premier est la donnée d'origine figée (site web, RECRUTEUR SEUL,
+  jamais affichée comme éditable au candidat), copiée à l'import dans le second qui, lui, **est
+  bien candidat-éditable** (le candidat peut faire évoluer sa date au fil de sa fiche de vœux).
+  Pas d'exception ici, contrairement à `part_seul` — comportement normal du onglet "Vœux".
+
+Onglet "Opportunités"                      [bouton Edit SANS action — actions via classe Opportunité]
+  → développé en détail dans le prompt4 (§ Onglet Opportunités — Candidat)
+
+Onglet "Progression et documents"  (ex-Historique + Évaluation fusionnés)  [pas de bouton Edit]
+  Affichage en pavés de chaque ligne de `etape` : date, désignation de l'étape (jointure sur
+  etat_candidat), score, note interne, PJ1/PJ2 téléchargeables — lecture seule,
+  toute action passe par le bandeau (§1)
+```
+
+**Règle transverse (conception.md §6.1.1) :** chaque onglet a **son propre bouton Edit**, jamais
+de bouton "MODIFIER" global. Un onglet en édition ne déverrouille que ses propres champs — **et
+seulement les champs listés ci-dessus comme éditables pour le rôle courant** (un champ marqué
+"RECRUTEUR SEUL" reste grisé même si un candidat ouvre l'onglet "Vœux" en édition).
+
+**RBAC révisé et validé DCC (26/08/2026, point 7) — remplace toute version antérieure :**
+- **Toutes les données de la table `candidat`** (état civil + Projet + une partie de l'onglet
+  Vœux, voir détail ci-dessus) sont **éditables par le Recruteur, jamais par le candidat.**
+- **Toutes les données de `fiche_de_voeux` et de ses tables liées** (`veut_aller_a`,
+  `veut_partir_pour`, `veut_vivre_dans`, `veut_habiter_dans`, `parle`, `a_la_competence_de`,
+  `a_etudie_dans`, `a_travaille_dans`) sont **éditables par le candidat, mais uniquement** :
+  - à l'état AP2 **ET** la fiche de vœux provisoire n'a pas encore été soumise, **OU**
+  - à l'état CHO **ET** la fiche de vœux définitive n'a pas encore été soumise.
+  (Concrètement : dès que `soumettre_voeux_provisoire()`/`soumettre_voeux_definitif()` est
+  appelée, l'accès en écriture se ferme — cohérent avec le mécanisme de verrouillage déjà prévu
+  §7, le recruteur pouvant le décocher pour redonner la main.)
+  - **Exception : `fiche_de_voeux.part_seul` reste RECRUTEUR SEUL** même dans cette fenêtre (voir
+    remarque ⚠️ ci-dessus).
+
+---
+
+## 7. Écran — Espace Candidat *(Front · rôle CAN, conception.md §6.3.7)*
+
+Route : `/candidat/accueil` — page d'accueil **très épurée** (contrainte UX candidat — profils
+seniors, non-initiés au numérique, conception.md CLAUDE.md) :
+- Logo DCC + message d'accueil + nom du candidat
+- Frise d'avancement basée sur `etat_candidat` (composant visuel simple, pas de jargon technique)
+- Lien "Ma fiche de vœux"
+- Texte explicatif des prochaines étapes (adapté à l'état courant)
+- **Rien d'autre** — pas de menu "Mon dossier" ni "Mes informations" séparés
+
+Route : `/candidat/voeux` — réutilise **le même composant** que l'écran détail Recruteur (§6),
+avec ces différences imposées par le rôle CAN :
+- Onglets **"État civil" ET "Projet" en lecture seule stricte, aucun bouton Edit** (révisé
+  26/08/2026, point 7 — ces données sont **toutes** en table `candidat`, donc RECRUTEUR SEUL,
+  voir RBAC §6. Le candidat ne peut plus éditer l'onglet "Projet" — correction par rapport à une
+  version antérieure de ce prompt qui le lui permettait à tort.)
+- Onglets "Opportunités" et "Progression et documents" **masqués**
+- Onglet actif par défaut : "Vœux"
+- Le bandeau recruteur est remplacé par :
+  - `[EDITER VOEUX]` — actif **uniquement** si (état = AP2 **ET** vœux provisoires pas encore
+    soumis) **OU** (état = CHO **ET** vœux définitifs pas encore soumis) — validé DCC 26/08/2026,
+    remplace l'ancienne condition simplifiée "état ∈ {AP2, CHO}". Rend éditable **uniquement**
+    l'onglet "Vœux", et uniquement les champs `fiche_de_voeux`/tables liées listés éditables en
+    §6 (**pas** `part_seul`, RECRUTEUR SEUL même dans cette fenêtre ; pas l'onglet "Projet",
+    RECRUTEUR SEUL entièrement)
+  - `[SOUMETTRE VOEUX PROVISOIRE]` — actif si état = AP2 → `candidat.soumettre_voeux_provisoire()`
+  - `[SOUMETTRE VOEUX DÉFINITIFS]` — actif si état = CHO → `candidat.soumettre_voeux_definitif()`
+
+**Popup de confirmation à la soumission :** si validé, enregistrer le nom du validateur + date +
+poser un verrou empêchant toute modification ultérieure par le candidat. **Le recruteur voit ce
+verrou et peut le décocher** pour redonner la main au candidat (ajouter au schéma les colonnes
+`fiche_de_voeux.verrouille_par`, `fiche_de_voeux.date_verrouillage`, `fiche_de_voeux.verrouille`
+si elles ne sont pas encore prévues — signale-le si tu dois les ajouter).
+
+---
+
+## Points de vigilance signalés en spécification (à respecter, pas à re-décider)
+
+- Mot de passe **jamais en clair**, hash bcrypt uniquement (`user_.password`).
+- **L'import candidat est transactionnel** (comme celui des postes) — contact + adresse + candidat
+  + fiche de vœux + compte `user_` + email d'invitation dans une seule transaction : tout ou rien.
+- Les tables `parle`, `veut_partir_pour`, `a_etudie_dans`, `a_travaille_dans` sont rattachées à
+  `fiche_de_voeux` (pas à `candidat`) dans le schéma fourni — ne les recrée pas autrement.
+- Toutes les dates du CSV sont au format `JJ/MM/AAAA` — réutilise la fonction de conversion déjà
+  écrite pour l'import des postes (prompt2), ne la duplique pas.
+- L'onglet "État civil" ne doit **jamais** être éditable par le candidat, même via une future
+  évolution du bouton `[EDITER VOEUX]` — seul le recruteur y a accès en écriture.

@@ -8,13 +8,15 @@ import { RoleGuard } from '@/components/auth/RoleGuard';
 import { AppLayout } from '@/components/layout/AppLayout';
 
 import Login from '@/pages/Login';
-import Recruiter from '@/pages/Recruiter';
 import ChargeMission from '@/pages/ChargeMission';
 import Candidate from '@/pages/Candidate';
 import AdminReferentiels from '@/pages/admin/AdminReferentiels';
 import PostesList from '@/pages/postes/PostesList';
 import PosteImport from '@/pages/postes/PosteImport';
 import PosteDetail from '@/pages/postes/PosteDetail';
+import CandidatsList from '@/pages/candidats/CandidatsList';
+import CandidatImport from '@/pages/candidats/CandidatImport';
+import CandidatDetail from '@/pages/candidats/CandidatDetail';
 
 const queryClient = new QueryClient();
 
@@ -26,9 +28,18 @@ function Router() {
       <Route path="/recruteur">
         <RoleGuard allowedRoles={['REC']}>
           <AppLayout>
-            <Recruiter />
+            <CandidatsList />
           </AppLayout>
         </RoleGuard>
+      </Route>
+      <Route path="/recruteur/candidats/import">
+        <RoleGuard allowedRoles={['REC']}><AppLayout><CandidatImport /></AppLayout></RoleGuard>
+      </Route>
+      <Route path="/recruteur/candidats/:id">
+        <RoleGuard allowedRoles={['REC']}><AppLayout><CandidatDetail mode="recruteur" /></AppLayout></RoleGuard>
+      </Route>
+      <Route path="/recruteur/candidats">
+        <RoleGuard allowedRoles={['REC']}><AppLayout><CandidatsList /></AppLayout></RoleGuard>
       </Route>
       <Route path="/recruteur/postes/import">
         <RoleGuard allowedRoles={['REC']}>
@@ -70,6 +81,9 @@ function Router() {
             <Candidate />
           </AppLayout>
         </RoleGuard>
+      </Route>
+      <Route path="/candidat/voeux">
+        <RoleGuard allowedRoles={['CAN']}><AppLayout><CandidatDetail mode="candidat" /></AppLayout></RoleGuard>
       </Route>
 
       <Route path="/admin/referentiels">

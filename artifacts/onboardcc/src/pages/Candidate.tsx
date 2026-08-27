@@ -1,113 +1,23 @@
-import React from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { useAuth } from '@/contexts/AuthContext';
-import { CheckCircle2, Circle, GraduationCap, MapPin } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'wouter';
+import { CheckCircle2, Circle, HeartHandshake, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { useAuth } from '@/contexts/AuthContext';
+import { candidatsApi, type CandidatDetail } from '@/api/candidats';
 
+const nextStep: Record<string, string> = {
+  '2ème appel téléphonique': 'Vous pouvez maintenant préparer et soumettre vos vœux provisoires.',
+  'Session choisir': 'Vous pouvez finaliser vos vœux avant la validation de votre session Choisir.',
+  'Attente affectation': 'Vos vœux sont étudiés par la DCC pour rechercher une mission adaptée.',
+  'Mis en lien': 'Une proposition de mission est en cours d’étude avec votre chargé de mission.',
+  'Accord de principe': 'Votre accord de principe est enregistré. La préparation se poursuit.',
+  'Accepté': 'Votre candidature est acceptée. La DCC vous indiquera les prochaines démarches.',
+  'Affecté': 'Votre affectation est confirmée.',
+};
 export default function Candidate() {
-  const { user } = useAuth();
-
-  return (
-    <div className="max-w-4xl mx-auto p-4 md:p-8 space-y-8">
-      <div className="bg-primary text-primary-foreground rounded-2xl p-8 shadow-md relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-[80px] -mr-20 -mt-20 pointer-events-none" />
-        <div className="relative z-10">
-          <h1 className="text-3xl font-display font-bold mb-2">Bienvenue, {user?.prenom}</h1>
-          <p className="text-primary-foreground/80 max-w-xl">
-            Votre parcours d'engagement avec la Délégation Catholique pour la Coopération commence ici. Suivez l'avancement de votre dossier et vos prochaines étapes.
-          </p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        <div className="md:col-span-2 space-y-6">
-          <Card className="shadow-sm">
-            <CardHeader>
-              <CardTitle className="font-display">Votre parcours</CardTitle>
-              <CardDescription>Les grandes étapes de votre préparation au départ.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex gap-4">
-                <div className="mt-1"><CheckCircle2 className="h-6 w-6 text-green-600" /></div>
-                <div>
-                  <h3 className="font-semibold text-foreground">Candidature validée</h3>
-                  <p className="text-sm text-muted-foreground mt-1">Votre dossier a été examiné et validé par notre équipe.</p>
-                </div>
-              </div>
-              
-              <div className="flex gap-4 relative">
-                <div className="absolute left-3 top-[-16px] bottom-[-16px] w-px bg-border -z-10" />
-                <div className="mt-1"><CheckCircle2 className="h-6 w-6 text-green-600 bg-card" /></div>
-                <div>
-                  <h3 className="font-semibold text-foreground">Entretien d'orientation</h3>
-                  <p className="text-sm text-muted-foreground mt-1">Vous avez rencontré votre chargé d'orientation.</p>
-                </div>
-              </div>
-
-              <div className="flex gap-4 relative">
-                <div className="absolute left-3 top-[-16px] bottom-[-16px] w-px bg-border -z-10" />
-                <div className="mt-1"><Circle className="h-6 w-6 text-accent fill-accent/20 bg-card" /></div>
-                <div>
-                  <h3 className="font-semibold text-foreground">Session de formation</h3>
-                  <p className="text-sm text-muted-foreground mt-1 mb-3">Participation obligatoire avant proposition de mission.</p>
-                  <Button className="font-semibold text-sm">S'inscrire à une session</Button>
-                </div>
-              </div>
-
-              <div className="flex gap-4 relative opacity-50">
-                <div className="absolute left-3 top-[-16px] bottom-[-16px] w-px bg-border -z-10" />
-                <div className="mt-1"><Circle className="h-6 w-6 text-muted-foreground bg-card" /></div>
-                <div>
-                  <h3 className="font-semibold text-foreground">Proposition de mission</h3>
-                  <p className="text-sm text-muted-foreground mt-1">Étude des correspondances avec nos offres.</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="space-y-6">
-          <Card className="shadow-sm bg-accent/5 border-accent/20">
-            <CardHeader className="pb-3">
-              <CardTitle className="font-display text-lg flex items-center gap-2">
-                <GraduationCap className="h-5 w-5 text-accent" />
-                Formation
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground mb-4">
-                La formation au départ est une étape clé de votre préparation. Elle permet d'aborder l'interculturalité, la vie d'équipe et le sens de la mission.
-              </p>
-              <a href="#" className="text-sm font-semibold text-primary hover:underline">Découvrir le programme &rarr;</a>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="font-display text-lg flex items-center gap-2">
-                <MapPin className="h-5 w-5 text-muted-foreground" />
-                Vos préférences
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-sm space-y-3">
-                <div className="flex justify-between border-b pb-2">
-                  <span className="text-muted-foreground">Disponibilité</span>
-                  <span className="font-medium">À partir de Septembre</span>
-                </div>
-                <div className="flex justify-between border-b pb-2">
-                  <span className="text-muted-foreground">Durée souhaitée</span>
-                  <span className="font-medium">1 à 2 ans</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Domaines</span>
-                  <span className="font-medium text-right">Enseignement, Santé</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </div>
-  );
+  const { user } = useAuth(); const [detail, setDetail] = useState<CandidatDetail | null>(null);
+  useEffect(() => { if (user?.id_candidat) void candidatsApi.detail(user.id_candidat).then(setDetail).catch(() => setDetail(null)); }, [user?.id_candidat]);
+  const state = detail?.etat_designation;
+  return <div className="mx-auto max-w-3xl space-y-8 p-5 md:p-10"><header className="text-center"><div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-xl font-bold text-primary-foreground">DCC</div><h1 className="font-display text-3xl font-bold">Bonjour {user?.prenom}</h1><p className="mt-2 text-muted-foreground">Bienvenue dans votre espace candidat.</p></header>{user?.id_candidat && !detail ? <div className="flex justify-center"><Loader2 className="animate-spin text-primary"/></div> : <><Card><CardContent className="p-6"><h2 className="font-display text-xl font-bold">Votre parcours</h2><div className="mt-6 space-y-5"><div className="flex gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 text-primary"/><div><p className="font-medium">{state || 'Votre candidature est en cours'}</p><p className="text-sm text-muted-foreground">{state ? nextStep[state] || 'La DCC vous accompagnera pour la prochaine étape.' : 'La DCC vous accompagne dans les prochaines étapes.'}</p></div></div><div className="flex gap-3"><Circle className="mt-0.5 h-5 w-5 text-muted-foreground"/><p className="text-sm text-muted-foreground">Vous serez informé dès qu’une action est attendue de votre part.</p></div></div></CardContent></Card><Card className="border-primary/20 bg-primary/[.03]"><CardContent className="flex flex-wrap items-center justify-between gap-4 p-6"><div><div className="flex items-center gap-2 font-semibold"><HeartHandshake className="h-5 w-5 text-primary"/>Ma fiche de vœux</div><p className="mt-1 text-sm text-muted-foreground">Consultez et complétez vos préférences lorsque cela est possible.</p></div><Link href="/candidat/voeux"><Button>Ma fiche de vœux</Button></Link></CardContent></Card></>}<p className="text-center text-sm text-muted-foreground">Votre chargé de recrutement reste à votre écoute si vous avez besoin d’aide.</p></div>;
 }
