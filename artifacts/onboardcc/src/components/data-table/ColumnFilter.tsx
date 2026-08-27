@@ -27,6 +27,32 @@ export function ColumnFilter({ columnKey, endpoint, label, activeValues, onApply
   const [error, setError] = useState('');
   const [position, setPosition] = useState({ top: 0, left: 0 });
 
+  const updatePosition = () => {
+    if (buttonRef.current && open) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      const popupWidth = 288;
+      const popupHeight = Math.min(popupRef.current?.offsetHeight ?? 480, window.innerHeight - 16);
+      const preferredTop = rect.bottom + 8;
+      setPosition({
+        top: preferredTop + popupHeight <= window.innerHeight - 8
+          ? preferredTop
+          : Math.max(8, rect.top - popupHeight - 8),
+        left: Math.min(Math.max(8, rect.right - popupWidth), window.innerWidth - popupWidth - 8),
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [open]);
+
   useEffect(() => {
     const close = (event: MouseEvent) => {
       const target = event.target as Node;
@@ -91,18 +117,20 @@ export function ColumnFilter({ columnKey, endpoint, label, activeValues, onApply
         {activeValues.length > 0 && <span className="absolute -right-1 -top-1 min-w-3 rounded-full bg-primary px-1 text-[9px] leading-3 text-primary-foreground">{activeValues.length}</span>}
       </button>
       {open && createPortal(
-        <div ref={popupRef} style={position} className="fixed z-[100] w-72 rounded-lg border bg-popover p-3 text-popover-foreground shadow-xl">
-          <label className="relative block">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <input
-              autoFocus
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Rechercher…"
-              className="h-9 w-full rounded-md border bg-background pl-8 pr-3 text-sm font-normal normal-case outline-none focus:ring-2 focus:ring-ring"
-            />
-          </label>
-          <div className="mt-2 max-h-56 overflow-y-auto rounded-md border">
+        <div ref={popupRef} style={position} className="fixed z-[100] flex w-72 max-h-[calc(100vh-2rem)] flex-col rounded-lg border bg-popover text-popover-foreground shadow-xl">
+          <div className="p-3 pb-2">
+            <label className="relative block">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <input
+                autoFocus
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Rechercher…"
+                className="h-9 w-full rounded-md border bg-background pl-8 pr-3 text-sm font-normal normal-case outline-none focus:ring-2 focus:ring-ring"
+              />
+            </label>
+          </div>
+          <div className="flex-1 overflow-y-auto border-t border-b px-0">
             {loading && <div className="flex justify-center p-6"><Loader2 className="h-4 w-4 animate-spin" /></div>}
             {!loading && error && <p className="p-3 text-xs normal-case text-destructive">{error}</p>}
             {!loading && !error && values.length >= 20 && query.trim().length < 3 && (
@@ -123,9 +151,11 @@ export function ColumnFilter({ columnKey, endpoint, label, activeValues, onApply
               </>
             )}
           </div>
-          <div className="mt-3 flex justify-between gap-2">
-            <Button type="button" size="sm" variant="ghost" onClick={() => { onApply([]); setDraft([]); setOpen(false); }}>Réinitialiser</Button>
-            <Button type="button" size="sm" onClick={() => { onApply(draft); setOpen(false); }}>Appliquer</Button>
+          <div className="mt-auto p-3 pt-2">
+            <div className="flex justify-between gap-2">
+              <Button type="button" size="sm" variant="ghost" onClick={() => { onApply([]); setDraft([]); setOpen(false); }}>Réinitialiser</Button>
+              <Button type="button" size="sm" onClick={() => { onApply(draft); setOpen(false); }}>Appliquer</Button>
+            </div>
           </div>
         </div>,
         document.body,

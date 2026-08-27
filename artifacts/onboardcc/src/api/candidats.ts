@@ -13,6 +13,17 @@ export type CandidatRow = {
 export type CandidatDetail = CandidatRow & Record<string, any>;
 export type CandidatsPage = { items: CandidatRow[]; total: number; page: number; pageSize: number };
 type CandidatsApiPage = { candidats: CandidatRow[]; total: number; page: number; page_size: number };
+export type ReferenceOption = { id: number; label: string };
+export type VoeuxReferences = {
+  durees: ReferenceOption[];
+  environnements: ReferenceOption[];
+  hebergements: ReferenceOption[];
+  competences: ReferenceOption[];
+  langues: ReferenceOption[];
+  niveauxLangue: ReferenceOption[];
+  regions: ReferenceOption[];
+  domaines: ReferenceOption[];
+};
 
 export const candidatsApi = {
   list: async (page = 1, filters: Record<string, string[]> = {}) => {
@@ -23,6 +34,7 @@ export const candidatsApi = {
   },
   states: async () => (await api.get<EtatCandidat[]>('/candidats/etats')).data,
   filterValues: async (column: string) => (await api.get<{ values: string[] }>(`/candidats/filtres/${column}`)).data.values,
+  voeuxReferences: async () => (await api.get<VoeuxReferences>('/candidats/referentiels/voeux')).data,
   detail: async (id: number) => {
     const { data } = await api.get<CandidatDetail>(`/candidats/${id}`);
     return { ...data, ...(data.adresse ?? {}), ...(data.fiche_de_voeux ?? {}) };

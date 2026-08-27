@@ -12,7 +12,7 @@
  *   Cela évite d'écraser accidentellement des données d'un autre onglet.
  */
 
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import Papa from 'papaparse';
 import bcrypt from 'bcryptjs';
@@ -134,6 +134,13 @@ function validateAll(rows: Record<string,string>[], r: Refs) {
 function self(req: any, id: string | string[]) { return req.user!.role !== 'CAN' || String(req.user!.id_candidat) === String(id); }
 const DATE_FORM_FIELDS = new Set(['date_naissance', 'perso_date_mariage', 'projet_date_depart_souhaitee', 'date_depart_souhaite', 'date_revue']);
 const formValue = (field: string, value: unknown) => DATE_FORM_FIELDS.has(field) ? nullableDate(value) : value;
+const referenceId = (item: unknown, idField: string) => {
+  if (typeof item === 'number' || typeof item === 'string') return Number(item);
+  if (!item || typeof item !== 'object') return Number.NaN;
+  const value = item as Record<string, unknown>;
+  return Number(value.id ?? value[idField]);
+};
+const optionalText = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
 type FilterSpec = { valuesSql: string; conditionSql: string };
 const CANDIDATE_FILTERS: Record<string, FilterSpec> = {
   etat: {
@@ -307,6 +314,38 @@ router.get('/filtres/:colonne', requireRole(RECRUITERS), async (req,res) => {
 });
 
 /**
+ * Référentiels actifs nécessaires aux éditeurs du dossier et de la fiche de vœux.
+ * Cette route est accessible au candidat car elle ne retourne que des libellés publics.
+ */
+router.get('/referentiels/voeux', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN']), async (_req,res) => {
+  try {
+    const [durees, environnements, hebergements, competences, langues, niveauxLangue, regions, domaines] = await Promise.all([
+      pool.query("SELECT id_duree id, periode label FROM duree WHERE COALESCE(active,true) ORDER BY periode"),
+      pool.query("SELECT id_environnement id, designation label FROM environnement WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_hebergement id, designation label FROM hebergement WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_competences id, designation label FROM competences WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_langue id, designation label FROM langue WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_niveau_langue id, designation label FROM niveau_langue ORDER BY ordre"),
+      pool.query("SELECT id_region id, designation label FROM region WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_domaine id, designation label FROM domaine WHERE COALESCE(active,true) ORDER BY designation"),
+    ]);
+    res.json({
+      durees: durees.rows,
+      environnements: environnements.rows,
+      hebergements: hebergements.rows,
+      competences: competences.rows,
+      langues: langues.rows,
+      niveauxLangue: niveauxLangue.rows,
+      regions: regions.rows,
+      domaines: domaines.rows,
+    });
+  } catch (e) {
+    console.error('Erreur GET référentiels vœux :', e);
+    res.status(500).json({error:'Erreur interne du serveur.'});
+  }
+});
+
+/**
  * GET /api/candidats/:id
  * Détail complet d'un candidat.
  * Développé au prompt 3.
@@ -380,8 +419,56 @@ router.patch('/:id/etat-civil', requireRole(RECRUITERS), async (req,res) => {
 });
 router.patch('/:id/projet', requireRole(RECRUITERS), async (req,res) => {
   const allowed=['engagements','annonces_recherchees','perso_depart_en_couple','perso_nom_prenom_conjoint','perso_etat_de_vie','perso_date_mariage','perso_est_parent','perso_pars_avec_enfants','projet_date_depart_souhaitee','projet_numero_offre_mission','projet_motivations','projet_questionnements','projet_avancement','projet_experience_interculturelle','projet_formation_dialogue_interculturel','projet_experience_de_volontariat','projet_raison_du_depart_avec_la_dcc','projet_attente_de_la_dcc','projet_lien_avec_une_autre_structure','projet_lien_avec_une_autre_structure_detail','profil_statut','profil_statut_administration_de_tutelle','profil_experience_engagement','profil_experience_engagement_detail','candidature_information_du_candidat','candidature_disponibilite_du_candidat','candidature_preference_session_choisir'];
-  const keys=allowed.filter(k=>k in req.body); if(!keys.length)return void res.status(400).json({error:'Aucun champ modifiable.'});
-  try { await pool.query(`UPDATE candidat SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_candidat=$${keys.length+1}`,[...keys.map(k=>formValue(k, req.body[k])),req.params.id]);res.json({message:'Projet mis à jour.'}); }catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
+  const keys=allowed.filter(k=>k in req.body);
+  const relationFields = ['domaines_formation', 'domaines_experience_pro'].filter((field) => Array.isArray(req.body[field]));
+  if(!keys.length && !relationFields.length) return void res.status(400).json({error:'Aucun champ modifiable.'});
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const found = await client.query(
+      'SELECT c.id_candidat,f.id_fiche_de_voeux FROM candidat c LEFT JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE OF c',
+      [req.params.id],
+    );
+    if (!found.rows.length) throw new Error('NOT_FOUND');
+    let idFiche = found.rows[0].id_fiche_de_voeux;
+    if (!idFiche) {
+      const created = await client.query(
+        'INSERT INTO fiche_de_voeux(id_candidat,part_seul) VALUES($1,false) RETURNING id_fiche_de_voeux',
+        [req.params.id],
+      );
+      idFiche = created.rows[0].id_fiche_de_voeux;
+    }
+    if (keys.length) {
+      await client.query(
+        `UPDATE candidat SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_candidat=$${keys.length+1}`,
+        [...keys.map(k=>formValue(k, req.body[k])),req.params.id],
+      );
+    }
+    const domainRelations: Record<string, string> = {
+      domaines_formation: 'a_etudie_dans',
+      domaines_experience_pro: 'a_travaille_dans',
+    };
+    for (const field of relationFields) {
+      const table = domainRelations[field];
+      await client.query(`DELETE FROM ${table} WHERE id_fiche_de_voeux=$1`, [idFiche]);
+      for (const item of req.body[field]) {
+        const id = referenceId(item, 'id_domaine');
+        const exists = await client.query('SELECT 1 FROM domaine WHERE id_domaine=$1 AND COALESCE(active,true)', [id]);
+        if (!exists.rows.length) throw new Error(`REF:${field}`);
+        await client.query(`INSERT INTO ${table}(id_fiche_de_voeux,id_domaine) VALUES($1,$2)`, [idFiche, id]);
+      }
+    }
+    await client.query('COMMIT');
+    res.json({message:'Dossier de candidature mis à jour.'});
+  } catch(e:any) {
+    await client.query('ROLLBACK');
+    console.error('Erreur PATCH dossier de candidature :', {id:req.params.id, message:e.message});
+    if (e.message === 'NOT_FOUND') return void res.status(404).json({error:'Candidat non trouvé.'});
+    if (String(e.message).startsWith('REF:')) return void res.status(400).json({error:`Référence inconnue dans ${String(e.message).slice(4)}.`});
+    res.status(500).json({error:'Erreur interne du serveur.'});
+  } finally {
+    client.release();
+  }
 });
 router.patch('/:id/date-revue', requireRole(RECRUITERS), async (req,res) => {
   const date = nullableDate(req.body.date_revue);
@@ -400,7 +487,7 @@ router.post('/:id/annulerCandidature', requireRole(RECRUITERS), actionUpload.arr
 router.post('/:id/valider_session_choisir', requireRole(RECRUITERS), actionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'ATA'));
 
 /** Vœux are the only writable surface for a candidate, within the state-specific window. */
-router.patch('/:id/voeux', requireRole(['CAN','REC','CM1','CM2','CHZ','ADMIN']), async (req,res) => {
+router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) => {
   if(!self(req,req.params.id)) return void res.status(403).json({error:'Accès refusé à ce dossier.'});
   const client=await pool.connect();
   try { await client.query('BEGIN'); const found=await client.query('SELECT c.id_etat_candidat,f.* FROM candidat c LEFT JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE OF c',[req.params.id]); if(!found.rows.length)throw new Error('NOT_FOUND'); let f=found.rows[0];
@@ -412,21 +499,148 @@ router.patch('/:id/voeux', requireRole(['CAN','REC','CM1','CM2','CHZ','ADMIN']),
     if(candidate&&!open)throw new Error('LOCKED');
     const candidateFields=['zone_orange','conditions_spartiates','hopital_proche','fonctionnaire_dispo_demandee','date_depart_souhaite','nouveau_poste','nouvelle_langue','competences_a_developper','centres_interret','categorie_ecclesiale','categorie_ecclesiale_detail'];
     const allowed=candidate?candidateFields:[...candidateFields,'part_seul','acces_candidat','verrouille'];
-    const keys=allowed.filter(k=>k in req.body); if(keys.length)await client.query(`UPDATE fiche_de_voeux SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')},date_modification=CURRENT_DATE,modifie_par=$${keys.length+1} WHERE id_fiche_de_voeux=$${keys.length+2}`,[...keys.map(k=>formValue(k, req.body[k])),`${req.user!.prenom} ${req.user!.nom}`,f.id_fiche_de_voeux]);
-    const relations:Record<string,[string,string,string]>={ domaines_formation:['a_etudie_dans','id_domaine','domaine'], domaines_experience_pro:['a_travaille_dans','id_domaine','domaine'], environnements:['veut_vivre_dans','id_environnement','environnement'], regions:['veut_aller_a','id_region','region'], hebergements:['veut_habiter_dans','id_hebergement','hebergement'], competences:['a_la_competence_de','id_competences','competences'], durees:['veut_partir_pour','id_duree','duree'] };
-    for(const [field,[table,column,refTable]] of Object.entries(relations)) if(Array.isArray(req.body[field])) { await client.query(`DELETE FROM ${table} WHERE id_fiche_de_voeux=$1`,[f.id_fiche_de_voeux]); for(const item of req.body[field]) { const id=typeof item==='object'?item.id:item; const exists=await client.query(`SELECT 1 FROM ${refTable} WHERE ${column}=$1`,[id]); if(!exists.rows.length)throw new Error('REF'); const degree=typeof item==='object'?item.degre:null; await client.query(`INSERT INTO ${table}(id_fiche_de_voeux,${column}${table==='veut_aller_a'?',degre':''}) VALUES($1,$2${table==='veut_aller_a'?', $3':''})`,table==='veut_aller_a'?[f.id_fiche_de_voeux,id,degree]:[f.id_fiche_de_voeux,id]); } }
-    if(Array.isArray(req.body.langues)){await client.query('DELETE FROM parle WHERE id_fiche_de_voeux=$1',[f.id_fiche_de_voeux]);for(const x of req.body.langues){const ok=await client.query('SELECT 1 FROM langue WHERE id_langue=$1',[x.id_langue]);if(!ok.rows.length)throw new Error('REF');await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,niveau,autre_langue) VALUES($1,$2,$3,$4)',[f.id_fiche_de_voeux,x.id_langue,x.niveau||null,x.autre_langue||null]);}}
-    if(!candidate && req.body.verrouille===false) await client.query('UPDATE fiche_de_voeux SET verrouille_par=NULL,date_verrouillage=NULL WHERE id_fiche_de_voeux=$1',[f.id_fiche_de_voeux]);
+    const keys=allowed.filter(k=>k in req.body);
+    const relationFields=['environnements','regions','hebergements','competences','durees','langues'].filter(field=>Array.isArray(req.body[field]));
+    const recruiterNotes: string[]=candidate ? [] : ['engagements','annonces_recherchees'].filter(field=>field in req.body);
+    if(!keys.length && !relationFields.length && !recruiterNotes.length) throw new Error('EMPTY');
+    if(keys.length)await client.query(`UPDATE fiche_de_voeux SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')},date_modification=CURRENT_DATE,modifie_par=$${keys.length+1} WHERE id_fiche_de_voeux=$${keys.length+2}`,[...keys.map(k=>formValue(k, req.body[k])),`${req.user!.prenom} ${req.user!.nom}`,f.id_fiche_de_voeux]);
+    if(recruiterNotes.length) await client.query(
+      `UPDATE candidat SET ${recruiterNotes.map((field,index)=>`${field}=$${index+1}`).join(',')} WHERE id_candidat=$${recruiterNotes.length+1}`,
+      [...recruiterNotes.map(field=>req.body[field] || null), req.params.id],
+    );
+    const simpleRelations:Record<string,[string,string,string]>={
+      environnements:['veut_vivre_dans','id_environnement','environnement'],
+      hebergements:['veut_habiter_dans','id_hebergement','hebergement'],
+    };
+    for(const [field,[table,column,refTable]] of Object.entries(simpleRelations)) if(Array.isArray(req.body[field])) {
+      await client.query(`DELETE FROM ${table} WHERE id_fiche_de_voeux=$1`,[f.id_fiche_de_voeux]);
+      for(const item of req.body[field]) {
+        const id=referenceId(item,column);
+        const exists=await client.query(`SELECT 1 FROM ${refTable} WHERE ${column}=$1 AND COALESCE(active,true)`,[id]);
+        if(!exists.rows.length)throw new Error(`REF:${field}`);
+        await client.query(`INSERT INTO ${table}(id_fiche_de_voeux,${column}) VALUES($1,$2)`,[f.id_fiche_de_voeux,id]);
+      }
+    }
+    if(Array.isArray(req.body.regions)){
+      await client.query('DELETE FROM veut_aller_a WHERE id_fiche_de_voeux=$1',[f.id_fiche_de_voeux]);
+      for(const item of req.body.regions){
+        const id=referenceId(item,'id_region');
+        const exists=await client.query('SELECT 1 FROM region WHERE id_region=$1 AND COALESCE(active,true)',[id]);
+        if(!exists.rows.length)throw new Error('REF:regions');
+        const rawDegree=typeof item==='object' && item ? (item as Record<string,unknown>).degre : null;
+        const degree=rawDegree==='veut aller'||rawDegree==='ne veut pas aller'?rawDegree:null;
+        await client.query('INSERT INTO veut_aller_a(id_fiche_de_voeux,id_region,degre) VALUES($1,$2,$3)',[f.id_fiche_de_voeux,id,degree]);
+      }
+    }
+    if(Array.isArray(req.body.durees)){
+      await client.query('DELETE FROM veut_partir_pour WHERE id_fiche_de_voeux=$1',[f.id_fiche_de_voeux]);
+      for(const item of req.body.durees){
+        const id=referenceId(item,'id_duree');
+        const exists=await client.query('SELECT 1 FROM duree WHERE id_duree=$1 AND COALESCE(active,true)',[id]);
+        if(!exists.rows.length)throw new Error('REF:durees');
+        const precision=typeof item==='object' && item ? optionalText((item as Record<string,unknown>).projet_duree_specifique) : null;
+        await client.query('INSERT INTO veut_partir_pour(id_fiche_de_voeux,id_duree,projet_duree_specifique) VALUES($1,$2,$3)',[f.id_fiche_de_voeux,id,precision]);
+      }
+    }
+    if(Array.isArray(req.body.competences)){
+      await client.query('DELETE FROM a_la_competence_de WHERE id_fiche_de_voeux=$1',[f.id_fiche_de_voeux]);
+      for(const item of req.body.competences){
+        const id=referenceId(item,'id_competences');
+        const exists=await client.query('SELECT 1 FROM competences WHERE id_competences=$1 AND COALESCE(active,true)',[id]);
+        if(!exists.rows.length)throw new Error('REF:competences');
+        const value=typeof item==='object' && item ? item as Record<string,unknown> : {};
+        await client.query('INSERT INTO a_la_competence_de(id_fiche_de_voeux,id_competences,niveau,autre_competence) VALUES($1,$2,$3,$4)',[f.id_fiche_de_voeux,id,optionalText(value.niveau),optionalText(value.autre_competence)]);
+      }
+    }
+    if(Array.isArray(req.body.langues)){
+      await client.query('DELETE FROM parle WHERE id_fiche_de_voeux=$1',[f.id_fiche_de_voeux]);
+      for(const item of req.body.langues){
+        const id=referenceId(item,'id_langue');
+        const value=typeof item==='object' && item ? item as Record<string,unknown> : {};
+        const level=optionalText(value.niveau);
+        const ok=await client.query('SELECT 1 FROM langue WHERE id_langue=$1 AND COALESCE(active,true)',[id]);
+        if(!ok.rows.length)throw new Error('REF:langues');
+        if(level){
+          const validLevel=await client.query('SELECT 1 FROM niveau_langue WHERE designation=$1',[level]);
+          if(!validLevel.rows.length)throw new Error('REF:niveau_langue');
+        }
+        await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,niveau,autre_langue) VALUES($1,$2,$3,$4)',[f.id_fiche_de_voeux,id,level,optionalText(value.autre_langue)]);
+      }
+    }
+    if(relationFields.length && !keys.length) await client.query(
+      'UPDATE fiche_de_voeux SET date_modification=CURRENT_DATE,modifie_par=$1 WHERE id_fiche_de_voeux=$2',
+      [`${req.user!.prenom} ${req.user!.nom}`, f.id_fiche_de_voeux],
+    );
+    if(!candidate && req.body.verrouille===false) await client.query(
+      `UPDATE fiche_de_voeux
+       SET verrouille=false,
+           verrouille_par=NULL,
+           date_verrouillage=NULL,
+           flag_fiche_de_voeux_soumise=CASE WHEN $2='AP2' THEN false ELSE flag_fiche_de_voeux_soumise END,
+           date_voeux_provisoires=CASE WHEN $2='AP2' THEN NULL ELSE date_voeux_provisoires END,
+           date_voeux_definitifs=CASE WHEN $2='CHO' THEN NULL ELSE date_voeux_definitifs END
+       WHERE id_fiche_de_voeux=$1`,
+      [f.id_fiche_de_voeux, f.id_etat_candidat],
+    );
     await client.query('COMMIT');res.json({message:'Vœux mis à jour.'});
-  }catch(e:any){await client.query('ROLLBACK');res.status(e.message==='NOT_FOUND'?404:e.message==='LOCKED'?403:400).json({error:e.message==='LOCKED'?'Les vœux ne sont pas modifiables à cette étape.':e.message==='REF'?'Référence inconnue.':'Mise à jour impossible.'});}finally{client.release();}
+  }catch(e:any){
+    await client.query('ROLLBACK');
+    console.error('Erreur PATCH vœux :', {id:req.params.id, role:req.user?.role, message:e.message});
+    const message=String(e.message);
+    res.status(message==='NOT_FOUND'?404:message==='LOCKED'?403:400).json({
+      error:message==='LOCKED'
+        ?'Les vœux ne sont pas modifiables à cette étape.'
+        :message==='EMPTY'
+          ?'Aucun champ de vœux modifiable dans la requête.'
+          :message.startsWith('REF:')
+            ?`Référence inconnue dans ${message.slice(4)}.`
+            :'Mise à jour impossible.',
+    });
+  }finally{client.release();}
 });
-router.post('/:id/soumettre-voeux-provisoire', requireRole(['CAN']), async(req,res) => {
-  if(!self(req,req.params.id))return void res.status(403).json({error:'Accès refusé à ce dossier.'});
-  try {const q=await pool.query(`UPDATE fiche_de_voeux f SET flag_fiche_de_voeux_soumise=true,verrouille=true,verrouille_par=$1,date_verrouillage=CURRENT_DATE,date_voeux_provisoires=CURRENT_DATE,modifie_par=$1,date_modification=CURRENT_DATE FROM candidat c WHERE c.id_candidat=f.id_candidat AND c.id_candidat=$2 AND c.id_etat_candidat='AP2' AND NOT f.flag_fiche_de_voeux_soumise RETURNING f.id_fiche_de_voeux`,[`${req.user!.prenom} ${req.user!.nom}`,req.params.id]);if(!q.rows.length)return void res.status(400).json({error:'Soumission provisoire non autorisée.'});res.json({message:'Vœux provisoires soumis.'});}catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
-});
-router.post('/:id/soumettre-voeux-definitifs', requireRole(['CAN']), async(req,res) => {
-  if(!self(req,req.params.id))return void res.status(403).json({error:'Accès refusé à ce dossier.'});
-  try {const q=await pool.query(`UPDATE fiche_de_voeux f SET verrouille=true,verrouille_par=$1,date_verrouillage=CURRENT_DATE,date_voeux_definitifs=CURRENT_DATE,modifie_par=$1,date_modification=CURRENT_DATE FROM candidat c WHERE c.id_candidat=f.id_candidat AND c.id_candidat=$2 AND c.id_etat_candidat='CHO' AND f.date_voeux_definitifs IS NULL RETURNING f.id_fiche_de_voeux`,[`${req.user!.prenom} ${req.user!.nom}`,req.params.id]);if(!q.rows.length)return void res.status(400).json({error:'Soumission définitive non autorisée.'});res.json({message:'Vœux définitifs soumis.'});}catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
-});
+
+async function submitVoeux(req: Request, res: Response, definitive: boolean) {
+  if(!self(req,req.params.id)) return void res.status(403).json({error:'Accès refusé à ce dossier.'});
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const found=await client.query(
+      'SELECT c.id_etat_candidat,f.* FROM candidat c LEFT JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE OF c',
+      [req.params.id],
+    );
+    if(!found.rows.length) throw new Error('NOT_FOUND');
+    const expectedState=definitive?'CHO':'AP2';
+    if(found.rows[0].id_etat_candidat!==expectedState) throw new Error('PRE');
+    let fiche=found.rows[0];
+    if(!fiche.id_fiche_de_voeux) {
+      const created=await client.query(
+        'INSERT INTO fiche_de_voeux(id_candidat,part_seul) VALUES($1,false) ON CONFLICT(id_candidat) DO UPDATE SET id_candidat=EXCLUDED.id_candidat RETURNING *',
+        [req.params.id],
+      );
+      fiche=created.rows[0];
+    }
+    if((definitive && fiche.date_voeux_definitifs)||(!definitive && fiche.flag_fiche_de_voeux_soumise)) throw new Error('PRE');
+    const author=`${req.user!.prenom} ${req.user!.nom}`;
+    await client.query(
+      definitive
+        ? `UPDATE fiche_de_voeux SET verrouille=true,verrouille_par=$1,date_verrouillage=CURRENT_DATE,date_voeux_definitifs=CURRENT_DATE,modifie_par=$1,date_modification=CURRENT_DATE WHERE id_fiche_de_voeux=$2`
+        : `UPDATE fiche_de_voeux SET flag_fiche_de_voeux_soumise=true,verrouille=true,verrouille_par=$1,date_verrouillage=CURRENT_DATE,date_voeux_provisoires=CURRENT_DATE,modifie_par=$1,date_modification=CURRENT_DATE WHERE id_fiche_de_voeux=$2`,
+      [author,fiche.id_fiche_de_voeux],
+    );
+    await client.query('COMMIT');
+    res.json({message:definitive?'Vœux définitifs soumis.':'Vœux provisoires soumis.'});
+  } catch(e:any) {
+    await client.query('ROLLBACK');
+    console.error('Erreur soumission vœux :',{id:req.params.id,definitive,message:e.message});
+    if(e.message==='NOT_FOUND') return void res.status(404).json({error:'Candidat non trouvé.'});
+    if(e.message==='PRE') return void res.status(400).json({error:definitive?'Soumission définitive non autorisée.':'Soumission provisoire non autorisée.'});
+    res.status(500).json({error:'Erreur interne du serveur.'});
+  } finally {
+    client.release();
+  }
+}
+
+router.post('/:id/soumettre-voeux-provisoire', requireRole(['CAN']), (req,res) => void submitVoeux(req,res,false));
+router.post('/:id/soumettre-voeux-definitifs', requireRole(['CAN']), (req,res) => void submitVoeux(req,res,true));
 
 export default router;

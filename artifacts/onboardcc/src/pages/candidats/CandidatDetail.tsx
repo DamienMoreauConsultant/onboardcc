@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useRoute } from 'wouter';
-import { ArrowLeft, FileText, Loader2, Pencil, Send } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import React, { useEffect, useState } from 'react';
+import { useLocation, useRoute } from 'wouter';
+import { FileText, Loader2 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -10,40 +10,261 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { candidatsApi, type CandidatDetail as Detail } from '@/api/candidats';
 import { useAuth } from '@/contexts/AuthContext';
+import { CandidatBanner } from './components/CandidatBanner';
+import { SectionCard } from './components/SectionCard';
 
 type Props = { mode: 'recruteur' | 'candidat' };
 type Section = 'etat-civil' | 'projet' | 'voeux';
-const read = (v: unknown) => {
-  if (v === null || v === undefined || v === '') return '—';
-  if (typeof v === 'boolean') return v ? 'Oui' : 'Non';
-  if (Array.isArray(v)) return v.map((item) => typeof item === 'object' && item !== null ? (item.designation ?? item.periode ?? item.type_stage ?? item.crm_key ?? '—') : String(item)).join(', ') || '—';
-  return String(v);
-};
-const fieldSets: Record<Section, [string, string][]> = {
-  'etat-civil': [['nom_contact','Nom'],['nom_naissance','Nom de naissance'],['prenom_contact','Prénom'],['genre','Genre'],['date_naissance','Date de naissance'],['lieu_naissance','Lieu de naissance'],['nationalite','Nationalité'],['perso_etat_de_vie','État de vie'],['perso_nom_prenom_conjoint','Conjoint'],['perso_date_mariage','Date de mariage'],['adresse1','Adresse'],['ville','Ville'],['tel_contact','Téléphone'],['email_contact','Email']],
-  projet: [['projet_numero_offre_mission','Numéro d’offre'],['projet_motivations','Motivations'],['projet_questionnements','Questionnements'],['projet_avancement','Avancement'],['projet_experience_interculturelle','Expérience interculturelle'],['projet_formation_dialogue_interculturel','Formations suivies'],['projet_experience_de_volontariat','Expérience de volontariat'],['projet_raison_du_depart_avec_la_dcc','Raison du départ avec la DCC'],['projet_attente_de_la_dcc','Attentes envers la DCC'],['candidature_disponibilite_du_candidat','Disponibilités de contact'],['candidature_preference_session_choisir','Sessions Choisir proposées']],
-  voeux: [['profil_statut','Statut professionnel'],['profil_experience_engagement','Expérience d’engagement'],['profil_experience_engagement_detail','Détail des engagements'],['domaines_formation','Domaines de formation'],['domaines_experience','Domaines d’expérience'],['langues','Langues parlées'],['date_depart_souhaite','Date de départ souhaitée'],['durees','Durée'],['regions','Destinations'],['zone_orange','Zone orange'],['conditions_spartiates','Conditions spartiates'],['hopital_proche','Hôpital proche'],['environnements','Milieu souhaité'],['hebergements','Logement'],['competences','Compétences à mettre au service'],['annonces_recherchees','Annonces repérées'],['nouveau_poste','Nouveau poste'],['nouvelle_langue','Nouvelle langue'],['part_seul','Part seul']],
-};
-function SectionCard({ section, detail, editable, canEdit, candidateMode, onSave, onEdit }: { section: Section; detail: Detail; editable: boolean; canEdit: boolean; candidateMode: boolean; onSave: (values: Record<string, unknown>) => void; onEdit: () => void }) {
-  const [values, setValues] = useState<Record<string, unknown>>({});
-  useEffect(() => setValues(Object.fromEntries(fieldSets[section].map(([key]) => [key, detail[key] ?? '']))), [detail, section]);
-  const candidateOnly = ['domaines_formation','domaines_experience','langues','date_depart_souhaite','durees','regions','zone_orange','conditions_spartiates','hopital_proche','environnements','hebergements','competences','nouveau_poste','nouvelle_langue'];
-  const structured = ['domaines_formation','domaines_experience','langues','durees','regions','environnements','hebergements','competences'];
-  return <Card><CardHeader className="flex flex-row items-center justify-between"><CardTitle>{section === 'etat-civil' ? 'État civil' : section === 'projet' ? 'Projet' : 'Vœux'}</CardTitle>{canEdit && <Button size="sm" variant={editable ? 'default' : 'outline'} onClick={() => editable ? onSave(values) : onEdit()}>{editable ? 'Enregistrer' : <><Pencil className="mr-2 h-4 w-4"/>Éditer</>}</Button>}</CardHeader><CardContent><dl className="grid gap-3 md:grid-cols-2">{fieldSets[section].map(([key, label]) => { const restricted = candidateMode && section === 'voeux' && (!candidateOnly.includes(key) || key === 'part_seul'); const allowed = editable && !restricted && !structured.includes(key); return <div className="rounded-lg bg-muted/40 p-3" key={key}><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>{allowed ? <Input className="mt-1 bg-background" value={String(values[key] ?? '')} onChange={(e) => setValues({ ...values, [key]: e.target.value })}/> : <dd className="mt-1 whitespace-pre-wrap text-sm">{read(values[key])}</dd>}</div>; })}</dl></CardContent></Card>;
-}
+
 export default function CandidatDetail({ mode }: Props) {
-  const { user } = useAuth(); const [, params] = useRoute('/recruteur/candidats/:id'); const [, navigate] = useLocation(); const id = mode === 'candidat' ? user?.id_candidat : Number(params?.id);
-  const [detail, setDetail] = useState<Detail | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [editing, setEditing] = useState<Section | null>(null); const [action, setAction] = useState<string | null>(null); const [comment, setComment] = useState(''); const [files, setFiles] = useState<File[]>([]); const [busy, setBusy] = useState(false); const [reviewDate, setReviewDate] = useState('');
-  const reload = async () => { if (!id) return; setLoading(true); try { setDetail(await candidatsApi.detail(Number(id))); } catch (e: any) { setError(e.response?.data?.error ?? 'Candidat introuvable.'); } finally { setLoading(false); } };
-  useEffect(() => { void reload(); }, [id]);
-  useEffect(() => { setReviewDate(detail?.date_revue?.slice(0, 10) ?? ''); }, [detail?.date_revue]);
-  const status = detail?.etat_designation ?? ''; const provisionalLocked = Boolean(detail?.flag_fiche_de_voeux_soumise || detail?.verrouille); const definitiveLocked = Boolean(detail?.flag_fiche_de_voeux_definitive_soumise || detail?.verrouille); const candidateCanEdit = (status === '2ème appel téléphonique' && !provisionalLocked) || (status === 'Session choisir' && !definitiveLocked);
-  const actions = useMemo(() => status === '2ème appel téléphonique' ? [['rejeter','Rejeter'],['valider_appel2','Valider l’appel 2']] : status === 'Session choisir' ? [['valider_session_choisir','Valider la session Choisir'],['annulerCandidature','Annuler la candidature']] : status === 'Attente affectation' ? [['annulerCandidature','Annuler la candidature']] : [], [status]);
-  const save = async (section: Section, values: Record<string, unknown>) => { if (!detail) return; setBusy(true); try { await candidatsApi.save(detail.id_candidat, section, values); setEditing(null); await reload(); } catch (e: any) { setError(e.response?.data?.error ?? 'Enregistrement impossible.'); } finally { setBusy(false); } };
-  const transition = async () => { if (!detail || !action || !comment.trim()) return; setBusy(true); try { await candidatsApi.transition(detail.id_candidat, action as 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', comment, files); setAction(null); setComment(''); setFiles([]); await reload(); } catch (e: any) { setError(e.response?.data?.error ?? 'Action impossible.'); } finally { setBusy(false); } };
-  const submit = async (definitive: boolean) => { if (!detail || !window.confirm('Après soumission, vos vœux seront verrouillés. Confirmer ?')) return; setBusy(true); try { await candidatsApi.submitVoeux(detail.id_candidat, definitive); await reload(); } catch (e: any) { setError(e.response?.data?.error ?? 'Soumission impossible.'); } finally { setBusy(false); } };
-  const reviseReview = async () => { if (!detail) return; setBusy(true); try { await candidatsApi.reviseReviewDate(detail.id_candidat, reviewDate || null); await reload(); } catch (e: any) { setError(e.response?.data?.error ?? 'Date de revue impossible à enregistrer.'); } finally { setBusy(false); } };
-  if (loading) return <div className="flex h-full items-center justify-center"><Loader2 className="h-7 w-7 animate-spin text-primary"/></div>;
+  const { user } = useAuth();
+  const [, params] = useRoute('/recruteur/candidats/:id');
+  const id = mode === 'candidat' ? user?.id_candidat : Number(params?.id);
+
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [editing, setEditing] = useState<Section | null>(null);
+  const [action, setAction] = useState<string | null>(null);
+  const [comment, setComment] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [reviewDate, setReviewDate] = useState('');
+
+  const { data: refs } = useQuery({
+    queryKey: ['voeux-references'],
+    queryFn: candidatsApi.voeuxReferences,
+  });
+
+  const reload = async () => {
+    if (!id) return;
+    setLoading(true);
+    try {
+      setDetail(await candidatsApi.detail(Number(id)));
+    } catch (e: any) {
+      setError(e.response?.data?.error ?? 'Candidat introuvable.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void reload();
+  }, [id]);
+
+  useEffect(() => {
+    setReviewDate(detail?.date_revue?.slice(0, 10) ?? '');
+  }, [detail?.date_revue]);
+
+  const save = async (section: Section, values: Record<string, unknown>) => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await candidatsApi.save(detail.id_candidat, section, values);
+      setEditing(null);
+      await reload();
+    } catch (e: any) {
+      setError(e.response?.data?.error ?? 'Enregistrement impossible.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const transition = async () => {
+    if (!detail || !action || !comment.trim()) return;
+    setBusy(true);
+    try {
+      await candidatsApi.transition(detail.id_candidat, action as 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', comment, files);
+      setAction(null);
+      setComment('');
+      setFiles([]);
+      await reload();
+    } catch (e: any) {
+      setError(e.response?.data?.error ?? 'Action impossible.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async (definitive: boolean) => {
+    if (!detail || !window.confirm('Après soumission, vos vœux seront verrouillés. Confirmer ?')) return;
+    setBusy(true);
+    try {
+      await candidatsApi.submitVoeux(detail.id_candidat, definitive);
+      await reload();
+    } catch (e: any) {
+      setError(e.response?.data?.error ?? 'Soumission impossible.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reviseReview = async () => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await candidatsApi.reviseReviewDate(detail.id_candidat, reviewDate || null);
+      await reload();
+    } catch (e: any) {
+      setError(e.response?.data?.error ?? 'Date de revue impossible à enregistrer.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const status = detail?.etat_designation ?? '';
+  const provisionalLocked = Boolean(detail?.flag_fiche_de_voeux_soumise || detail?.verrouille);
+  const definitiveLocked = Boolean(detail?.date_voeux_definitifs || detail?.verrouille);
+  const candidateCanEditVoeux = (status === '2ème appel téléphonique' && !provisionalLocked) || (status === 'Session choisir' && !definitiveLocked);
+
+  if (loading) return <div className="flex h-[calc(100vh-4rem)] items-center justify-center"><Loader2 className="h-7 w-7 animate-spin text-primary" /></div>;
   if (!detail) return <div className="p-8 text-destructive">{error || 'Candidat introuvable.'}</div>;
-  return <div className="space-y-6 p-6 md:p-8">{mode === 'recruteur' && <Link href="/recruteur/candidats"><Button variant="ghost"><ArrowLeft className="mr-2 h-4 w-4"/>Retour à la liste</Button></Link>}<Card className="border-primary/20"><CardContent className="flex flex-wrap items-start justify-between gap-4 p-6"><div><p className="text-xs font-semibold uppercase tracking-[.2em] text-primary">Dossier candidat</p><h1 className="mt-1 text-3xl font-display font-bold">{detail.prenom_contact} {detail.nom_contact}</h1><p className="mt-2 text-sm text-muted-foreground">{read(detail.domaines_formation)} · {read(detail.regions)} · Disponible {read(detail.date_depart_souhaite)}</p>{mode === 'recruteur' && <div className="mt-4 flex flex-wrap items-end gap-2"><label className="text-xs font-semibold uppercase text-muted-foreground">Prochaine revue<Input className="mt-1" type="date" value={reviewDate} onChange={(e) => setReviewDate(e.target.value)}/></label><Button size="sm" variant="outline" disabled={busy} onClick={() => void reviseReview()}>Enregistrer la revue</Button>{detail.verrouille && <Button size="sm" variant="outline" disabled={busy} onClick={() => void save('voeux',{verrouille:false})}>Déverrouiller les vœux</Button>}</div>}</div><div className="flex flex-wrap items-center gap-2"><Badge>{status}</Badge>{mode === 'recruteur' ? actions.map(([key, label]) => <Button key={key} variant="outline" onClick={() => setAction(key)}>{label}</Button>) : <>{candidateCanEdit && <Button onClick={() => setEditing('voeux')}><Pencil className="mr-2 h-4 w-4"/>Éditer vœux</Button>}{status === '2ème appel téléphonique' && !provisionalLocked && <Button variant="outline" onClick={() => void submit(false)} disabled={busy}><Send className="mr-2 h-4 w-4"/>Soumettre vœux provisoires</Button>}{status === 'Session choisir' && !definitiveLocked && <Button variant="outline" onClick={() => void submit(true)} disabled={busy}><Send className="mr-2 h-4 w-4"/>Soumettre vœux définitifs</Button>}</>}</div></CardContent></Card>{error && <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}<Tabs defaultValue={mode === 'candidat' ? 'voeux' : 'etat-civil'}><TabsList><TabsTrigger value="etat-civil">État civil</TabsTrigger><TabsTrigger value="projet">Projet</TabsTrigger><TabsTrigger value="voeux">Vœux</TabsTrigger>{mode === 'recruteur' && <><TabsTrigger value="opportunites">Opportunités</TabsTrigger><TabsTrigger value="progression">Progression et documents</TabsTrigger></>}</TabsList><TabsContent value="etat-civil"><SectionCard section="etat-civil" detail={detail} editable={editing === 'etat-civil'} canEdit={mode === 'recruteur'} candidateMode={mode === 'candidat'} onEdit={() => setEditing('etat-civil')} onSave={(v) => void save('etat-civil', v)}/></TabsContent><TabsContent value="projet"><SectionCard section="projet" detail={detail} editable={editing === 'projet'} canEdit={mode === 'recruteur'} candidateMode={mode === 'candidat'} onEdit={() => setEditing('projet')} onSave={(v) => void save('projet', v)}/></TabsContent><TabsContent value="voeux"><SectionCard section="voeux" detail={detail} editable={editing === 'voeux'} canEdit={mode === 'recruteur' || candidateCanEdit} candidateMode={mode === 'candidat'} onEdit={() => setEditing('voeux')} onSave={(v) => void save('voeux', v)}/></TabsContent>{mode === 'recruteur' && <><TabsContent value="opportunites"><Card><CardContent className="p-10 text-center text-sm text-muted-foreground">{detail.opportunites_total ?? 0} opportunité(s) rattachée(s) à ce candidat.</CardContent></Card></TabsContent><TabsContent value="progression"><Card><CardHeader><CardTitle className="flex gap-2"><FileText className="h-5 w-5 text-primary"/>Progression et documents</CardTitle></CardHeader><CardContent className="space-y-3">{(detail.historique ?? []).length ? detail.historique.map((item: any) => <div key={item.id_historique} className="rounded-lg border p-3"><div className="flex justify-between gap-3"><strong>{item.designation}</strong><span className="text-xs text-muted-foreground">{item.date_evenement?.slice(0,10)}</span></div><p className="mt-1 text-sm">{item.note_ecrite || '—'}</p>{(item.url1_piece_jointe || item.url2_piece_jointe) && <p className="mt-1 text-xs text-muted-foreground">Pièces : {[item.url1_piece_jointe,item.url2_piece_jointe].filter(Boolean).join(', ')}</p>}</div>) : <p className="text-sm text-muted-foreground">Aucun historique.</p>}</CardContent></Card></TabsContent></>}</Tabs><Dialog open={!!action} onOpenChange={(open) => !open && setAction(null)}><DialogContent><DialogHeader><DialogTitle>Confirmer cette transition</DialogTitle><DialogDescription>Un commentaire est obligatoire. Vous pouvez joindre jusqu’à deux pièces.</DialogDescription></DialogHeader><Textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Commentaire obligatoire…"/><Input type="file" multiple onChange={(e) => setFiles(Array.from(e.target.files ?? []).slice(0, 2))}/><DialogFooter><Button variant="outline" onClick={() => setAction(null)}>Annuler</Button><Button disabled={!comment.trim() || busy} onClick={() => void transition()}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}Confirmer</Button></DialogFooter></DialogContent></Dialog></div>;
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-8 p-6 pb-16">
+      <CandidatBanner
+        detail={detail}
+        mode={mode}
+        busy={busy}
+        reviewDate={reviewDate}
+        setReviewDate={setReviewDate}
+        onReviseReview={() => void reviseReview()}
+        onSave={(section, values) => void save(section, values)}
+        onAction={setAction}
+        onEditVoeux={() => setEditing('voeux')}
+        onSubmit={(definitive) => void submit(definitive)}
+        refs={refs}
+      />
+
+      {error && <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+      {mode === 'candidat' && !candidateCanEditVoeux && (
+        <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-muted-foreground">
+          Votre fiche de vœux est en lecture seule à cette étape. Votre chargé de recrutement vous informera lorsqu’une nouvelle modification sera possible.
+        </p>
+      )}
+
+      <Tabs defaultValue={mode === 'candidat' ? 'voeux' : 'etat-civil'} className="w-full">
+        <TabsList className="mb-4">
+          <TabsTrigger value="etat-civil">État civil</TabsTrigger>
+          <TabsTrigger value="projet">Dossier de candidature</TabsTrigger>
+          <TabsTrigger value="voeux">Vœux</TabsTrigger>
+          {mode === 'recruteur' && (
+            <>
+              <TabsTrigger value="opportunites">Opportunités</TabsTrigger>
+              <TabsTrigger value="progression">Progression et documents</TabsTrigger>
+            </>
+          )}
+        </TabsList>
+
+        <TabsContent value="etat-civil" className="focus-visible:outline-none">
+          <SectionCard
+            section="etat-civil"
+            detail={detail}
+            editable={editing === 'etat-civil'}
+            canEdit={mode === 'recruteur' && Boolean(refs)}
+            candidateMode={mode === 'candidat'}
+            onEdit={() => setEditing('etat-civil')}
+            onSave={(v) => void save('etat-civil', v)}
+            refs={refs}
+          />
+        </TabsContent>
+
+        <TabsContent value="projet" className="focus-visible:outline-none">
+          <SectionCard
+            section="projet"
+            detail={detail}
+            editable={editing === 'projet'}
+            canEdit={mode === 'recruteur'}
+            candidateMode={mode === 'candidat'}
+            onEdit={() => setEditing('projet')}
+            onSave={(v) => void save('projet', v)}
+            refs={refs}
+          />
+        </TabsContent>
+
+        <TabsContent value="voeux" className="focus-visible:outline-none">
+          <SectionCard
+            section="voeux"
+            detail={detail}
+            editable={editing === 'voeux'}
+            canEdit={Boolean(refs) && (mode === 'recruteur' || candidateCanEditVoeux)}
+            candidateMode={mode === 'candidat'}
+            onEdit={() => setEditing('voeux')}
+            onSave={(v) => void save('voeux', v)}
+            refs={refs}
+          />
+        </TabsContent>
+
+        {mode === 'recruteur' && (
+          <>
+            <TabsContent value="opportunites" className="focus-visible:outline-none">
+              <Card>
+                <CardContent className="p-10 text-center text-sm text-muted-foreground">
+                  {detail.opportunites_total ?? 0} opportunité(s) rattachée(s) à ce candidat.
+                </CardContent>
+              </Card>
+            </TabsContent>
+            
+            <TabsContent value="progression" className="focus-visible:outline-none">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="h-5 w-5 text-primary" />
+                    Progression et documents
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {(detail.historique ?? []).length ? detail.historique.map((item: any) => (
+                    <div key={item.id_historique} className="rounded-lg border bg-card p-4 shadow-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <strong className="text-sm font-semibold">{item.designation}</strong>
+                        <span className="text-xs text-muted-foreground">{item.date_evenement?.slice(0, 10)}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-muted-foreground">{item.note_ecrite || '—'}</p>
+                      {(item.url1_piece_jointe || item.url2_piece_jointe) && (
+                        <p className="mt-3 text-xs text-muted-foreground">
+                          Pièces : {[item.url1_piece_jointe, item.url2_piece_jointe].filter(Boolean).join(', ')}
+                        </p>
+                      )}
+                    </div>
+                  )) : (
+                    <p className="text-sm text-muted-foreground">Aucun historique.</p>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </>
+        )}
+      </Tabs>
+
+      <Dialog open={!!action} onOpenChange={(open) => !open && setAction(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmer cette transition</DialogTitle>
+            <DialogDescription>Un commentaire est obligatoire. Vous pouvez joindre jusqu’à deux pièces.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <Textarea 
+              value={comment} 
+              onChange={(e) => setComment(e.target.value)} 
+              placeholder="Commentaire obligatoire…" 
+              className="min-h-[100px]"
+            />
+            <Input 
+              type="file" 
+              multiple 
+              onChange={(e) => setFiles(Array.from(e.target.files ?? []).slice(0, 2))} 
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAction(null)}>Annuler</Button>
+            <Button disabled={!comment.trim() || busy} onClick={() => void transition()}>
+              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Confirmer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
 }
