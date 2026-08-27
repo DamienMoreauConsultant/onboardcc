@@ -1,0 +1,141 @@
+# PROMPT 3c — Corrections écran candidat + finition des filtres (suite du prompt 3b)
+# Envoyer APRÈS validation du prompt 3b (ergonomie listes + bugs import/dates, déjà livré).
+# Référence : prompt3.txt §6 "Écran — Détail d'un candidat" (mis à jour 27/08/2026),
+#             prompt3.txt §7 "Écran — Espace Candidat", prompt3b (composants ColumnFilter/ScrollableTable)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+Ce prompt corrige un défaut du composant `ColumnFilter` livré au prompt3b, corrige un bug bloquant
+sur la sauvegarde de l'onglet Vœux, restructure l'en-tête de l'écran détail candidat, renomme
+l'onglet "Projet", déplace 5 champs vers cet onglet renommé, et clarifie le périmètre des
+interfaces de sélection multi-valeurs.
+
+---
+
+## 1. ⚠️ Bug — Popup `ColumnFilter` mal ancrée et non scrollable
+
+Deux défauts constatés à l'usage sur le composant livré au prompt3b :
+
+1. **Positionnement figé, pas ancré à son icône** : la popup est rendue en portail (correctif
+   prompt3b, pour éviter le rognage par le conteneur scrollable) mais sa position est calculée une
+   seule fois à l'ouverture et ne suit plus l'icône si l'utilisateur fait défiler la page/le tableau
+   — elle doit rester visuellement **accrochée à son icône de colonne**, y compris pendant un
+   scroll (recalcule la position au scroll/resize, ou utilise une librairie de positionnement
+   ancré de type Popper/Floating UI si déjà présente dans le projet). On a aussi observé un cas où
+   la popup semblait décalée par rapport à la colonne qui l'a ouverte (icône "Type" cliquée, popup
+   affichée entre "Type" et "Fonction") — vérifie que l'ancrage utilise bien la position réelle de
+   l'icône cliquée, pas une position approximative.
+2. **Pas de défilement interne quand la liste de valeurs est longue** : si le nombre de valeurs
+   affichées dépasse la hauteur disponible, le bas de la popup (bouton "Appliquer") devient
+   inaccessible. La popup doit avoir une **hauteur maximale fixe**, avec :
+   - la zone de recherche (haut) et les boutons "Tout sélectionner"/"Réinitialiser"/"Appliquer"
+     (bas) **toujours visibles, fixes** (sticky top/bottom à l'intérieur de la popup),
+   - seule la **liste de valeurs au milieu** défile verticalement si elle dépasse la hauteur
+     disponible.
+
+Reproduis sur l'écran Postes (filtre "Fonction", qui a le plus de valeurs distinctes) et sur
+l'écran Candidats avant de considérer ce point résolu.
+
+---
+
+## 2. ⚠️ Bug bloquant — Impossible d'enregistrer l'onglet "Vœux"
+
+`PATCH /api/candidats/44/voeux` renvoie systématiquement **400** (testé 3 fois, candidat Anne
+Girard). Le log backend ne montre que le code retour, pas le détail de l'erreur de validation —
+commence par consulter/logger le corps de la réponse d'erreur pour voir le message exact renvoyé
+par la validation avant de chercher plus loin.
+
+**Piste à vérifier en priorité**, liée au point 6 ci-dessous : si le frontend envoie un payload
+incomplet ou mal formé pour les champs multi-valeurs de cet onglet (`veut_aller_a`,
+`veut_partir_pour`, `veut_vivre_dans`, `veut_habiter_dans`, `a_la_competence_de`, `parle`) faute
+d'interface de sélection dédiée pour ces champs, c'est une cause plausible du 400. Vérifie ce que le
+formulaire envoie réellement pour ces champs par rapport à ce que le backend attend.
+
+Corrige la cause racine, puis confirme avec une sauvegarde réelle sur ce candidat (changement
+mineur, ex. date de départ) qui doit renvoyer 200 et persister en base.
+
+---
+
+## 3. Restructuration du bandeau — écran détail candidat *(prompt3.txt §6, mis à jour)*
+
+Remplace la structure actuelle du bandeau par celle-ci (3 lignes) :
+
+- **Ligne 1** : à gauche, une flèche de retour discrète directement devant le libellé
+  "DOSSIER CANDIDAT" (supprime la ligne/le lien "Retour à la liste" séparé) ; au centre ou juste à
+  gauche des boutons d'action, l'information "Prochaine revue" (date + bouton
+  [Enregistrer la revue], voir prompt3.txt §1bis) — supprime son bloc encadré séparé actuel ; à
+  droite, les boutons d'action du §1 (inchangés).
+- **Ligne 2** : Nom Prénom du candidat, avec le **badge d'état juste à droite du nom** (au lieu
+  d'une ligne d'état séparée comme aujourd'hui).
+- **Ligne 3** (inchangée) : domaine, région, date de disponibilité, durée.
+
+Applique la même restructuration sur `/candidat/voeux` (§7) qui réutilise ce composant, en gardant
+les différences déjà spécifiées (bandeau recruteur remplacé par les boutons candidat).
+
+---
+
+## 4. Renommer l'onglet "Projet" en "Dossier de candidature"
+
+Renomme le libellé de cet onglet partout où il apparaît (écran recruteur §6, écran candidat §7 où
+il reste en lecture seule). Aucun changement de route ou de logique, uniquement le libellé affiché
+(et le nom du composant/variable si tu préfères le clarifier, mais pas obligatoire).
+
+---
+
+## 5. Déplacer 5 champs de "Vœux" vers "Dossier de candidature"
+
+Ces champs sont renseignés une seule fois via le dossier de candidature initial (import CSV, §2) et
+ne sont **jamais remodifiés** au fil de la fiche de vœux — ils n'ont donc pas leur place dans
+l'onglet "Vœux" :
+
+| Champ affiché | Colonne | Nouvel emplacement |
+|---|---|---|
+| Statut professionnel | `candidat.profil_statut` | Dossier de candidature |
+| Expérience d'engagement | `candidat.profil_experience_engagement` | Dossier de candidature |
+| Détail des engagements | `candidat.profil_experience_engagement_detail` | Dossier de candidature |
+| Domaines de formation | `a_etudie_dans` | Dossier de candidature |
+| Domaines d'expérience | `a_travaille_dans` | Dossier de candidature |
+
+⚠️ **Conséquence RBAC** : `a_etudie_dans`/`a_travaille_dans` sortent donc de la liste des champs
+candidat-éditables de l'onglet Vœux (elles rejoignent "Dossier de candidature", RECRUTEUR SEUL
+entièrement) — corrige la validation backend de la fenêtre d'édition candidat en conséquence si
+elle les autorisait explicitement.
+
+**Ne bouge pas** `candidat.engagements` (champ texte libre, note recruteur, absente du contrat
+d'import §2) — elle reste dans l'onglet "Vœux", section gauche, avec les langues parlées (`parle`).
+
+---
+
+## 6. Interfaces de sélection multi-valeurs — à construire maintenant, pas en prompt4/5
+
+Aucune interface dédiée n'a encore été développée pour éditer les champs à valeurs multiples de
+l'onglet Vœux (`veut_aller_a` régions, `veut_partir_pour` durée, `veut_vivre_dans` environnements,
+`veut_habiter_dans` hébergements, `a_la_competence_de` compétences avec niveau, `parle` langues avec
+niveau) ni pour les booléens de type Oui/Non. **Ce n'est pas un développement prévu aux prompts 4
+ou 5** (respectivement Opportunité/scoring et sécurisation transverse — aucun des deux ne couvre les
+écrans du module Candidat) : c'est un manque du périmètre du prompt3 initial, à combler maintenant.
+
+Construis, pour chacun de ces champs dans l'onglet "Vœux" en mode édition :
+- **Listes à choix multiples avec niveau** (`a_la_competence_de`, `parle`) : sélection multiple
+  parmi le référentiel (compétences/langues actifs), avec un second sélecteur de niveau par valeur
+  choisie (réutilise le référentiel `niveau_langue` pour les langues).
+- **Listes à choix multiples simples** (`veut_partir_pour`, `veut_vivre_dans`, `veut_habiter_dans`) :
+  sélection multiple parmi le référentiel actif correspondant (durée/environnement/hébergement).
+- **`veut_aller_a`** : sélection multiple de régions **avec le degré par région** (`veut aller` /
+  `ne veut pas aller` / neutre — voir conception.md, scoring §5 de prompt4.txt).
+- **Champs booléens Oui/Non** (`zone_orange`, `conditions_spartiates`, `hopital_proche`,
+  `nouveau_poste`, `nouvelle_langue`) : toggle ou radio Oui/Non simple, pas de composant complexe.
+
+Réutilise un seul composant générique de "sélection multiple avec référentiel" pour les 5 champs à
+liste simple/avec niveau (cohérent avec l'approche déjà appliquée au filtre de colonne du prompt3b),
+plutôt que 5 implémentations ad hoc.
+
+---
+
+## Points de vigilance
+
+- Ne touche pas à la logique de scoring/opportunités (prompt4, pas encore développé).
+- Vérifie que le bug §2 n'était pas simplement causé par l'absence des interfaces du §6 — dans ce
+  cas, le §6 EST le correctif du §2, pas la peine de chercher un bug séparé une fois le §6 fait.
+- Repasse un test de sauvegarde complet de l'onglet Vœux (candidat Anne Girard, id 44) avec au moins
+  un champ de chaque type modifié (liste simple, liste avec niveau, booléen) avant de conclure.
