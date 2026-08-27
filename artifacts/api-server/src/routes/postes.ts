@@ -225,6 +225,53 @@ async function ensurePosteHistory(client: { query: Function }) {
   `);
 }
 
+type PosteFilterSpec = { expression: string; joins: string; conditionSql: string };
+const POSTE_FILTERS: Record<string, PosteFilterSpec> = {
+  etat: {
+    expression: 'ep.designation',
+    joins: 'JOIN etat_poste ep ON ep.id_etat_poste=fp.id_etat_poste',
+    conditionSql: 'ep.designation = ANY($VALUE::text[])',
+  },
+  pays: {
+    expression: 'p.designation',
+    joins: 'JOIN pays p ON p.id_pays=fp.id_pays',
+    conditionSql: 'p.designation = ANY($VALUE::text[])',
+  },
+  type: {
+    expression: 'fp.statut_volontaire',
+    joins: '',
+    conditionSql: 'fp.statut_volontaire = ANY($VALUE::text[])',
+  },
+  fonction: {
+    expression: 'fp.fonction',
+    joins: '',
+    conditionSql: 'fp.fonction = ANY($VALUE::text[])',
+  },
+};
+function parsePosteFilters(value: unknown): Record<string, string[]> {
+  if (typeof value !== 'string' || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed)
+      .filter(([key, values]) => key in POSTE_FILTERS && Array.isArray(values))
+      .map(([key, values]) => [key, (values as unknown[]).filter((item): item is string => typeof item === 'string' && item.trim().length > 0)]));
+  } catch {
+    return {};
+  }
+}
+function posteFilterSql(filters: Record<string, string[]>, startIndex: number) {
+  const params: string[][] = [];
+  const clauses: string[] = [];
+  let index = startIndex;
+  for (const [key, values] of Object.entries(filters)) {
+    if (!values.length) continue;
+    clauses.push(POSTE_FILTERS[key].conditionSql.replace('$VALUE', `$${index}`));
+    params.push(values);
+    index += 1;
+  }
+  return { sql: clauses.length ? ` AND ${clauses.join(' AND ')}` : '', params };
+}
+
 /* ─────────────────────────────────────────────────────────────────────
    GET /api/postes/import/template
    Retourne un fichier CSV vide avec les 41 colonnes en en-tête.
@@ -255,6 +302,35 @@ router.get(
       res.json(result.rows);
     } catch (err) {
       console.error('Erreur GET /postes/etats :', err);
+      res.status(500).json({ error: 'Erreur interne du serveur.' });
+    }
+  },
+);
+
+router.get(
+  '/filtres/:colonne',
+  requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN']),
+  async (req, res) => {
+    const filter = POSTE_FILTERS[String(req.params.colonne)];
+    if (!filter) {
+      res.status(400).json({ error: 'Colonne de filtre non autorisée.' });
+      return;
+    }
+    try {
+      const user = req.user!;
+      const isCm = ['CM1', 'CM2', 'CHZ'].includes(user.role);
+      const result = await pool.query(
+        `SELECT DISTINCT ${filter.expression} AS value
+         FROM fiche_de_poste fp
+         ${filter.joins}
+         ${isCm ? 'JOIN gere_poste gp ON gp.id_poste=fp.id_poste AND gp.id_contact=$1' : ''}
+         WHERE ${filter.expression} IS NOT NULL AND BTRIM(${filter.expression}) <> ''
+         ORDER BY value`,
+        isCm ? [user.id_contact] : [],
+      );
+      res.json({ values: result.rows.map((row) => row.value) });
+    } catch (err) {
+      console.error('Erreur GET filtres postes :', err);
       res.status(500).json({ error: 'Erreur interne du serveur.' });
     }
   },
@@ -570,11 +646,14 @@ router.get(
       const user = req.user!;
       const isCm = ['CM1', 'CM2', 'CHZ'].includes(user.role);
 
-      // Filtre d'état (query param CSV) ; défaut = tout sauf Fermé
+      const filters = parsePosteFilters(req.query.filtres);
       const etatsParam = req.query.etats as string | undefined;
-      const etatsFilter: string[] = etatsParam
+      const legacyStates: string[] = etatsParam
         ? etatsParam.split(',').map((s) => s.trim()).filter(Boolean)
         : [];
+      const etatsFilter = filters.etat?.length ? filters.etat : legacyStates;
+      const cmParamIndex = isCm ? 2 : null;
+      const generatedFilters = posteFilterSql(filters, isCm ? 3 : 2);
 
       /**
        * Pour les CM, on restreint aux postes où leur id_contact apparaît dans gere_poste.
@@ -586,6 +665,7 @@ router.get(
           fp.crm_key,
           fp.statut_volontaire,
           fp.fonction,
+           fp.flag_poste_deja_mis_en_lien,
           ep.designation                                                       AS etat_designation,
           p.designation                                                        AS pays_designation,
           COUNT(CASE WHEN eo.id_etat_opportunite IN (2, 4) THEN 1 END)::int  AS opp_a_qualifier,
@@ -594,16 +674,19 @@ router.get(
         FROM fiche_de_poste fp
         JOIN etat_poste ep ON ep.id_etat_poste = fp.id_etat_poste
         JOIN pays p        ON p.id_pays        = fp.id_pays
-        ${isCm ? 'JOIN gere_poste gp ON gp.id_poste = fp.id_poste AND gp.id_contact = $2' : ''}
+        ${isCm ? `JOIN gere_poste gp ON gp.id_poste = fp.id_poste AND gp.id_contact = $${cmParamIndex}` : ''}
         LEFT JOIN opportunite o        ON o.id_poste               = fp.id_poste
         LEFT JOIN etat_opportunite eo  ON eo.id_etat_opportunite   = o.id_etat_opportunite
-        WHERE (cardinality($1::text[]) = 0 OR ep.designation = ANY($1::text[]))
-        GROUP BY fp.id_poste, fp.crm_key, fp.statut_volontaire, fp.fonction,
+        WHERE ((cardinality($1::text[]) = 0 AND ep.designation <> 'Fermé') OR ep.designation = ANY($1::text[]))
+        ${generatedFilters.sql}
+        GROUP BY fp.id_poste, fp.crm_key, fp.statut_volontaire, fp.fonction, fp.flag_poste_deja_mis_en_lien,
                  ep.designation, p.designation
         ORDER BY fp.id_poste DESC
       `;
 
-      const params = isCm ? [etatsFilter, user.id_contact] : [etatsFilter];
+      const params = isCm
+        ? [etatsFilter, user.id_contact, ...generatedFilters.params]
+        : [etatsFilter, ...generatedFilters.params];
       const result = await pool.query(sql, params);
       res.json(result.rows);
     } catch (err) {

@@ -19,7 +19,7 @@ import bcrypt from 'bcryptjs';
 import { randomBytes } from 'node:crypto';
 import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
-import { parseFrenchDate } from '../lib/frenchDate';
+import { nullableDate, parseFrenchDate } from '../lib/frenchDate';
 import { sendCandidateInvitations, smtpIsConfigured, type CandidateInvitation } from '../lib/candidateInvitations';
 
 const router = Router();
@@ -44,6 +44,42 @@ const bool = (v?: string) => ['true', '1', 'oui', 'yes'].includes((v ?? '').trim
 const validBool = (v?: string) => ['true','false','oui','non','yes','no','1','0'].includes((v ?? '').trim().toLowerCase());
 const entries = (v?: string) => (v ?? '').split(';').map(x => x.trim()).filter(Boolean);
 const text = (v?: string) => v?.trim() || null;
+type CsvLengthRule = { field: string; target: string; max: number };
+const CSV_LENGTH_RULES: CsvLengthRule[] = [
+  { field: 'ref_candidat', target: 'contact.crm_key / candidat.web_key', max: 50 },
+  { field: 'nom', target: 'contact.nom_contact', max: 50 },
+  { field: 'nom_naissance', target: 'contact.nom_naissance', max: 50 },
+  { field: 'prenom', target: 'contact.prenom_contact', max: 50 },
+  { field: 'genre', target: 'contact.genre', max: 20 },
+  { field: 'lieu_naissance', target: 'contact.lieu_naissance', max: 50 },
+  { field: 'nationalite', target: 'contact.nationalite', max: 50 },
+  { field: 'telephone', target: 'contact.tel_contact', max: 50 },
+  { field: 'email', target: 'contact.email_contact', max: 50 },
+  { field: 'adresse1', target: 'adresse.adresse1', max: 50 },
+  { field: 'adresse2', target: 'adresse.adresse2', max: 50 },
+  { field: 'code_postal', target: 'adresse.code_postal', max: 50 },
+  { field: 'ville', target: 'adresse.ville', max: 50 },
+  { field: 'etat_de_vie', target: 'candidat.perso_etat_de_vie', max: 20 },
+  { field: 'nom_prenom_conjoint', target: 'candidat.perso_nom_prenom_conjoint', max: 50 },
+  { field: 'duree_precision_si_autre', target: 'veut_partir_pour.projet_duree_specifique', max: 50 },
+  { field: 'references_offres', target: 'candidat.projet_numero_offre_mission', max: 250 },
+  { field: 'motivations', target: 'candidat.projet_motivations', max: 250 },
+  { field: 'questionnements', target: 'candidat.projet_questionnements', max: 250 },
+  { field: 'avancement_demarche', target: 'candidat.projet_avancement', max: 250 },
+  { field: 'experience_interculturelle', target: 'candidat.projet_experience_interculturelle', max: 250 },
+  { field: 'formation_dialogue_interculturel', target: 'candidat.projet_formation_dialogue_interculturel', max: 250 },
+  { field: 'experience_volontariat', target: 'candidat.projet_experience_de_volontariat', max: 250 },
+  { field: 'raison_depart_dcc', target: 'candidat.projet_raison_du_depart_avec_la_dcc', max: 250 },
+  { field: 'attentes_dcc', target: 'candidat.projet_attente_de_la_dcc', max: 250 },
+  { field: 'lien_autre_structure_detail', target: 'candidat.projet_lien_avec_une_autre_structure_detail', max: 250 },
+  { field: 'statut_professionnel', target: 'candidat.profil_statut', max: 20 },
+  { field: 'administration_tutelle', target: 'candidat.profil_statut_administration_de_tutelle', max: 50 },
+  { field: 'experience_engagement_detail', target: 'candidat.profil_experience_engagement_detail', max: 1000 },
+  { field: 'info_complementaire', target: 'candidat.candidature_information_du_candidat', max: 250 },
+  { field: 'disponibilites_contact', target: 'candidat.candidature_disponibilite_du_candidat', max: 250 },
+  { field: 'sessions_choisir_preference', target: 'candidat.candidature_preference_session_choisir', max: 250 },
+  { field: 'connait_dcc_detail', target: 'connait_la_dcc_par.detail / autre_designation', max: 50 },
+];
 const mapRows = (rows: Array<{ crm_key?: string; designation?: string; id: number }>) =>
   Object.fromEntries(rows.map(r => [(r.crm_key ?? r.designation)!, r.id]));
 async function refs(): Promise<Refs> {
@@ -66,8 +102,16 @@ function validate(row: Record<string,string>, line: number, r: Refs) {
   for (const f of ['date_naissance','date_mariage','date_disponibilite']) if (!parseFrenchDate(row[f]).valid) errors.push(`Date invalide ligne ${line} : ${f}="${row[f]?.trim() ?? ''}" — format attendu JJ/MM/AAAA`);
   for (const f of ['depart_en_couple','est_parent','pars_avec_enfants','lien_autre_structure','experience_engagement']) if (row[f]?.trim() && !validBool(row[f])) errors.push(`Booléen invalide : ${f} (TRUE/FALSE, OUI/NON, 1/0 attendus)`);
   if (row.email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email.trim())) errors.push('Email invalide');
-  const limits: Record<string,number>={ref_candidat:50,nom:50,prenom:50,email:50,motivations:250,avancement_demarche:250,experience_interculturelle:250,raison_depart_dcc:250,attentes_dcc:250,sessions_choisir_preference:250,experience_engagement_detail:250};
-  for(const [field,limit] of Object.entries(limits)) if((row[field]??'').length>limit) errors.push(`${field} dépasse ${limit} caractères`);
+  for (const rule of CSV_LENGTH_RULES) {
+    const length = (row[rule.field] ?? '').trim().length;
+    if (length > rule.max) {
+      errors.push(`Ligne ${line}, colonne '${rule.field}' : ${length} caractères, maximum autorisé ${rule.max} (cible ${rule.target}).`);
+    }
+  }
+  for (const item of entries(row.langues)) {
+    const [, niveau] = item.split(':').map(x => x.trim());
+    if (niveau && niveau.length > 20) errors.push(`Ligne ${line}, colonne 'langues' : niveau de langue de ${niveau.length} caractères, maximum autorisé 20.`);
+  }
   if (row.pays?.trim() && !r.pays[row.pays.trim()]) errors.push(`Pays inconnu : crm_key=${row.pays.trim()} — créez-le d'abord`);
   if (row.duree_souhaitee?.trim() && !r.duree[row.duree_souhaitee.trim()]) errors.push(`Durée inconnue : crm_key=${row.duree_souhaitee.trim()} — créez-la d'abord`);
   for (const f of ['domaines_formation','domaines_experience_pro']) for (const k of entries(row[f])) if (!r.domaine[k]) errors.push(`Domaine inconnu : crm_key=${k} — créez-le d'abord`);
@@ -88,6 +132,54 @@ function validateAll(rows: Record<string,string>[], r: Refs) {
   return rows.map((row,i) => { const result=validate(row,i+2,r); for(const [field,seen] of [['ref_candidat',web],['email',emails]] as const) { const value=(row[field]??'').trim().toLowerCase(); if(value && seen.has(value)) { result.statut='erreur'; result.message=result.message==='✓'?`Doublon dans le CSV : ${field}=${value}`:`${result.message} | Doublon dans le CSV : ${field}=${value}`; } seen.add(value); } return result; });
 }
 function self(req: any, id: string | string[]) { return req.user!.role !== 'CAN' || String(req.user!.id_candidat) === String(id); }
+const DATE_FORM_FIELDS = new Set(['date_naissance', 'perso_date_mariage', 'projet_date_depart_souhaitee', 'date_depart_souhaite', 'date_revue']);
+const formValue = (field: string, value: unknown) => DATE_FORM_FIELDS.has(field) ? nullableDate(value) : value;
+type FilterSpec = { valuesSql: string; conditionSql: string };
+const CANDIDATE_FILTERS: Record<string, FilterSpec> = {
+  etat: {
+    valuesSql: `SELECT DISTINCT ec.designation AS value FROM candidat c JOIN etat_candidat ec ON ec.id_etat_candidat=c.id_etat_candidat WHERE ec.designation IS NOT NULL ORDER BY value`,
+    conditionSql: 'ec.designation = ANY($VALUE::text[])',
+  },
+  domaine: {
+    valuesSql: `SELECT DISTINCT d.designation AS value FROM a_etudie_dans ae JOIN domaine d ON d.id_domaine=ae.id_domaine ORDER BY value`,
+    conditionSql: `EXISTS (SELECT 1 FROM a_etudie_dans ae JOIN domaine d ON d.id_domaine=ae.id_domaine JOIN fiche_de_voeux fx ON fx.id_fiche_de_voeux=ae.id_fiche_de_voeux WHERE fx.id_candidat=c.id_candidat AND d.designation = ANY($VALUE::text[]))`,
+  },
+  region: {
+    valuesSql: `SELECT DISTINCT r.designation AS value FROM veut_aller_a va JOIN region r ON r.id_region=va.id_region ORDER BY value`,
+    conditionSql: `EXISTS (SELECT 1 FROM veut_aller_a va JOIN region r ON r.id_region=va.id_region JOIN fiche_de_voeux fx ON fx.id_fiche_de_voeux=va.id_fiche_de_voeux WHERE fx.id_candidat=c.id_candidat AND r.designation = ANY($VALUE::text[]))`,
+  },
+  duree: {
+    valuesSql: `SELECT DISTINCT d.periode AS value FROM veut_partir_pour vp JOIN duree d ON d.id_duree=vp.id_duree ORDER BY value`,
+    conditionSql: 'EXISTS (SELECT 1 FROM veut_partir_pour vp JOIN duree d ON d.id_duree=vp.id_duree JOIN fiche_de_voeux fx ON fx.id_fiche_de_voeux=vp.id_fiche_de_voeux WHERE fx.id_candidat=c.id_candidat AND d.periode = ANY($VALUE::text[]))',
+  },
+  langue: {
+    valuesSql: `SELECT DISTINCT l.designation AS value FROM parle pa JOIN langue l ON l.id_langue=pa.id_langue ORDER BY value`,
+    conditionSql: 'EXISTS (SELECT 1 FROM parle pa JOIN langue l ON l.id_langue=pa.id_langue JOIN fiche_de_voeux fx ON fx.id_fiche_de_voeux=pa.id_fiche_de_voeux WHERE fx.id_candidat=c.id_candidat AND l.designation = ANY($VALUE::text[]))',
+  },
+};
+function parseFilterQuery(value: unknown, allowed: Record<string, FilterSpec>): Record<string, string[]> {
+  if (typeof value !== 'string' || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed)
+      .filter(([key, values]) => key in allowed && Array.isArray(values))
+      .map(([key, values]) => [key, (values as unknown[]).filter((item): item is string => typeof item === 'string' && item.trim().length > 0)]));
+  } catch {
+    return {};
+  }
+}
+function candidateFilterSql(filters: Record<string, string[]>, startIndex: number) {
+  const params: string[][] = [];
+  const clauses: string[] = [];
+  let index = startIndex;
+  for (const [key, values] of Object.entries(filters)) {
+    if (!values.length) continue;
+    clauses.push(CANDIDATE_FILTERS[key].conditionSql.replace('$VALUE', `$${index}`));
+    params.push(values);
+    index += 1;
+  }
+  return { sql: clauses.length ? ` AND ${clauses.join(' AND ')}` : '', params };
+}
 async function transition(client: any, id: string, state: string, actor: string, note: string) {
   const stateResult = await client.query('SELECT delais_de_reponse FROM etat_candidat WHERE id_etat_candidat=$1', [state]);
   await client.query(`UPDATE candidat SET id_etat_candidat=$2, date_revue=CASE WHEN $3::int IS NULL THEN NULL ELSE CURRENT_DATE+$3::int END WHERE id_candidat=$1`, [id, state, stateResult.rows[0].delais_de_reponse]);
@@ -162,7 +254,11 @@ router.post('/import/executer', requireRole(['REC','ADMIN']), upload.single('fil
 router.get('/', requireRole(RECRUITERS), async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
-    const states = typeof req.query.etats === 'string' ? req.query.etats.split(',').map(x=>x.trim()).filter(Boolean) : [];
+    const filters = parseFilterQuery(req.query.filtres, CANDIDATE_FILTERS);
+    const legacyStates = typeof req.query.etats === 'string' ? req.query.etats.split(',').map(x=>x.trim()).filter(Boolean) : [];
+    const states = filters.etat?.length ? filters.etat : legacyStates;
+    const generatedFilters = candidateFilterSql(filters, 2);
+    const offsetIndex = 2 + generatedFilters.params.length;
     const result = await pool.query(`
       SELECT
         c.id_candidat,
@@ -171,7 +267,7 @@ router.get('/', requireRole(RECRUITERS), async (req, res) => {
         co.prenom_contact,
         co.email_contact,
         ec.designation AS etat_designation,
-        c.id_etat_candidat, c.date_revue,
+        c.id_etat_candidat, c.date_revue, f.flag_candidat_deja_mis_en_lien,
         (c.date_revue IS NOT NULL AND c.date_revue <= CURRENT_DATE) AS alerte_revue,
         COALESCE((SELECT string_agg(DISTINCT d.designation, ', ') FROM a_etudie_dans ae JOIN domaine d ON d.id_domaine=ae.id_domaine JOIN fiche_de_voeux f ON f.id_fiche_de_voeux=ae.id_fiche_de_voeux WHERE f.id_candidat=c.id_candidat),'') AS domaines,
         COALESCE((SELECT string_agg(DISTINCT l.designation, ', ') FROM parle pa JOIN langue l ON l.id_langue=pa.id_langue JOIN fiche_de_voeux f ON f.id_fiche_de_voeux=pa.id_fiche_de_voeux WHERE f.id_candidat=c.id_candidat),'') AS langues,
@@ -183,10 +279,11 @@ router.get('/', requireRole(RECRUITERS), async (req, res) => {
       FROM candidat c
       JOIN contact co ON co.id_contact = c.id_contact
       JOIN etat_candidat ec ON ec.id_etat_candidat = c.id_etat_candidat
-      WHERE (cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('AFF','NEL','NCA'))
-         OR ec.designation=ANY($1::text[])
-      ORDER BY co.nom_contact, co.prenom_contact LIMIT 20 OFFSET $2`, [states, (page - 1) * 20]);
-    const total = await pool.query(`SELECT COUNT(*)::int total FROM candidat c JOIN etat_candidat ec ON ec.id_etat_candidat=c.id_etat_candidat WHERE (cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('AFF','NEL','NCA')) OR ec.designation=ANY($1::text[])`,[states]);
+      LEFT JOIN fiche_de_voeux f ON f.id_candidat = c.id_candidat
+      WHERE ((cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('AFF','NEL','NCA'))
+         OR ec.designation=ANY($1::text[]))${generatedFilters.sql}
+      ORDER BY co.nom_contact, co.prenom_contact LIMIT 20 OFFSET $${offsetIndex}`, [states, ...generatedFilters.params, (page - 1) * 20]);
+    const total = await pool.query(`SELECT COUNT(*)::int total FROM candidat c JOIN etat_candidat ec ON ec.id_etat_candidat=c.id_etat_candidat WHERE ((cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('AFF','NEL','NCA')) OR ec.designation=ANY($1::text[]))${generatedFilters.sql}`,[states, ...generatedFilters.params]);
     res.json({ candidats: result.rows, page, page_size:20, total:total.rows[0].total });
   } catch (err) {
     console.error('Erreur GET candidats :', err);
@@ -196,6 +293,17 @@ router.get('/', requireRole(RECRUITERS), async (req, res) => {
 
 router.get('/etats', requireRole(RECRUITERS), async (_req,res) => {
   try { res.json((await pool.query('SELECT id_etat_candidat,designation,delais_de_reponse FROM etat_candidat ORDER BY id_etat_candidat')).rows); } catch(e) { console.error(e);res.status(500).json({error:'Erreur interne du serveur.'}); }
+});
+router.get('/filtres/:colonne', requireRole(RECRUITERS), async (req,res) => {
+  const filter = CANDIDATE_FILTERS[String(req.params.colonne)];
+  if (!filter) return void res.status(400).json({error:'Colonne de filtre non autorisée.'});
+  try {
+    const values = await pool.query<{ value: string }>(filter.valuesSql);
+    res.json({values: values.rows.map((row) => row.value).filter(Boolean)});
+  } catch (e) {
+    console.error('Erreur GET filtres candidats :', e);
+    res.status(500).json({error:'Erreur interne du serveur.'});
+  }
 });
 
 /**
@@ -262,21 +370,21 @@ router.patch('/:id/etat-civil', requireRole(RECRUITERS), async (req,res) => {
     await client.query('BEGIN');
     const row=await client.query('SELECT c.id_contact,co.id_adresse FROM candidat c JOIN contact co ON co.id_contact=c.id_contact WHERE c.id_candidat=$1 FOR UPDATE',[req.params.id]);
     if(!row.rows.length){await client.query('ROLLBACK');return void res.status(404).json({error:'Candidat non trouvé.'});}
-    if(contacts.length) await client.query(`UPDATE contact SET ${contacts.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_contact=$${contacts.length+1}`,[...contacts.map(k=>req.body[k]||null),row.rows[0].id_contact]);
+    if(contacts.length) await client.query(`UPDATE contact SET ${contacts.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_contact=$${contacts.length+1}`,[...contacts.map(k=>formValue(k, req.body[k]) || null),row.rows[0].id_contact]);
     let idAdresse=row.rows[0].id_adresse;
     if(addresses.length&&!idAdresse){const created=await client.query("INSERT INTO adresse(id_pays) VALUES((SELECT id_pays FROM pays ORDER BY id_pays LIMIT 1)) RETURNING id_adresse");idAdresse=created.rows[0].id_adresse;await client.query('UPDATE contact SET id_adresse=$1 WHERE id_contact=$2',[idAdresse,row.rows[0].id_contact]);}
     if(addresses.length) await client.query(`UPDATE adresse SET ${addresses.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_adresse=$${addresses.length+1}`,[...addresses.map(k=>req.body[k]||null),idAdresse]);
-    if(candidates.length) await client.query(`UPDATE candidat SET ${candidates.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_candidat=$${candidates.length+1}`,[...candidates.map(k=>req.body[k]),req.params.id]);
+    if(candidates.length) await client.query(`UPDATE candidat SET ${candidates.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_candidat=$${candidates.length+1}`,[...candidates.map(k=>formValue(k, req.body[k])),req.params.id]);
     await client.query('COMMIT');res.json({message:'État civil mis à jour.'});
   } catch(e){await client.query('ROLLBACK');console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});} finally {client.release();}
 });
 router.patch('/:id/projet', requireRole(RECRUITERS), async (req,res) => {
   const allowed=['engagements','annonces_recherchees','perso_depart_en_couple','perso_nom_prenom_conjoint','perso_etat_de_vie','perso_date_mariage','perso_est_parent','perso_pars_avec_enfants','projet_date_depart_souhaitee','projet_numero_offre_mission','projet_motivations','projet_questionnements','projet_avancement','projet_experience_interculturelle','projet_formation_dialogue_interculturel','projet_experience_de_volontariat','projet_raison_du_depart_avec_la_dcc','projet_attente_de_la_dcc','projet_lien_avec_une_autre_structure','projet_lien_avec_une_autre_structure_detail','profil_statut','profil_statut_administration_de_tutelle','profil_experience_engagement','profil_experience_engagement_detail','candidature_information_du_candidat','candidature_disponibilite_du_candidat','candidature_preference_session_choisir'];
   const keys=allowed.filter(k=>k in req.body); if(!keys.length)return void res.status(400).json({error:'Aucun champ modifiable.'});
-  try { await pool.query(`UPDATE candidat SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_candidat=$${keys.length+1}`,[...keys.map(k=>req.body[k]),req.params.id]);res.json({message:'Projet mis à jour.'}); }catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
+  try { await pool.query(`UPDATE candidat SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_candidat=$${keys.length+1}`,[...keys.map(k=>formValue(k, req.body[k])),req.params.id]);res.json({message:'Projet mis à jour.'}); }catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
 });
 router.patch('/:id/date-revue', requireRole(RECRUITERS), async (req,res) => {
-  const date = typeof req.body.date_revue === 'string' ? req.body.date_revue : null;
+  const date = nullableDate(req.body.date_revue);
   if(date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return void res.status(400).json({error:'Date ISO AAAA-MM-JJ requise.'});
   try { await pool.query('UPDATE candidat SET date_revue=$1,date_revue_modifiee_par=$2,date_revue_modifiee_le=CURRENT_DATE WHERE id_candidat=$3',[date,`${req.user!.prenom} ${req.user!.nom}`,req.params.id]);res.json({message:'Date de revue mise à jour.'}); }catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
 });
@@ -295,12 +403,16 @@ router.post('/:id/valider_session_choisir', requireRole(RECRUITERS), actionUploa
 router.patch('/:id/voeux', requireRole(['CAN','REC','CM1','CM2','CHZ','ADMIN']), async (req,res) => {
   if(!self(req,req.params.id)) return void res.status(403).json({error:'Accès refusé à ce dossier.'});
   const client=await pool.connect();
-  try { await client.query('BEGIN'); const found=await client.query('SELECT c.id_etat_candidat,f.* FROM candidat c JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE',[req.params.id]); if(!found.rows.length)throw new Error('NOT_FOUND'); const f=found.rows[0];
+  try { await client.query('BEGIN'); const found=await client.query('SELECT c.id_etat_candidat,f.* FROM candidat c LEFT JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE OF c',[req.params.id]); if(!found.rows.length)throw new Error('NOT_FOUND'); let f=found.rows[0];
+    if(!f.id_fiche_de_voeux) {
+      const created=await client.query('INSERT INTO fiche_de_voeux(id_candidat,part_seul) VALUES($1,false) ON CONFLICT(id_candidat) DO UPDATE SET id_candidat=EXCLUDED.id_candidat RETURNING *',[req.params.id]);
+      f={...created.rows[0],id_etat_candidat:found.rows[0].id_etat_candidat};
+    }
     const candidate=req.user!.role==='CAN'; const open=!f.verrouille && ((f.id_etat_candidat==='AP2'&&!f.flag_fiche_de_voeux_soumise)||(f.id_etat_candidat==='CHO'&&!f.date_voeux_definitifs));
     if(candidate&&!open)throw new Error('LOCKED');
     const candidateFields=['zone_orange','conditions_spartiates','hopital_proche','fonctionnaire_dispo_demandee','date_depart_souhaite','nouveau_poste','nouvelle_langue','competences_a_developper','centres_interret','categorie_ecclesiale','categorie_ecclesiale_detail'];
     const allowed=candidate?candidateFields:[...candidateFields,'part_seul','acces_candidat','verrouille'];
-    const keys=allowed.filter(k=>k in req.body); if(keys.length)await client.query(`UPDATE fiche_de_voeux SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')},date_modification=CURRENT_DATE,modifie_par=$${keys.length+1} WHERE id_fiche_de_voeux=$${keys.length+2}`,[...keys.map(k=>req.body[k]),`${req.user!.prenom} ${req.user!.nom}`,f.id_fiche_de_voeux]);
+    const keys=allowed.filter(k=>k in req.body); if(keys.length)await client.query(`UPDATE fiche_de_voeux SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')},date_modification=CURRENT_DATE,modifie_par=$${keys.length+1} WHERE id_fiche_de_voeux=$${keys.length+2}`,[...keys.map(k=>formValue(k, req.body[k])),`${req.user!.prenom} ${req.user!.nom}`,f.id_fiche_de_voeux]);
     const relations:Record<string,[string,string,string]>={ domaines_formation:['a_etudie_dans','id_domaine','domaine'], domaines_experience_pro:['a_travaille_dans','id_domaine','domaine'], environnements:['veut_vivre_dans','id_environnement','environnement'], regions:['veut_aller_a','id_region','region'], hebergements:['veut_habiter_dans','id_hebergement','hebergement'], competences:['a_la_competence_de','id_competences','competences'], durees:['veut_partir_pour','id_duree','duree'] };
     for(const [field,[table,column,refTable]] of Object.entries(relations)) if(Array.isArray(req.body[field])) { await client.query(`DELETE FROM ${table} WHERE id_fiche_de_voeux=$1`,[f.id_fiche_de_voeux]); for(const item of req.body[field]) { const id=typeof item==='object'?item.id:item; const exists=await client.query(`SELECT 1 FROM ${refTable} WHERE ${column}=$1`,[id]); if(!exists.rows.length)throw new Error('REF'); const degree=typeof item==='object'?item.degre:null; await client.query(`INSERT INTO ${table}(id_fiche_de_voeux,${column}${table==='veut_aller_a'?',degre':''}) VALUES($1,$2${table==='veut_aller_a'?', $3':''})`,table==='veut_aller_a'?[f.id_fiche_de_voeux,id,degree]:[f.id_fiche_de_voeux,id]); } }
     if(Array.isArray(req.body.langues)){await client.query('DELETE FROM parle WHERE id_fiche_de_voeux=$1',[f.id_fiche_de_voeux]);for(const x of req.body.langues){const ok=await client.query('SELECT 1 FROM langue WHERE id_langue=$1',[x.id_langue]);if(!ok.rows.length)throw new Error('REF');await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,niveau,autre_langue) VALUES($1,$2,$3,$4)',[f.id_fiche_de_voeux,x.id_langue,x.niveau||null,x.autre_langue||null]);}}

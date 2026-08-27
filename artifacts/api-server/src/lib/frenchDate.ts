@@ -11,3 +11,10 @@ export function parseFrenchDate(value: string | undefined | null): { iso: string
   }
   return { iso: `${yyyy}-${mm}-${dd}`, valid: true };
 }
+
+/** Convert an optional date submitted by a form into a SQL-safe value. */
+export function nullableDate(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  return String(value);
+}

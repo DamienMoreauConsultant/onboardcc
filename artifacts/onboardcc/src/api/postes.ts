@@ -11,17 +11,18 @@ export type PosteRow = {
   opp_a_qualifier: number;
   opp_approuvee: number;
   opp_en_affectation: number;
+  flag_poste_deja_mis_en_lien: boolean;
 };
 export type PosteDetail = PosteRow & Record<string, any>;
 export type ImportLine = { ligne: number; statut: 'ok' | 'erreur'; message: string };
 
 export const postesApi = {
-  list: async (etats?: string[]) => {
-    const params = etats !== undefined ? { etats: etats.join(',') } : undefined;
-    const { data } = await api.get<PosteRow[]>('/postes', { params });
+  list: async (filters: Record<string, string[]> = {}) => {
+    const { data } = await api.get<PosteRow[]>('/postes', { params: { filtres: JSON.stringify(filters) } });
     return data;
   },
   states: async () => (await api.get<EtatPoste[]>('/postes/etats')).data,
+  filterValues: async (column: string) => (await api.get<{ values: string[] }>(`/postes/filtres/${column}`)).data.values,
   detail: async (id: number) => (await api.get<PosteDetail>(`/postes/${id}`)).data,
   verifyImport: async (file: File) => {
     const form = new FormData();

@@ -1,0 +1,194 @@
+# PROMPT 3b — Ergonomie des écrans Liste des candidats ET Liste des postes (correctif UX)
+# Envoyer APRÈS validation du prompt 3 (module Candidat déjà livré et testé).
+# Référence : prompt3.txt §5 "Écran — Liste des candidats" (/recruteur/candidats)
+#             prompt2.txt §3 "Écran — Liste des postes" (/recruteur/postes)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+Ce prompt ne touche pas à la logique métier (transitions, verrouillage, import) — il corrige
+l'ergonomie des écrans `/recruteur/candidats` (§5 de prompt3.txt) ET `/recruteur/postes` (§3 de
+prompt2.txt), qui partagent les mêmes 2 problèmes identifiés à l'usage :
+1. Le filtre par état (checkbox / liste déroulante multi-select) est confus et prend trop de place.
+2. Le tableau n'a pas de hauteur fixe : dès qu'il y a plusieurs lignes, l'ascenseur horizontal
+   (nécessaire pour voir les colonnes de droite) sort de l'écran et oblige à remonter en haut de
+   la page pour le retrouver.
+
+**Construis les §1 à §4 ci-dessous comme des composants génériques réutilisables** (paramétrés par
+écran/colonne), puis applique-les aux **deux écrans** — §1 à §4 décrivent le détail sur l'écran
+Candidats, §5 explique précisément leur application à l'écran Postes.
+
+---
+
+## 0. ⚠️ Bugs bloquants à corriger EN PRIORITÉ (avant le §1 et la suite)
+
+Deux régressions constatées sur des fonctionnalités déjà livrées et testées — à traiter d'abord,
+les évolutions ergonomiques §1-§5 ne doivent être commencées qu'une fois ces 2 bugs corrigés et
+reproduits comme résolus. **Causes déjà identifiées via les logs serveur — pas besoin de ré-explorer,
+applique directement les correctifs ci-dessous.**
+
+### Bug A — Import CSV : une ligne valide côté `/verifier` peut faire planter `/executer`
+
+**Log exact observé :**
+```
+Import candidats rollback error: value too long for type character varying(50)
+  code: '22001'
+  at .../api-server/src/routes/candidats.ts:144:7
+```
+**Cause confirmée** : une valeur destinée à une colonne `VARCHAR(50)` (ici
+`veut_partir_pour.projet_duree_specifique`, alimentée par la colonne CSV
+`duree_precision_si_autre`) dépassait 50 caractères. L'étape `POST /api/candidats/import/verifier`
+a renvoyé **200 (aucune erreur détectée)** sur cette ligne, et c'est seulement
+`POST /api/candidats/import/executer` (candidats.ts:144) qui a échoué avec une erreur Postgres 22001
+non interceptée proprement → 500 générique côté frontend. C'est exactement le problème que le
+parsing de date réutilisé entre `verifier` et `executer` était censé éviter (prompt3.txt §2) —
+sauf que la vérification de **longueur de champ** n'a jamais été implémentée.
+
+**Correctif demandé** :
+1. Dans `POST /api/candidats/import/verifier`, ajoute une validation de longueur maximale pour
+   **chaque colonne CSV mappée vers une colonne `VARCHAR(n)`** du schéma (contrat §2 de prompt3.txt),
+   avec un message explicite par ligne en erreur, ex. : *"Ligne X, colonne
+   'duree_precision_si_autre' : 55 caractères, maximum autorisé 50."* — même mécanisme que la
+   validation de format de date déjà en place, réutilise la même logique de mapping colonne→contrainte
+   plutôt que de la dupliquer.
+2. Vérifie qu'aucune ligne partiellement écrite n'est restée en base suite aux 2 tentatives d'import
+   ratées de ce fichier (le rollback doit avoir tout annulé : aucun `contact`/`candidat`/`adresse`
+   orphelin correspondant à `TEST_IMPORT_04`). Si des résidus existent, nettoie-les.
+3. Un fichier de test corrigé (valeur raccourcie à ≤ 50 caractères) est fourni dans
+   `Data/candidats_import_test_v1.csv` — réimporte-le pour confirmer que les 5 candidats
+   apparaissent bien dans `/recruteur/candidats` une fois le correctif appliqué.
+
+### Bug B — "Erreur interne du serveur" en sauvegardant l'onglet État civil
+
+**Log exact observé :**
+```
+error: invalid input syntax for type date: ""
+  code: '22007'
+  where: "unnamed portal parameter $3 = ''"
+  at .../api-server/src/routes/candidats.ts:269:27
+PATCH /api/candidats/31/etat-civil → 500
+```
+**Cause confirmée** : un champ date optionnel (très probablement `candidat.perso_date_mariage`,
+non renseigné puisque le candidat de démo n'est pas marié) est envoyé comme **chaîne vide `""`**
+au lieu de `null` par le frontend, et le backend la transmet telle quelle au paramètre SQL — Postgres
+refuse `''` comme valeur de type `date` (il faut soit une vraie date, soit `NULL`).
+
+**Correctif demandé** :
+1. Dans le handler `PATCH /api/candidats/:id/etat-civil` (candidats.ts:269) et par cohérence dans
+   **tous les autres handlers PATCH candidat** (`/projet`, `/voeux`, `/date-revue`) qui acceptent des
+   champs date optionnels : convertis toute chaîne vide `""` reçue pour un champ date en `null`
+   avant de construire la requête SQL paramétrée (ex. `valeur === "" ? null : valeur`). Fais-en une
+   petite fonction utilitaire partagée plutôt que de dupliquer ce test dans chaque handler.
+2. Reproduis une sauvegarde sur les 3 onglets éditables (État civil, Projet, Vœux) du candidat démo
+   avec un champ date laissé vide, pour confirmer que les 3 sauvegardent correctement.
+
+---
+
+## 1. Remplacer le filtre par checkboxes par un filtre par colonne (type tableur)
+
+**Supprimer entièrement** la zone "Filtrer par état" actuelle (les checkboxes en haut de l'écran).
+
+**À la place**, sur la ligne d'en-tête du tableau, à côté de **chaque** titre de colonne filtrable
+(État, Domaine, Région, Durée, Langue — toute colonne dont la valeur vient d'un référentiel ou a un
+nombre limité de valeurs distinctes), afficher une **petite icône "filtre"** cliquable.
+
+**Au clic sur l'icône**, ouvrir une popup positionnée juste sous l'en-tête de la colonne, contenant :
+- **Une zone de texte** en première ligne (recherche libre).
+- **Sous la zone de texte**, une liste de valeurs avec case à cocher (sélection multiple), selon
+  cette règle :
+  - Si le nombre de valeurs distinctes en base pour cette colonne est **inférieur à 20** :
+    afficher **automatiquement toute la liste** dès l'ouverture de la popup (pas besoin de taper),
+    avec un raccourci "Tout sélectionner / Tout désélectionner".
+  - Sinon (≥ 20 valeurs distinctes, ex. si la liste des candidats grossit) : la liste **n'apparaît
+    qu'à partir de 3 caractères saisis** dans la zone de texte, filtrée dynamiquement (recherche
+    "contient", insensible à la casse/aux accents) parmi les valeurs distinctes réellement
+    présentes en base pour cette colonne — pas la liste complète du référentiel, seulement les
+    valeurs effectivement utilisées par au moins un candidat visible.
+- Bouton **"Appliquer"** (ferme la popup, filtre le tableau) et **"Réinitialiser"** (vide la
+  sélection pour cette colonne).
+- Un badge/indicateur sur l'icône filtre quand un filtre est actif sur cette colonne (pour repérer
+  d'un coup d'œil quelles colonnes sont filtrées).
+
+**Backend** : ajouter un endpoint `GET /api/candidats/filtres/:colonne` qui retourne les valeurs
+distinctes réellement présentes en base pour la colonne demandée (liste blanche stricte des
+colonnes autorisées — même principe de sécurité que pour `/api/admin/referentiels/:table` du
+prompt1, ne jamais construire de SQL dynamique à partir d'un nom de colonne non validé contre cette
+liste blanche).
+
+Plusieurs filtres actifs simultanément (sur des colonnes différentes) se combinent en ET.
+
+---
+
+## 2. Fixer la hauteur du tableau avec ascenseur vertical interne
+
+Le tableau doit avoir une **hauteur maximale fixe** (ex. hauteur du viewport moins l'en-tête et la
+pagination), avec :
+- Un **ascenseur vertical à l'intérieur du tableau** (pas de la page entière) pour parcourir les
+  lignes au-delà de la hauteur visible.
+- L'**ascenseur horizontal doit rester visible en permanence** en bas du tableau (jamais besoin de
+  scroller verticalement toute la page pour le retrouver).
+- L'en-tête de colonnes (avec les icônes filtre) reste **fixe en haut** du tableau pendant le
+  défilement vertical (sticky header).
+
+---
+
+## 3. Alléger les en-têtes des colonnes "KPI"
+
+Les 3 colonnes "Opportunité à qualifier", "Opportunité approuvée", "En cours d'affectation" ont des
+titres trop longs par rapport à la donnée affichée (juste un nombre). Remplacer le texte du titre
+par un **picto compact + tooltip** au survol expliquant précisément le contenu :
+
+| Colonne actuelle | Picto suggéré | Texte de la tooltip |
+|---|---|---|
+| Opportunité à qualifier | ex. loupe/point d'interrogation | "Nombre d'opportunités de ce candidat à l'état Non qualifié ou Proposée au CM" |
+| Opportunité approuvée | ex. check | "Nombre d'opportunités de ce candidat à l'état Approuvé CM" |
+| En cours d'affectation | ex. flèche/horloge | "Nombre d'opportunités de ce candidat aux états Mise en lien, Accord de principe, Accepté ou Affecté" |
+
+(Définitions reprises telles quelles de la logique déjà spécifiée pour l'écran Liste des postes
+équivalent, prompt2.txt §3 — adaptées ici au candidat plutôt qu'au poste, mais même principe de
+comptage par état d'opportunité. Ne recalcule pas une nouvelle définition, réutilise celle-ci.)
+
+---
+
+## 4. Nouvelle colonne — "Mis en lien"
+
+Ajouter une colonne (badge oui/non, ou icône) indiquant si le candidat est **actuellement engagé
+dans une mise en lien** — mappée directement sur la colonne existante
+**`fiche_de_voeux.flag_candidat_deja_mis_en_lien`** (déjà en base, posée par `mettre_en_lien()` et
+levée par `refuser_candidat()`/`refuser_partenaire()`/`annulerCandidature()` — voir prompt3.txt/
+prompt4.txt). **Ne recrée pas de nouvelle logique** : c'est un simple affichage de ce flag existant.
+
+---
+
+## Points de vigilance
+
+- **Ne pas régresser sur ce qui fonctionne déjà** : pagination (20/page), colonnes existantes,
+  bouton "Importer des candidats", tri par note décroissante — rien de tout cela ne doit changer.
+- Composant de filtre par colonne : construis-le comme un **composant générique réutilisable**
+  (paramétré par nom de colonne + endpoint), pas un composant ad hoc par colonne — cohérent avec la
+  contrainte ENF-12 (simplicité de maintenance) déjà appliquée au module Admin (prompt1).
+
+---
+
+## 5. Étendre l'ensemble de ces améliorations à l'écran Postes *(/recruteur/postes, prompt2.txt §3)*
+
+Applique **exactement les mêmes 4 améliorations** (§1 à §4 ci-dessus) à l'écran Liste des postes,
+en **réutilisant les mêmes composants génériques** créés ci-dessus — pas de nouvelle implémentation
+ad hoc :
+
+- **§1 (filtre par colonne)** : remplace le filtre d'état actuel (liste déroulante multi-select) par
+  le même système d'icône filtre par colonne + popup recherche/liste, sur toutes les colonnes
+  filtrables (État, Pays, Type, Fonction).
+- **§2 (hauteur fixe + ascenseur vertical interne)** : même comportement, même problème d'ascenseur
+  horizontal caché aujourd'hui sur cet écran.
+- **§3 (picto + tooltip sur les colonnes KPI)** : les 3 colonnes "Opportunité à qualifier",
+  "Opportunité approuvée", "En cours d'affectation" existent **à l'identique** sur cet écran
+  (prompt2.txt §3) — ce sont les mêmes indicateurs, comptés côté poste plutôt que côté candidat.
+  Réutilise les **mêmes pictos et les mêmes tooltips**, seule la formulation change légèrement
+  ("de ce poste" au lieu de "de ce candidat") :
+  - "Nombre d'opportunités de ce poste à l'état Non qualifié ou Proposée au CM"
+  - "Nombre d'opportunités de ce poste à l'état Approuvé CM"
+  - "Nombre d'opportunités de ce poste aux états Mise en lien, Accord de principe, Accepté ou Affecté"
+- **§4 (colonne "Mis en lien")** : ajoute la même colonne, mappée cette fois sur
+  **`fiche_de_poste.flag_poste_deja_mis_en_lien`** (déjà en base, symétrique de
+  `fiche_de_voeux.flag_candidat_deja_mis_en_lien` utilisé côté candidat — même mécanisme de
+  verrouillage R6, vu côté poste). Ne recrée pas de nouvelle logique, c'est un simple affichage.

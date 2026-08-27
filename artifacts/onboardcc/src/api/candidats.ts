@@ -7,6 +7,7 @@ export type CandidatRow = {
   etat_designation: string; id_etat_candidat: number; date_revue?: string | null;
   domaines?: string | null; regions?: string | null; duree?: string | null; langues?: string | null;
   opportunites_a_qualifier?: number; opportunites_approuvees?: number; opportunites_affectation?: number;
+  flag_candidat_deja_mis_en_lien?: boolean;
   alerte_revue?: boolean;
 };
 export type CandidatDetail = CandidatRow & Record<string, any>;
@@ -14,13 +15,14 @@ export type CandidatsPage = { items: CandidatRow[]; total: number; page: number;
 type CandidatsApiPage = { candidats: CandidatRow[]; total: number; page: number; page_size: number };
 
 export const candidatsApi = {
-  list: async (page = 1, etats?: string[]) => {
-    const { data } = await api.get<CandidatRow[] | CandidatsApiPage>('/candidats', { params: { page, ...(etats ? { etats: etats.join(',') } : {}) } });
+  list: async (page = 1, filters: Record<string, string[]> = {}) => {
+    const { data } = await api.get<CandidatRow[] | CandidatsApiPage>('/candidats', { params: { page, filtres: JSON.stringify(filters) } });
     return Array.isArray(data)
       ? { items: data, total: data.length, page, pageSize: 20 }
       : { items: data.candidats, total: data.total, page: data.page, pageSize: data.page_size };
   },
   states: async () => (await api.get<EtatCandidat[]>('/candidats/etats')).data,
+  filterValues: async (column: string) => (await api.get<{ values: string[] }>(`/candidats/filtres/${column}`)).data.values,
   detail: async (id: number) => {
     const { data } = await api.get<CandidatDetail>(`/candidats/${id}`);
     return { ...data, ...(data.adresse ?? {}), ...(data.fiche_de_voeux ?? {}) };
