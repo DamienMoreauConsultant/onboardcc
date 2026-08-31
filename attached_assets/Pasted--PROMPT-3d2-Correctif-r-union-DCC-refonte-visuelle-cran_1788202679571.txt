@@ -1,0 +1,187 @@
+# PROMPT 3d2 — Correctif réunion DCC : refonte visuelle écrans candidat (visuel uniquement)
+# ⚠️ NE PAS ENVOYER À REPLIT avant validation de la maquette Figma Make correspondante
+# (voir prompt_figma_make_maquette.txt) — Damien veut valider le visuel avant de dépenser du
+# crédit Replit dessus. Le contenu ci-dessous reste la référence texte du besoin, mais l'ordre
+# d'exécution est : Figma → ajustements → CE prompt (éventuellement révisé) → Replit.
+# La partie logique/backend (import durée, garde-fous, validations) est déjà séparée dans
+# prompt3d1_correctif_dcc_backend.txt, qui lui peut être envoyé dès maintenant.
+# Référence : Correctif_DCC_20260826.md, issues A11 à A20, A09/A12 (Famille)
+#             prompt3.txt §2 (import), §6 (écran détail candidat), §7 (espace candidat)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+Ce prompt ne touche pas à la logique de scoring/opportunités (prompt4), ni à l'import ou aux
+garde-fous (déjà traités dans prompt3d1). Il restructure les 3 onglets du dossier candidat
+(État civil, Dossier de candidature, Vœux) pour réduire la densité et le nombre de champs
+visibles simultanément, comme demandé par la DCC.
+
+---
+
+## 1. Onglet "État civil" — sections + grille compacte
+
+Restructure en 3 sections séparées par une barre horizontale :
+
+**Section "Identité"** : nom, nom de naissance, prénom, genre, date de naissance, lieu de
+naissance, nationalité, état de vie, date de mariage (si état de vie = Marié).
+
+**Section "Coordonnées"** : adresse (adresse1/2, code postal, ville, pays), téléphone, email.
+
+**Section "Famille"** (résolu 31/08/2026, Correctif DCC A09) : lecture seule, 2 sources
+distinctes. Bloc "Conjoint" : `candidat.perso_nom_prenom_conjoint` (champ existant, texte libre,
+un simple nom — pas de date de naissance ni de genre disponibles), affiché si non vide. Bloc
+"Enfants" : parse et affiche `candidat.perso_enfants_consolides` (JSON brut, voir prompt3.txt §2
+pour le format exact), une ligne par enfant du tableau JSON (nom/prénom/genre/date de naissance).
+Rien à afficher si absent/invalide (pas de message d'erreur). **Jamais éditable** depuis cet
+écran (donnée d'origine site web).
+
+**Grille compacte** : pour les champs à valeur courte (nom, prénom, téléphone, dates, code
+postal, ville...), affiche **4 données par ligne** (2 paires label/valeur) plutôt que 2,
+pour réduire la hauteur totale de l'écran. Les champs à valeur longue (adresse complète,
+email) restent seuls sur leur ligne si nécessaire.
+
+---
+
+## 2. Onglet "Dossier de candidature" — 3 sections
+
+Remplace le titre de section dupliquant le nom de l'onglet par des libellés de section
+porteurs de sens. 3 sections séparées par une barre horizontale, avec la même règle de
+grille compacte que le §2 pour les champs courts :
+
+**A — Démarche de volontariat** : date de disponibilité, durée prévisionnelle souhaitée
+(`candidat.projet_duree_mission_souhaitee`, voir §1), numéro d'offre, motivations,
+questionnements, avancement (**renommer le label en "Avancement de ton projet"**), expérience
+interculturelle, formations suivies, expérience de volontariat, raison du départ avec la DCC,
+**comment connais-tu la DCC** (`connait_la_dcc_par` — vérifie si ce champ est déjà affiché à
+l'écran ; s'il ne l'est pas malgré la spec initiale, ajoute-le maintenant), attentes envers la
+DCC, lien avec une autre structure, détail autre structure.
+
+**B — Expérience personnelle et professionnelle** : statut professionnel, administration de
+tutelle, expérience d'engagement, détail des engagements, domaines de formation, domaines
+d'expérience (ces 5 derniers champs sont déjà en Dossier de candidature depuis prompt3c —
+regroupe-les simplement dans cette nouvelle sous-section B).
+
+**C — Prochaines étapes** : informations complémentaires, disponibilités de contact (premier
+appel), sessions Choisir préférentielles.
+
+---
+
+## 3. Onglet "Vœux" — 3 sections (Expérience / Conditions / Compétences proposées)
+## ⚠️ Révisé 01/09/2026 après relecture de la maquette Figma (Correctif DCC, suite A28)
+
+Réorganisation complète en 3 zones, layout en largeur divisée en 4 colonnes logiques :
+
+**A1 — "Expérience"** (1ère colonne, 1/4 de largeur, une donnée par ligne, **lecture seule
+copiée depuis Dossier de candidature** — l'édition de ces champs reste réservée à cet onglet,
+voir remarque de cohérence ci-dessous) : domaines de formation, domaines d'expérience, détail
+des engagements, langues parlées, centres d'intérêt.
+
+⚠️ **Cohérence avec prompt3c** : domaines de formation/expérience et détail des engagements ont
+été déplacés en écriture vers "Dossier de candidature" (RECRUTEUR SEUL). Ici, en "Vœux", ils
+s'affichent en **lecture seule** (rappel de contexte pendant le traitement des vœux) — ne pas
+les rendre éditables depuis cet onglet, même en mode Edit.
+
+⚠️ **Langues parlées (`parle`) — précision suite à la maquette** : ce champ **reste éditable**
+ici (contrairement aux 2 domaines/détail au-dessus, en lecture seule), mais **doit être un vrai
+sélecteur référentiel avec niveau** (réutilise le composant `ReferenceMultiSelect` du prompt3c,
+même mécanisme que les compétences en §5 — sélection d'une ou plusieurs langues actives du
+référentiel `langue`, avec un niveau par langue choisie parmi `niveau_langue`), **pas une zone de
+texte libre**. La maquette Figma l'avait affiché comme du texte simple faute d'avoir été assez
+précisé dans le prompt de maquette — corrige ici pour l'implémentation réelle.
+
+**Centres d'intérêt n'apparaît qu'une seule fois, dans cette colonne A1** — ne le duplique pas
+ailleurs sur l'onglet (voir section C ci-dessous, où seule "Compétences à développer" reste).
+
+**A2 — "Avis DCC"** — ⚠️ **repositionné suite à la maquette** : plus en colonne 1, mais **tout en
+bas de l'onglet, pleine largeur, sur 4 colonnes** (même esprit que le reste de l'écran). **Jamais
+affiché côté espace candidat** (`/candidat/voeux` masque entièrement ce bloc). Contenu réparti sur
+les 4 colonnes : part seul (`fiche_de_voeux.part_seul`, RECRUTEUR SEUL — déjà le cas, voir
+prompt3.txt), annonces repérées (`candidat.annonces_recherchees`, RECRUTEUR SEUL), engagements
+(`candidat.engagements`, RECRUTEUR SEUL, tooltip "Avis du recruteur sur l'engagement du
+candidat"), et un bloc "catégorie ecclésiale" regroupant **un picto (✓ ou ✗, pas un texte
+Oui/Non)** pour `fiche_de_voeux.categorie_ecclesiale` (tooltip "Le candidat est-il sensible à la
+démarche ecclésiale du partenaire ?") directement à côté de son détail
+`categorie_ecclesiale_detail` (tooltip "Avis du recruteur sur la démarche ecclésiale du
+candidat") — les 2 groupés visuellement en un seul bloc plutôt que 2 lignes séparées.
+
+**B — "Conditions"** (partie haute de la colonne de droite, 3/4 de largeur, sur 3
+sous-colonnes) :
+- **B1** : date de départ souhaitée, durée de la mission, disponibilité demandée fonctionnaire
+  (`fiche_de_voeux.fonctionnaire_dispo_demandee`, Oui/Non), *(ligne blanche)*, nouvelle langue,
+  nouveau poste.
+- **B2** : milieu souhaité (`veut_vivre_dans`, sélection multiple), logement
+  (`veut_habiter_dans`, sélection multiple), zone orange, conditions spartiates, hôpital
+  proche.
+- **B3** : destinations — une ligne par région active du référentiel `region` (actuellement 6
+  lignes), avec à droite de chaque région un sélecteur `veut_aller_a.degre` parmi **exactement 7
+  valeurs : P1, P2, P3, P4, P5, P6, ou "Non"** (⚠️ révisé suite à la maquette — le libellé de
+  l'option négative devient simplement **"Non"**, pas "Ne veut pas y aller" ; et il n'existe
+  **aucune** valeur neutre intermédiaire type "Peut y aller" — la liste est fermée à ces 7 valeurs
+  exactement, ne pas en ajouter). Remplace l'ancien jeu de valeurs neutre/veut aller/ne veut pas
+  aller — mets à jour la contrainte/le type de `degre` en conséquence si elle est validée par une
+  liste fixe côté backend. **Tous les champs B3 sont obligatoires pour la soumission d'une fiche
+  de vœux** (validation à ajouter côté `soumettre_voeux_provisoire()`/`soumettre_voeux_definitif()`
+  si pas déjà le cas).
+  ⚠️ **Aucun changement de l'algorithme de scoring** : dans `services/matching.js` (prompt4, pas
+  encore développé), les 6 valeurs P1 à P6 devront être traitées comme strictement équivalentes
+  à l'ancien "veut aller" — à documenter dans prompt4 le moment venu, rien à faire ici côté
+  scoring puisqu'il n'est pas encore implémenté.
+
+**C — "Compétences proposées"** : voir §5 ci-dessous (composant dédié). **Bordures de lignes du
+tableau renforcées** (trait noir, plus épais qu'actuellement) pour améliorer la lisibilité entre
+domaines. Sous le tableau, affiche uniquement "Compétences à développer" (déjà en base) — **pas
+"Centres d'intérêt"**, déjà affiché en colonne A1, ne pas le dupliquer ici.
+
+---
+
+## 4. Bandeau candidat — réduction de hauteur (écran recruteur ET espace candidat)
+
+Remplace la structure de bandeau livrée au prompt3c par celle-ci (3 lignes au lieu de 3
+blocs séparés) :
+- **Ligne 1** : flèche retour discrète directement suivie du **nom prénom du candidat** (au
+  lieu du libellé générique "DOSSIER CANDIDAT").
+- **Ligne 2** : mention "né·e le JJ/MM/AAAA" (source `contact.date_naissance`), suivie du
+  **badge d'état** (juste après la mention de naissance, sur la même ligne).
+- **Ligne 3** : la ligne de métadonnées déjà existante (domaine, région, disponibilité, durée
+  — ex. "Gestion de projet, Ressources humaines · — · Disponible le 01/09/2026 · 1 an").
+- **"Prochaine revue"** : déplace ce bloc en **bas à droite** de l'en-tête, et remplace le
+  bouton texte "Enregistrer la revue" par un **picto vert en forme de coche (✓)**, plus
+  compact.
+
+**Sur tous les écrans "Éditer un onglet"** (candidat ET poste) : ajoute un bouton **"Annuler"**
+d'une couleur distincte, positionné **à gauche** du bouton "Enregistrer".
+
+---
+
+## 5. Section "Compétences proposées" — nouveau composant de sélection
+
+Remplace l'affichage actuel de `a_la_competence_de` par ce parcours guidé :
+
+1. **État initial** : tableau vide, juste un bouton **"Ajouter une compétence"**.
+2. Au clic : popup étape 1 — sélection d'un **domaine** (référentiel `domaine`, actifs
+   uniquement).
+3. Bouton "Suivant" → étape 2 — sélection d'**une ou plusieurs compétences** de ce domaine
+   (référentiel `competences` filtré par domaine, actives uniquement), avec sélection du
+   **niveau** par compétence choisie (réutilise le composant `ReferenceMultiSelect` du
+   prompt3c).
+4. Validation → les compétences choisies s'ajoutent au **tableau groupé par domaine** : colonne
+   de gauche = nom du domaine, colonne de droite = liste des compétences de ce domaine (une
+   par ligne, avec son niveau).
+5. **Modifier une ligne de domaine** : ré-ouvre le même parcours avec les compétences déjà
+   choisies pour ce domaine pré-sélectionnées — permet d'ajouter/retirer des compétences pour
+   ce domaine.
+6. **Supprimer toutes les compétences d'un domaine** : bouton dédié par ligne de domaine dans
+   le tableau (supprime toutes les lignes `a_la_competence_de` de ce domaine pour ce candidat).
+
+---
+
+## Points de vigilance
+
+- Le composant `ReferenceMultiSelect` (prompt3c) doit être réutilisé pour §5, pas reconstruit.
+- Vérifie que le RBAC déjà en place (candidat vs recruteur, fenêtre d'édition AP2/CHO) continue
+  de s'appliquer correctement après cette réorganisation visuelle — c'est une restructuration
+  d'affichage, pas un changement des droits d'édition sous-jacents (sauf le point de cohérence
+  explicite du §3 sur les domaines de formation/expérience, déjà en lecture seule depuis
+  prompt3c).
+- Applique aussi cette réorganisation à `/candidat/voeux` (espace candidat), qui réutilise le
+  même composant (§7 de prompt3.txt) — mêmes sections/grille, adaptées aux différences déjà
+  spécifiées (onglets masqués, lecture seule État civil/Dossier de candidature).
