@@ -27,8 +27,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 const RECRUITERS = ['REC', 'ADMIN'];
 const actionUpload = multer({ storage: multer.memoryStorage(), limits: { files: 2, fileSize: 10 * 1024 * 1024 } });
 
-/* This order is the published CRM exchange contract.  Children deliberately do
- * not occur here: their import format has not been approved. */
+/* This order is the published 48-column CRM exchange contract. */
 const CSV_COLUMNS = [
   'ref_candidat','nom','nom_naissance','prenom','genre','date_naissance','lieu_naissance','nationalite','telephone','email',
   'adresse1','adresse2','code_postal','ville','pays','etat_de_vie','date_mariage','depart_en_couple','nom_prenom_conjoint',
@@ -37,7 +36,7 @@ const CSV_COLUMNS = [
   'experience_interculturelle','formation_dialogue_interculturel','experience_volontariat','raison_depart_dcc','connait_dcc_par',
   'connait_dcc_detail','attentes_dcc','lien_autre_structure','lien_autre_structure_detail','statut_professionnel',
   'administration_tutelle','experience_engagement','experience_engagement_detail','info_complementaire','disponibilites_contact',
-  'sessions_choisir_preference',
+  'sessions_choisir_preference','enfant_consolide',
 ];
 type Refs = Record<'pays'|'duree'|'domaine'|'langue'|'notoriete', Record<string, number>>;
 const bool = (v?: string) => ['true', '1', 'oui', 'yes'].includes((v ?? '').trim().toLowerCase());
@@ -84,9 +83,9 @@ const mapRows = (rows: Array<{ crm_key?: string; designation?: string; id: numbe
   Object.fromEntries(rows.map(r => [(r.crm_key ?? r.designation)!, r.id]));
 async function refs(): Promise<Refs> {
   const [pays, duree, domaine, langue, notoriete] = await Promise.all([
-    pool.query('SELECT crm_key,id_pays id FROM pays'), pool.query('SELECT crm_key,id_duree id FROM duree'),
+    pool.query('SELECT crm_key,id_pays id FROM pays'), pool.query("SELECT COALESCE(to_jsonb(d)->>'designation',d.periode) designation,id_duree id FROM duree d WHERE COALESCE(active,true)"),
     pool.query('SELECT crm_key,id_domaine id FROM domaine'), pool.query('SELECT crm_key,id_langue id FROM langue'),
-    pool.query('SELECT designation,id_notoriete_dcc id FROM notoriete_dcc'),
+    pool.query('SELECT designation,id_notoriete_dcc id FROM notoriete_dcc WHERE COALESCE(active,true)'),
   ]);
   return { pays: mapRows(pays.rows), duree: mapRows(duree.rows), domaine: mapRows(domaine.rows), langue: mapRows(langue.rows), notoriete: mapRows(notoriete.rows) };
 }
@@ -94,7 +93,7 @@ function headers(fields?: string[]): string | null {
   const actual = (fields ?? []).map(x => x.trim());
   const missing = CSV_COLUMNS.filter(x => !actual.includes(x));
   const extra = actual.filter(x => !CSV_COLUMNS.includes(x));
-  return missing.length || extra.length ? `En-tête CSV invalide (${missing.length ? `colonnes manquantes : ${missing.join(', ')}` : ''}${missing.length && extra.length ? ' ; ' : ''}${extra.length ? `colonnes inconnues : ${extra.join(', ')}` : ''}). Le template comporte exactement 47 colonnes.` : null;
+  return missing.length || extra.length ? `En-tête CSV invalide (${missing.length ? `colonnes manquantes : ${missing.join(', ')}` : ''}${missing.length && extra.length ? ' ; ' : ''}${extra.length ? `colonnes inconnues : ${extra.join(', ')}` : ''}). Le template comporte exactement 48 colonnes.` : null;
 }
 function validate(row: Record<string,string>, line: number, r: Refs) {
   const errors: string[] = [];
@@ -113,14 +112,12 @@ function validate(row: Record<string,string>, line: number, r: Refs) {
     if (niveau && niveau.length > 20) errors.push(`Ligne ${line}, colonne 'langues' : niveau de langue de ${niveau.length} caractères, maximum autorisé 20.`);
   }
   if (row.pays?.trim() && !r.pays[row.pays.trim()]) errors.push(`Pays inconnu : crm_key=${row.pays.trim()} — créez-le d'abord`);
-  if (row.duree_souhaitee?.trim() && !r.duree[row.duree_souhaitee.trim()]) errors.push(`Durée inconnue : crm_key=${row.duree_souhaitee.trim()} — créez-la d'abord`);
   for (const f of ['domaines_formation','domaines_experience_pro']) for (const k of entries(row[f])) if (!r.domaine[k]) errors.push(`Domaine inconnu : crm_key=${k} — créez-le d'abord`);
   for (const item of entries(row.langues)) { const [k, niveau] = item.split(':').map(x => x.trim()); if (!k || !niveau || !r.langue[k]) errors.push(`Langue invalide ou inconnue : ${item}`); }
   for (const k of entries(row.connait_dcc_par)) if (!r.notoriete[k]) errors.push(`Notoriété DCC inconnue : designation=${k} — créez-la d'abord`);
   if (row.etat_de_vie?.trim() === 'Marié' && !row.date_mariage?.trim()) errors.push('date_mariage est requis lorsque etat_de_vie = Marié');
   if (bool(row.depart_en_couple) && !row.nom_prenom_conjoint?.trim()) errors.push('nom_prenom_conjoint est requis lorsque depart_en_couple = TRUE');
   if (bool(row.est_parent) && !row.pars_avec_enfants?.trim()) errors.push('pars_avec_enfants est requis lorsque est_parent = TRUE');
-  if (row.duree_souhaitee?.trim() === 'AUTRE' && !row.duree_precision_si_autre?.trim()) errors.push('duree_precision_si_autre est requis lorsque duree_souhaitee = AUTRE');
   if (bool(row.lien_autre_structure) && !row.lien_autre_structure_detail?.trim()) errors.push('lien_autre_structure_detail est requis lorsque lien_autre_structure = TRUE');
   if (row.statut_professionnel?.trim() === 'Fonctionnaire' && !row.administration_tutelle?.trim()) errors.push('administration_tutelle est requis lorsque statut_professionnel = Fonctionnaire');
   if (bool(row.experience_engagement) && !row.experience_engagement_detail?.trim()) errors.push('experience_engagement_detail est requis lorsque experience_engagement = TRUE');
@@ -229,8 +226,8 @@ router.post('/import/executer', requireRole(['REC','ADMIN']), upload.single('fil
       }
       else { const a=await client.query('INSERT INTO adresse(adresse1,adresse2,code_postal,ville,id_pays) VALUES($1,$2,$3,$4,$5) RETURNING id_adresse',[text(row.adresse1),text(row.adresse2),text(row.code_postal),text(row.ville),r.pays[row.pays.trim()]]); idAddress=a.rows[0].id_adresse; const c=await client.query(`INSERT INTO contact(crm_key,role,genre,nom_contact,nom_naissance,prenom_contact,tel_contact,email_contact,date_naissance,lieu_naissance,nationalite,id_adresse) VALUES($1,'CAN',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id_contact`,[row.ref_candidat.trim(),text(row.genre),text(row.nom),text(row.nom_naissance),text(row.prenom),text(row.telephone),text(row.email),birth,text(row.lieu_naissance),text(row.nationalite),idAddress]); idContact=c.rows[0].id_contact; idCandidate=0; }
       await client.query('UPDATE contact SET genre=$1,nom_contact=$2,nom_naissance=$3,prenom_contact=$4,tel_contact=$5,email_contact=$6,date_naissance=$7,lieu_naissance=$8,nationalite=$9 WHERE id_contact=$10',[text(row.genre),text(row.nom),text(row.nom_naissance),text(row.prenom),text(row.telephone),text(row.email),birth,text(row.lieu_naissance),text(row.nationalite),idContact]);
-      const candidateValues=[row.ref_candidat.trim(),bool(row.depart_en_couple),text(row.nom_prenom_conjoint),text(row.etat_de_vie),marriage,bool(row.est_parent),bool(row.pars_avec_enfants),available,text(row.references_offres),text(row.motivations),text(row.questionnements),text(row.avancement_demarche),text(row.experience_interculturelle),text(row.formation_dialogue_interculturel),text(row.experience_volontariat),text(row.raison_depart_dcc),text(row.attentes_dcc),bool(row.lien_autre_structure),text(row.lien_autre_structure_detail),text(row.statut_professionnel),text(row.administration_tutelle),bool(row.experience_engagement),text(row.experience_engagement_detail),text(row.info_complementaire),text(row.disponibilites_contact),text(row.sessions_choisir_preference),idContact];
-      const q=`INSERT INTO candidat(web_key,perso_depart_en_couple,perso_nom_prenom_conjoint,perso_etat_de_vie,perso_date_mariage,perso_est_parent,perso_pars_avec_enfants,projet_date_depart_souhaitee,projet_numero_offre_mission,projet_motivations,projet_questionnements,projet_avancement,projet_experience_interculturelle,projet_formation_dialogue_interculturel,projet_experience_de_volontariat,projet_raison_du_depart_avec_la_dcc,projet_attente_de_la_dcc,projet_lien_avec_une_autre_structure,projet_lien_avec_une_autre_structure_detail,profil_statut,profil_statut_administration_de_tutelle,profil_experience_engagement,profil_experience_engagement_detail,candidature_information_du_candidat,candidature_disponibilite_du_candidat,candidature_preference_session_choisir,id_contact,id_etat_candidat,date_revue) VALUES(${candidateValues.map((_,i)=>'$'+(i+1)).join(',')},'AP2',CURRENT_DATE+(SELECT delais_de_reponse FROM etat_candidat WHERE id_etat_candidat='AP2')) ON CONFLICT(web_key) DO UPDATE SET perso_depart_en_couple=EXCLUDED.perso_depart_en_couple,perso_nom_prenom_conjoint=EXCLUDED.perso_nom_prenom_conjoint,perso_etat_de_vie=EXCLUDED.perso_etat_de_vie,perso_date_mariage=EXCLUDED.perso_date_mariage,perso_est_parent=EXCLUDED.perso_est_parent,perso_pars_avec_enfants=EXCLUDED.perso_pars_avec_enfants,projet_date_depart_souhaitee=EXCLUDED.projet_date_depart_souhaitee,projet_numero_offre_mission=EXCLUDED.projet_numero_offre_mission,projet_motivations=EXCLUDED.projet_motivations,projet_questionnements=EXCLUDED.projet_questionnements,projet_avancement=EXCLUDED.projet_avancement,projet_experience_interculturelle=EXCLUDED.projet_experience_interculturelle,projet_formation_dialogue_interculturel=EXCLUDED.projet_formation_dialogue_interculturel,projet_experience_de_volontariat=EXCLUDED.projet_experience_de_volontariat,projet_raison_du_depart_avec_la_dcc=EXCLUDED.projet_raison_du_depart_avec_la_dcc,projet_attente_de_la_dcc=EXCLUDED.projet_attente_de_la_dcc,projet_lien_avec_une_autre_structure=EXCLUDED.projet_lien_avec_une_autre_structure,projet_lien_avec_une_autre_structure_detail=EXCLUDED.projet_lien_avec_une_autre_structure_detail,profil_statut=EXCLUDED.profil_statut,profil_statut_administration_de_tutelle=EXCLUDED.profil_statut_administration_de_tutelle,profil_experience_engagement=EXCLUDED.profil_experience_engagement,candidature_information_du_candidat=EXCLUDED.candidature_information_du_candidat,candidature_disponibilite_du_candidat=EXCLUDED.candidature_disponibilite_du_candidat,candidature_preference_session_choisir=EXCLUDED.candidature_preference_session_choisir RETURNING id_candidat`;
+      const candidateValues=[row.ref_candidat.trim(),bool(row.depart_en_couple),text(row.nom_prenom_conjoint),text(row.etat_de_vie),marriage,bool(row.est_parent),bool(row.pars_avec_enfants),row.enfant_consolide || null,available,row.duree_souhaitee || null,text(row.references_offres),text(row.motivations),text(row.questionnements),text(row.avancement_demarche),text(row.experience_interculturelle),text(row.formation_dialogue_interculturel),text(row.experience_volontariat),text(row.raison_depart_dcc),text(row.attentes_dcc),bool(row.lien_autre_structure),text(row.lien_autre_structure_detail),text(row.statut_professionnel),text(row.administration_tutelle),bool(row.experience_engagement),text(row.experience_engagement_detail),text(row.info_complementaire),text(row.disponibilites_contact),text(row.sessions_choisir_preference),idContact];
+      const q=`INSERT INTO candidat(web_key,perso_depart_en_couple,perso_nom_prenom_conjoint,perso_etat_de_vie,perso_date_mariage,perso_est_parent,perso_pars_avec_enfants,perso_enfants_consolides,projet_date_depart_souhaitee,projet_duree_mission_souhaitee,projet_numero_offre_mission,projet_motivations,projet_questionnements,projet_avancement,projet_experience_interculturelle,projet_formation_dialogue_interculturel,projet_experience_de_volontariat,projet_raison_du_depart_avec_la_dcc,projet_attente_de_la_dcc,projet_lien_avec_une_autre_structure,projet_lien_avec_une_autre_structure_detail,profil_statut,profil_statut_administration_de_tutelle,profil_experience_engagement,profil_experience_engagement_detail,candidature_information_du_candidat,candidature_disponibilite_du_candidat,candidature_preference_session_choisir,id_contact,id_etat_candidat,date_revue) VALUES(${candidateValues.map((_,i)=>'$'+(i+1)).join(',')},'AP2',CURRENT_DATE+(SELECT delais_de_reponse FROM etat_candidat WHERE id_etat_candidat='AP2')) ON CONFLICT(web_key) DO UPDATE SET perso_depart_en_couple=EXCLUDED.perso_depart_en_couple,perso_nom_prenom_conjoint=EXCLUDED.perso_nom_prenom_conjoint,perso_etat_de_vie=EXCLUDED.perso_etat_de_vie,perso_date_mariage=EXCLUDED.perso_date_mariage,perso_est_parent=EXCLUDED.perso_est_parent,perso_pars_avec_enfants=EXCLUDED.perso_pars_avec_enfants,perso_enfants_consolides=EXCLUDED.perso_enfants_consolides,projet_date_depart_souhaitee=EXCLUDED.projet_date_depart_souhaitee,projet_duree_mission_souhaitee=EXCLUDED.projet_duree_mission_souhaitee,projet_numero_offre_mission=EXCLUDED.projet_numero_offre_mission,projet_motivations=EXCLUDED.projet_motivations,projet_questionnements=EXCLUDED.projet_questionnements,projet_avancement=EXCLUDED.projet_avancement,projet_experience_interculturelle=EXCLUDED.projet_experience_interculturelle,projet_formation_dialogue_interculturel=EXCLUDED.projet_formation_dialogue_interculturel,projet_experience_de_volontariat=EXCLUDED.projet_experience_de_volontariat,projet_raison_du_depart_avec_la_dcc=EXCLUDED.projet_raison_du_depart_avec_la_dcc,projet_attente_de_la_dcc=EXCLUDED.projet_attente_de_la_dcc,projet_lien_avec_une_autre_structure=EXCLUDED.projet_lien_avec_une_autre_structure,projet_lien_avec_une_autre_structure_detail=EXCLUDED.projet_lien_avec_une_autre_structure_detail,profil_statut=EXCLUDED.profil_statut,profil_statut_administration_de_tutelle=EXCLUDED.profil_statut_administration_de_tutelle,profil_experience_engagement=EXCLUDED.profil_experience_engagement,candidature_information_du_candidat=EXCLUDED.candidature_information_du_candidat,candidature_disponibilite_du_candidat=EXCLUDED.candidature_disponibilite_du_candidat,candidature_preference_session_choisir=EXCLUDED.candidature_preference_session_choisir RETURNING id_candidat`;
       const isNew=!existing.rows.length; const cr=await client.query(q,candidateValues); idCandidate=cr.rows[0].id_candidat; await client.query('UPDATE candidat SET profil_experience_engagement_detail=$1 WHERE id_candidat=$2',[text(row.experience_engagement_detail),idCandidate]); ids.push(idCandidate);
       if(isNew) await client.query(`INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES('Import CRM','Import initial','AP2',$1)`,[idCandidate]);
       const f=await client.query(`INSERT INTO fiche_de_voeux(id_candidat,part_seul,date_depart_souhaite) VALUES($1,$2,$3) ON CONFLICT(id_candidat) DO UPDATE SET part_seul=EXCLUDED.part_seul,date_depart_souhaite=EXCLUDED.date_depart_souhaite,date_modification=CURRENT_DATE RETURNING id_fiche_de_voeux`,[idCandidate,!bool(row.depart_en_couple),available]); const idF=f.rows[0].id_fiche_de_voeux;
@@ -240,7 +237,8 @@ router.post('/import/executer', requireRole(['REC','ADMIN']), upload.single('fil
           [table==='connait_la_dcc_par'?idCandidate:idF],
         );
       }
-      await client.query('INSERT INTO veut_partir_pour(id_fiche_de_voeux,id_duree,projet_duree_specifique) VALUES($1,$2,$3)',[idF,r.duree[row.duree_souhaitee.trim()],text(row.duree_precision_si_autre)]);
+      const activeDurationId=r.duree[row.duree_souhaitee.trim()];
+      if(activeDurationId) await client.query('INSERT INTO veut_partir_pour(id_fiche_de_voeux,id_duree,projet_duree_specifique) VALUES($1,$2,$3)',[idF,activeDurationId,text(row.duree_precision_si_autre)]);
       for(const k of entries(row.domaines_formation)) await client.query('INSERT INTO a_etudie_dans VALUES($1,$2)',[idF,r.domaine[k]]);
       for(const k of entries(row.domaines_experience_pro)) await client.query('INSERT INTO a_travaille_dans VALUES($1,$2)',[idF,r.domaine[k]]);
       for(const item of entries(row.langues)){const [k,n]=item.split(':').map(x=>x.trim());await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,niveau) VALUES($1,$2,$3)',[idF,r.langue[k],n]);}
@@ -476,11 +474,17 @@ router.patch('/:id/date-revue', requireRole(RECRUITERS), async (req,res) => {
   try { await pool.query('UPDATE candidat SET date_revue=$1,date_revue_modifiee_par=$2,date_revue_modifiee_le=CURRENT_DATE WHERE id_candidat=$3',[date,`${req.user!.prenom} ${req.user!.nom}`,req.params.id]);res.json({message:'Date de revue mise à jour.'}); }catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
 });
 
+router.get('/configuration/pieces-jointes', requireRole(['REC','ADMIN','CAN','CM1','CM2','CHZ']), (_req,res) => {
+  res.json({storageUrl:process.env.PIECE_JOINTE_STORAGE_URL || null});
+});
+
 async function action(req:any,res:any,target:string, extra?: (c:any)=>Promise<void>) {
-  const client=await pool.connect(); try { await client.query('BEGIN'); const row=await client.query('SELECT c.id_etat_candidat,c.id_contact,f.id_fiche_de_voeux,f.flag_candidat_deja_mis_en_lien,f.date_voeux_definitifs FROM candidat c JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE',[req.params.id]); if(!row.rows.length)throw new Error('NOT_FOUND'); const c=row.rows[0];
-    if(!req.body?.commentaire?.trim())throw new Error('COMMENT'); if(target==='NEL'&&(c.id_etat_candidat!=='AP2'||c.flag_candidat_deja_mis_en_lien))throw new Error('PRE'); if(target==='CHO'&&c.id_etat_candidat!=='AP2')throw new Error('PRE'); if(target==='NCA'&&!['CHO','ATA'].includes(c.id_etat_candidat))throw new Error('PRE'); if(target==='ATA'&&(c.id_etat_candidat!=='CHO'||!c.date_voeux_definitifs))throw new Error('PRE');
-    const files=(req.files as Express.Multer.File[]|undefined)??[]; await transition(client,req.params.id,target,`${req.user!.prenom} ${req.user!.nom}`,req.body.commentaire); await client.query('UPDATE etape SET pj_description=$1,url1_piece_jointe=$2,url2_piece_jointe=$3 WHERE id_historique=(SELECT max(id_historique) FROM etape WHERE id_candidat=$4)',[req.body.pj_description||null,files[0]?.originalname||null,files[1]?.originalname||null,req.params.id]); if(target==='CHO')await client.query('UPDATE fiche_de_voeux SET flag_fiche_de_voeux_soumise=false,verrouille=false,verrouille_par=NULL,date_verrouillage=NULL WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]); if(['NEL','NCA'].includes(target))await client.query('UPDATE user_ SET active=false WHERE id_contact=$1',[c.id_contact]); if(target==='NCA')await client.query('UPDATE opportunite SET flag_opportunite_non_retenu=true WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]); if(extra)await extra(c); await client.query('COMMIT');res.json({message:'Transition effectuée.',etat:target});
-  }catch(e:any){await client.query('ROLLBACK'); const msg=e.message==='NOT_FOUND'?'Candidat non trouvé.':e.message==='COMMENT'?'Commentaire obligatoire.':'Transition non autorisée pour cet état.';res.status(e.message==='NOT_FOUND'?404:e.message==='COMMENT'?400:409).json({error:msg});}finally{client.release();}}
+  const client=await pool.connect(); try { await client.query('BEGIN'); const row=await client.query('SELECT c.id_etat_candidat,c.id_contact,f.id_fiche_de_voeux,f.flag_candidat_deja_mis_en_lien,f.flag_fiche_de_voeux_soumise,f.date_voeux_provisoires,f.date_voeux_definitifs FROM candidat c JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE',[req.params.id]); if(!row.rows.length)throw new Error('NOT_FOUND'); const c=row.rows[0];
+    if(!req.body?.commentaire?.trim())throw new Error('COMMENT'); if(target==='NEL'&&(c.id_etat_candidat!=='AP2'||c.flag_candidat_deja_mis_en_lien))throw new Error('PRE'); if(target==='CHO'&&(c.id_etat_candidat!=='AP2'||(!c.flag_fiche_de_voeux_soumise&&!c.date_voeux_provisoires)))throw new Error('VOEUX_PROVISOIRES'); if(target==='NCA'&&!['CHO','ATA'].includes(c.id_etat_candidat))throw new Error('PRE'); if(target==='ATA'&&(c.id_etat_candidat!=='CHO'||!c.date_voeux_definitifs))throw new Error('VOEUX_DEFINITIFS');
+    const attachmentUrls=[req.body.url1_piece_jointe,req.body.url2_piece_jointe].map((value:unknown)=>optionalText(value));
+    for(const url of attachmentUrls) if(url && (!/^https?:\/\//i.test(url)||url.length>250)) throw new Error('URL');
+    await transition(client,req.params.id,target,`${req.user!.prenom} ${req.user!.nom}`,req.body.commentaire); await client.query('UPDATE etape SET pj_description=$1,url1_piece_jointe=$2,url2_piece_jointe=$3 WHERE id_historique=(SELECT max(id_historique) FROM etape WHERE id_candidat=$4)',[optionalText(req.body.pj_description),attachmentUrls[0],attachmentUrls[1],req.params.id]); if(target==='CHO')await client.query('UPDATE fiche_de_voeux SET flag_fiche_de_voeux_soumise=false,verrouille=false,verrouille_par=NULL,date_verrouillage=NULL WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]); if(['NEL','NCA'].includes(target))await client.query('UPDATE user_ SET active=false WHERE id_contact=$1',[c.id_contact]); if(target==='NCA')await client.query('UPDATE opportunite SET flag_opportunite_non_retenu=true WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]); if(extra)await extra(c); await client.query('COMMIT');res.json({message:'Transition effectuée.',etat:target});
+  }catch(e:any){await client.query('ROLLBACK'); const messages:Record<string,string>={NOT_FOUND:'Candidat non trouvé.',COMMENT:'Commentaire obligatoire.',URL:'Les pièces jointes doivent être des URL HTTP ou HTTPS valides.',VOEUX_PROVISOIRES:'La fiche de vœux provisoire doit être soumise avant de valider cet appel.',VOEUX_DEFINITIFS:'La fiche de vœux définitive doit être soumise avant de valider la session Choisir.'}; const msg=messages[e.message]??'Transition non autorisée pour cet état.';res.status(e.message==='NOT_FOUND'?404:['COMMENT','URL'].includes(e.message)?400:409).json({error:msg});}finally{client.release();}}
 router.post('/:id/rejeter', requireRole(RECRUITERS), actionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'NEL'));
 router.post('/:id/valider_appel2', requireRole(RECRUITERS), actionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'CHO'));
 router.post('/:id/annulerCandidature', requireRole(RECRUITERS), actionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'NCA'));
@@ -620,6 +624,40 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
       fiche=created.rows[0];
     }
     if((definitive && fiche.date_voeux_definitifs)||(!definitive && fiche.flag_fiche_de_voeux_soumise)) throw new Error('PRE');
+    const scalarLabels: Record<string,string> = {
+      part_seul:'Part seul',
+      zone_orange:'Zone orange',
+      conditions_spartiates:'Conditions spartiates',
+      hopital_proche:'Hôpital proche',
+      fonctionnaire_dispo_demandee:'Disponibilité fonctionnaire demandée',
+      date_depart_souhaite:'Date de départ souhaitée',
+      nouveau_poste:'Nouveau poste',
+      nouvelle_langue:'Nouvelle langue',
+      competences_a_developper:'Compétences à développer',
+      centres_interret:'Centres d’intérêt',
+      categorie_ecclesiale:'Catégorie ecclésiale',
+      categorie_ecclesiale_detail:'Détail de la catégorie ecclésiale',
+    };
+    const missing = Object.entries(scalarLabels)
+      .filter(([field]) => fiche[field] === null || fiche[field] === undefined || (typeof fiche[field] === 'string' && !fiche[field].trim()))
+      .map(([,label]) => label);
+    const relationChecks: Array<[string,string]> = [
+      ['parle','Langues parlées'],
+      ['a_la_competence_de','Compétences à mettre au service'],
+      ['veut_vivre_dans','Milieu souhaité'],
+      ['veut_habiter_dans','Logement'],
+      ['veut_aller_a','Destinations'],
+      ['veut_partir_pour','Durée'],
+    ];
+    for(const [table,label] of relationChecks) {
+      const count=await client.query(`SELECT 1 FROM ${table} WHERE id_fiche_de_voeux=$1 LIMIT 1`,[fiche.id_fiche_de_voeux]);
+      if(!count.rows.length) missing.push(label);
+    }
+    if(missing.length) {
+      const error=new Error('MISSING') as Error & {missing?:string[]};
+      error.missing=missing;
+      throw error;
+    }
     const author=`${req.user!.prenom} ${req.user!.nom}`;
     await client.query(
       definitive
@@ -634,13 +672,14 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
     console.error('Erreur soumission vœux :',{id:req.params.id,definitive,message:e.message});
     if(e.message==='NOT_FOUND') return void res.status(404).json({error:'Candidat non trouvé.'});
     if(e.message==='PRE') return void res.status(400).json({error:definitive?'Soumission définitive non autorisée.':'Soumission provisoire non autorisée.'});
+    if(e.message==='MISSING') return void res.status(400).json({error:`Champs obligatoires manquants : ${e.missing.join(', ')}.`,champs_manquants:e.missing});
     res.status(500).json({error:'Erreur interne du serveur.'});
   } finally {
     client.release();
   }
 }
 
-router.post('/:id/soumettre-voeux-provisoire', requireRole(['CAN']), (req,res) => void submitVoeux(req,res,false));
+router.post('/:id/soumettre-voeux-provisoire', requireRole(['CAN', ...RECRUITERS]), (req,res) => void submitVoeux(req,res,false));
 router.post('/:id/soumettre-voeux-definitifs', requireRole(['CAN']), (req,res) => void submitVoeux(req,res,true));
 
 export default router;

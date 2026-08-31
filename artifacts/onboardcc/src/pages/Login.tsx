@@ -5,13 +5,24 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Loader2, Globe } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { authApi } from '@/api/auth';
+import { useToast } from '@/hooks/use-toast';
 
 export default function Login() {
   const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotLogin, setForgotLogin] = useState('');
+  const [forgotSubmitting, setForgotSubmitting] = useState(false);
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordConfirmation, setNewPasswordConfirmation] = useState('');
+  const [resetSubmitting, setResetSubmitting] = useState(false);
   const { login, user, loading } = useAuth();
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
 
   useEffect(() => {
     if (user && !loading) {
@@ -26,6 +37,10 @@ export default function Login() {
     }
   }, [user, loading, setLocation]);
 
+  useEffect(() => {
+    setResetToken(new URLSearchParams(window.location.search).get('reset_token') ?? '');
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginId || !password) return;
@@ -37,6 +52,37 @@ export default function Login() {
       // Error is handled by context toast
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if(!forgotLogin.trim()) return;
+    setForgotSubmitting(true);
+    try {
+      const message=await authApi.forgotPassword(forgotLogin.trim());
+      toast({title:'Demande envoyée',description:message});
+      setForgotOpen(false);
+    } catch(error:any) {
+      toast({title:'Réinitialisation impossible',description:error.response?.data?.error ?? 'Impossible de traiter la demande.',variant:'destructive'});
+    } finally {
+      setForgotSubmitting(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if(!resetToken || newPassword.length<8 || newPassword!==newPasswordConfirmation) return;
+    setResetSubmitting(true);
+    try {
+      const message=await authApi.resetPassword(resetToken,newPassword);
+      toast({title:'Mot de passe réinitialisé',description:message});
+      setResetToken('');
+      setNewPassword('');
+      setNewPasswordConfirmation('');
+      window.history.replaceState(null,'','./login');
+    } catch(error:any) {
+      toast({title:'Réinitialisation impossible',description:error.response?.data?.error ?? 'Lien invalide ou expiré.',variant:'destructive'});
+    } finally {
+      setResetSubmitting(false);
     }
   };
 
@@ -99,6 +145,7 @@ export default function Login() {
                 placeholder="prenom.nom@ladcc.org" 
                 value={loginId}
                 onChange={(e) => setLoginId(e.target.value)}
+                 autoComplete="username"
                 required
                 autoFocus
                 className="h-11"
@@ -108,13 +155,14 @@ export default function Login() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="password">Mot de passe</Label>
-                <a href="#" className="text-xs text-primary font-medium hover:underline">Mot de passe oublié?</a>
+                <button type="button" onClick={() => {setForgotLogin(loginId);setForgotOpen(true);}} className="text-xs text-primary font-medium hover:underline">Mot de passe oublié ?</button>
               </div>
               <Input 
                 id="password" 
                 type="password" 
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                 autoComplete="current-password"
                 required
                 className="h-11"
               />
@@ -130,6 +178,37 @@ export default function Login() {
           </form>
         </div>
       </div>
+      <Dialog open={forgotOpen} onOpenChange={setForgotOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Mot de passe oublié</DialogTitle>
+            <DialogDescription>Saisissez votre identifiant ou votre email. Si un compte actif correspond, un lien de réinitialisation vous sera envoyé.</DialogDescription>
+          </DialogHeader>
+          <Input value={forgotLogin} onChange={(event) => setForgotLogin(event.target.value)} placeholder="Identifiant ou email" autoFocus/>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setForgotOpen(false)}>Annuler</Button>
+            <Button disabled={!forgotLogin.trim() || forgotSubmitting} onClick={() => void handleForgotPassword()}>
+              {forgotSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}Envoyer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!resetToken} onOpenChange={(open) => !open && setResetToken('')}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Choisir un nouveau mot de passe</DialogTitle>
+            <DialogDescription>Votre nouveau mot de passe doit contenir au moins 8 caractères.</DialogDescription>
+          </DialogHeader>
+          <Input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Nouveau mot de passe" autoComplete="new-password"/>
+          <Input type="password" value={newPasswordConfirmation} onChange={(event) => setNewPasswordConfirmation(event.target.value)} placeholder="Confirmer le mot de passe" autoComplete="new-password"/>
+          {newPasswordConfirmation && newPassword!==newPasswordConfirmation && <p className="text-sm text-destructive">Les mots de passe ne correspondent pas.</p>}
+          <DialogFooter>
+            <Button disabled={newPassword.length<8 || newPassword!==newPasswordConfirmation || resetSubmitting} onClick={() => void handleResetPassword()}>
+              {resetSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}Enregistrer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

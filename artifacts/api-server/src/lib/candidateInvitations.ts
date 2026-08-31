@@ -47,3 +47,27 @@ export async function sendCandidateInvitations(invitations: CandidateInvitation[
     });
   }
 }
+
+export async function sendPasswordResetEmail(email: string, prenom: string | null, resetUrl: string): Promise<void> {
+  if (!smtpIsConfigured()) throw new Error('SMTP_NOT_CONFIGURED');
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT),
+    secure: Number(process.env.SMTP_PORT) === 465,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
+  });
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: email,
+    subject: 'Réinitialisation de votre mot de passe DCC',
+    text: [
+      `Bonjour${prenom ? ` ${prenom}` : ''},`,
+      '',
+      'Une demande de réinitialisation a été effectuée pour votre espace DCC.',
+      'Utilisez le lien ci-dessous dans les 30 minutes pour choisir un nouveau mot de passe :',
+      resetUrl,
+      '',
+      'Si vous n’êtes pas à l’origine de cette demande, contactez la DCC.',
+    ].join('\n'),
+  });
+}

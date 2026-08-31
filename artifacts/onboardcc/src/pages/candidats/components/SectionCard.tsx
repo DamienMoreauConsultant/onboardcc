@@ -118,18 +118,32 @@ type Props = {
   candidateMode: boolean;
   onSave: (values: Record<string, unknown>) => void;
   onEdit: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
   refs?: VoeuxReferences;
 };
 
-export function SectionCard({ section, detail, editable, canEdit, candidateMode, onSave, onEdit, refs }: Props) {
+export function SectionCard({ section, detail, editable, canEdit, candidateMode, onSave, onEdit, onDirtyChange, refs }: Props) {
   const [values, setValues] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
+    if (editable) return;
     setValues(Object.fromEntries(fieldSets[section].map(([key]) => [
       key,
       booleans.includes(key) ? detail[key] ?? null : dateFields.includes(key) ? detail[key]?.slice?.(0, 10) ?? '' : detail[key] ?? '',
     ])));
-  }, [detail, section]);
+  }, [detail, section, editable]);
+
+  useEffect(() => {
+    if (!editable) {
+      onDirtyChange?.(false);
+      return;
+    }
+    const initial = Object.fromEntries(fieldSets[section].map(([key]) => [
+      key,
+      booleans.includes(key) ? detail[key] ?? null : dateFields.includes(key) ? detail[key]?.slice?.(0, 10) ?? '' : detail[key] ?? '',
+    ]));
+    onDirtyChange?.(JSON.stringify(values) !== JSON.stringify(initial));
+  }, [detail, editable, onDirtyChange, section, values]);
 
   const handleSave = () => {
     let payload: Record<string, unknown> = { ...values };

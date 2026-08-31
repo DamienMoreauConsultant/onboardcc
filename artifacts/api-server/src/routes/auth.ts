@@ -17,8 +17,10 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { createHash, randomBytes } from 'node:crypto';
 import pool from '../db-pg';
 import { requireRole } from '../middleware/requireRole';
+import { sendPasswordResetEmail, smtpIsConfigured } from '../lib/candidateInvitations';
 
 const router = Router();
 
@@ -133,6 +135,71 @@ router.post('/login', async (req, res) => {
   } catch (err) {
     console.error('Erreur lors de la connexion :', err);
     res.status(500).json({ error: 'Erreur interne du serveur.' });
+  }
+});
+
+router.post('/mot-de-passe-oublie', async (req, res) => {
+  const login = typeof req.body?.login === 'string' ? req.body.login.trim() : '';
+  if (!login) return void res.status(400).json({error:'Identifiant ou email requis.'});
+  const genericMessage = 'Si un compte actif correspond à cet identifiant, un lien de réinitialisation sera envoyé.';
+  try {
+    const found = await pool.query(
+      `SELECT u.id_user,u.active,c.email_contact,c.prenom_contact
+       FROM user_ u JOIN contact c ON c.id_contact=u.id_contact
+       WHERE lower(u.login)=lower($1) OR lower(c.email_contact)=lower($1)
+       LIMIT 1`,
+      [login],
+    );
+    if(!found.rows.length || found.rows[0].active===false) return void res.status(202).json({message:genericMessage});
+    if(!smtpIsConfigured()) return void res.status(503).json({error:'Le service d’envoi d’email n’est pas configuré. Contactez la DCC.'});
+    const nonce=randomBytes(24).toString('base64url');
+    const nonceHash=createHash('sha256').update(nonce).digest('hex');
+    const claimed=await pool.query(
+      `UPDATE user_
+       SET password_reset_requested_at=NOW(),password_reset_nonce_hash=$1
+       WHERE id_user=$2
+         AND (password_reset_requested_at IS NULL OR password_reset_requested_at < NOW()-INTERVAL '15 minutes')
+       RETURNING id_user`,
+      [nonceHash,found.rows[0].id_user],
+    );
+    if(!claimed.rows.length) return void res.status(202).json({message:genericMessage});
+    const secret=(process.env.JWT_SECRET || process.env.SESSION_SECRET)!;
+    const token=jwt.sign({purpose:'password-reset',sub:String(found.rows[0].id_user),nonce},secret,{expiresIn:'30m'});
+    const frontendUrl=(process.env.FRONTEND_URL || '').replace(/\/$/,'');
+    const resetUrl=`${frontendUrl}/login?reset_token=${encodeURIComponent(token)}`;
+    try {
+      await sendPasswordResetEmail(found.rows[0].email_contact,found.rows[0].prenom_contact,resetUrl);
+    } catch(error) {
+      await pool.query('UPDATE user_ SET password_reset_requested_at=NULL,password_reset_nonce_hash=NULL WHERE id_user=$1',[found.rows[0].id_user]);
+      throw error;
+    }
+    res.status(202).json({message:genericMessage});
+  } catch(err) {
+    console.error('Erreur mot de passe oublié :',err);
+    res.status(500).json({error:'Impossible de traiter la demande pour le moment.'});
+  }
+});
+
+router.post('/reinitialiser-password', async (req,res) => {
+  const token=typeof req.body?.token==='string'?req.body.token:'';
+  const newPassword=typeof req.body?.nouveau_password==='string'?req.body.nouveau_password:'';
+  if(!token || newPassword.length<8) return void res.status(400).json({error:'Lien invalide ou mot de passe de moins de 8 caractères.'});
+  try {
+    const secret=(process.env.JWT_SECRET || process.env.SESSION_SECRET)!;
+    const payload=jwt.verify(token,secret) as jwt.JwtPayload & {purpose?:string;nonce?:string};
+    if(payload.purpose!=='password-reset' || !payload.sub || !payload.nonce) throw new Error('INVALID');
+    const nonceHash=createHash('sha256').update(payload.nonce).digest('hex');
+    const updated=await pool.query(
+      `UPDATE user_
+       SET password=$1,password_reset_nonce_hash=NULL,password_reset_requested_at=NULL
+       WHERE id_user=$2 AND password_reset_nonce_hash=$3
+       RETURNING id_user`,
+      [await bcrypt.hash(newPassword,12),payload.sub,nonceHash],
+    );
+    if(!updated.rows.length) throw new Error('INVALID');
+    res.json({message:'Mot de passe réinitialisé. Vous pouvez vous connecter.'});
+  } catch(error) {
+    res.status(400).json({error:'Ce lien de réinitialisation est invalide, expiré ou déjà utilisé.'});
   }
 });
 

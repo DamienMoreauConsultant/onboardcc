@@ -36,5 +36,15 @@ export const authApi = {
   
   changerPassword: async (input: ChangerPasswordInput): Promise<void> => {
     await api.post('/auth/changer-password', input);
-  }
+  },
+
+  forgotPassword: async (login: string): Promise<string> => {
+    const { data } = await api.post<{message:string}>('/auth/mot-de-passe-oublie', {login});
+    return data.message;
+  },
+
+  resetPassword: async (token: string, nouveau_password: string): Promise<string> => {
+    const { data } = await api.post<{message:string}>('/auth/reinitialiser-password', {token,nouveau_password});
+    return data.message;
+  },
 };

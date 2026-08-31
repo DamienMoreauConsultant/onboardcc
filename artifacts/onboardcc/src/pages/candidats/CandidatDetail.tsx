@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useRoute } from 'wouter';
-import { FileText, Loader2 } from 'lucide-react';
+import { ExternalLink, FileText, Loader2 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
@@ -19,21 +20,32 @@ type Section = 'etat-civil' | 'projet' | 'voeux';
 export default function CandidatDetail({ mode }: Props) {
   const { user } = useAuth();
   const [, params] = useRoute('/recruteur/candidats/:id');
+  const [, navigate] = useLocation();
   const id = mode === 'candidat' ? user?.id_candidat : Number(params?.id);
 
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<Section | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [activeTab, setActiveTab] = useState(mode === 'candidat' ? 'voeux' : 'etat-civil');
+  const [pendingNavigation, setPendingNavigation] = useState<{kind:'tab'|'route'|'history';value:string}|null>(null);
+  const historyGuard = useRef({restoring:false,leaving:false});
   const [action, setAction] = useState<string | null>(null);
   const [comment, setComment] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
+  const [attachmentDescription, setAttachmentDescription] = useState('');
+  const [attachmentUrls, setAttachmentUrls] = useState(['','']);
+  const [submitDefinitive, setSubmitDefinitive] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [reviewDate, setReviewDate] = useState('');
 
   const { data: refs } = useQuery({
     queryKey: ['voeux-references'],
     queryFn: candidatsApi.voeuxReferences,
+  });
+  const { data: attachmentConfig } = useQuery({
+    queryKey: ['attachment-configuration'],
+    queryFn: candidatsApi.attachmentConfiguration,
   });
 
   const reload = async () => {
@@ -56,6 +68,50 @@ export default function CandidatDetail({ mode }: Props) {
     setReviewDate(detail?.date_revue?.slice(0, 10) ?? '');
   }, [detail?.date_revue]);
 
+  useEffect(() => {
+    if (!dirty || !editing) return;
+    const currentUrl=window.location.href;
+    const guardId=`dcc-dirty-${Date.now()}`;
+    window.history.pushState({...window.history.state,__dccDirtyGuard:guardId},'',currentUrl);
+    const toAppPath=(url:URL) => {
+      const base=import.meta.env.BASE_URL.replace(/\/$/,'');
+      return `${url.pathname.startsWith(base) ? url.pathname.slice(base.length) || '/' : url.pathname}${url.search}${url.hash}`;
+    };
+    const onClick = (event: MouseEvent) => {
+      const anchor = (event.target as HTMLElement | null)?.closest('a');
+      if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download')) return;
+      const url = new URL(anchor.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setPendingNavigation({kind:'route',value:toAppPath(url)});
+    };
+    const onBeforeUnload=(event:BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue=true;
+    };
+    const onPopState=() => {
+      if(historyGuard.current.leaving) return;
+      if(historyGuard.current.restoring) {
+        historyGuard.current.restoring=false;
+        return;
+      }
+      const target=new URL(window.location.href);
+      historyGuard.current.restoring=true;
+      window.history.go(1);
+      setPendingNavigation({kind:'history',value:toAppPath(target)});
+    };
+    document.addEventListener('click',onClick,true);
+    window.addEventListener('beforeunload',onBeforeUnload);
+    window.addEventListener('popstate',onPopState);
+    return () => {
+      document.removeEventListener('click',onClick,true);
+      window.removeEventListener('beforeunload',onBeforeUnload);
+      window.removeEventListener('popstate',onPopState);
+      if(window.history.state?.__dccDirtyGuard===guardId && !historyGuard.current.leaving) window.history.back();
+    };
+  }, [dirty, editing]);
+
   const save = async (section: Section, values: Record<string, unknown>) => {
     if (!detail) return;
     setBusy(true);
@@ -74,10 +130,14 @@ export default function CandidatDetail({ mode }: Props) {
     if (!detail || !action || !comment.trim()) return;
     setBusy(true);
     try {
-      await candidatsApi.transition(detail.id_candidat, action as 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', comment, files);
+      await candidatsApi.transition(detail.id_candidat, action as 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', comment, {
+        description:attachmentDescription,
+        urls:attachmentUrls,
+      });
       setAction(null);
       setComment('');
-      setFiles([]);
+      setAttachmentDescription('');
+      setAttachmentUrls(['','']);
       await reload();
     } catch (e: any) {
       setError(e.response?.data?.error ?? 'Action impossible.');
@@ -86,16 +146,56 @@ export default function CandidatDetail({ mode }: Props) {
     }
   };
 
-  const submit = async (definitive: boolean) => {
-    if (!detail || !window.confirm('Après soumission, vos vœux seront verrouillés. Confirmer ?')) return;
+  const submit = async () => {
+    if (!detail || submitDefinitive === null) return;
     setBusy(true);
     try {
-      await candidatsApi.submitVoeux(detail.id_candidat, definitive);
+      await candidatsApi.submitVoeux(detail.id_candidat, submitDefinitive);
+      setSubmitDefinitive(null);
       await reload();
     } catch (e: any) {
       setError(e.response?.data?.error ?? 'Soumission impossible.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const requestTabChange = (nextTab: string) => {
+    if (dirty && editing) {
+      setPendingNavigation({kind:'tab',value:nextTab});
+      return;
+    }
+    setEditing(null);
+    setActiveTab(nextTab);
+  };
+
+  const abandonChanges = () => {
+    const pending=pendingNavigation;
+    setEditing(null);
+    setDirty(false);
+    setPendingNavigation(null);
+    if(pending?.kind==='tab') setActiveTab(pending.value);
+    if(pending?.kind==='route') {
+      historyGuard.current.leaving=true;
+      navigate(pending.value,{replace:true});
+    }
+    if(pending?.kind==='history') {
+      historyGuard.current.leaving=true;
+      window.setTimeout(() => window.history.go(-2),0);
+    }
+  };
+
+  const onDirtyChange = useCallback((section: Section, changed: boolean) => {
+    if(editing===section) setDirty(changed);
+  },[editing]);
+
+  const safeUrl = (value: unknown) => {
+    if(typeof value!=='string') return null;
+    try {
+      const parsed=new URL(value);
+      return ['http:','https:'].includes(parsed.protocol) ? parsed.href : null;
+    } catch {
+      return null;
     }
   };
 
@@ -132,7 +232,7 @@ export default function CandidatDetail({ mode }: Props) {
         onSave={(section, values) => void save(section, values)}
         onAction={setAction}
         onEditVoeux={() => setEditing('voeux')}
-        onSubmit={(definitive) => void submit(definitive)}
+        onSubmit={setSubmitDefinitive}
         refs={refs}
       />
 
@@ -143,7 +243,7 @@ export default function CandidatDetail({ mode }: Props) {
         </p>
       )}
 
-      <Tabs defaultValue={mode === 'candidat' ? 'voeux' : 'etat-civil'} className="w-full">
+      <Tabs value={activeTab} onValueChange={requestTabChange} className="w-full">
         <TabsList className="mb-4">
           <TabsTrigger value="etat-civil">État civil</TabsTrigger>
           <TabsTrigger value="projet">Dossier de candidature</TabsTrigger>
@@ -165,6 +265,7 @@ export default function CandidatDetail({ mode }: Props) {
             candidateMode={mode === 'candidat'}
             onEdit={() => setEditing('etat-civil')}
             onSave={(v) => void save('etat-civil', v)}
+            onDirtyChange={(changed) => onDirtyChange('etat-civil',changed)}
             refs={refs}
           />
         </TabsContent>
@@ -178,6 +279,7 @@ export default function CandidatDetail({ mode }: Props) {
             candidateMode={mode === 'candidat'}
             onEdit={() => setEditing('projet')}
             onSave={(v) => void save('projet', v)}
+            onDirtyChange={(changed) => onDirtyChange('projet',changed)}
             refs={refs}
           />
         </TabsContent>
@@ -191,6 +293,7 @@ export default function CandidatDetail({ mode }: Props) {
             candidateMode={mode === 'candidat'}
             onEdit={() => setEditing('voeux')}
             onSave={(v) => void save('voeux', v)}
+            onDirtyChange={(changed) => onDirtyChange('voeux',changed)}
             refs={refs}
           />
         </TabsContent>
@@ -222,9 +325,12 @@ export default function CandidatDetail({ mode }: Props) {
                       </div>
                       <p className="mt-2 text-sm text-muted-foreground">{item.note_ecrite || '—'}</p>
                       {(item.url1_piece_jointe || item.url2_piece_jointe) && (
-                        <p className="mt-3 text-xs text-muted-foreground">
-                          Pièces : {[item.url1_piece_jointe, item.url2_piece_jointe].filter(Boolean).join(', ')}
-                        </p>
+                        <div className="mt-3 flex flex-wrap gap-3 text-xs">
+                          {[item.url1_piece_jointe, item.url2_piece_jointe].map((value,index) => {
+                            const href=safeUrl(value);
+                            return href ? <a key={href} href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-primary hover:underline"><ExternalLink className="h-3 w-3"/>Pièce jointe {index+1}</a> : null;
+                          })}
+                        </div>
                       )}
                     </div>
                   )) : (
@@ -241,7 +347,7 @@ export default function CandidatDetail({ mode }: Props) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirmer cette transition</DialogTitle>
-            <DialogDescription>Un commentaire est obligatoire. Vous pouvez joindre jusqu’à deux pièces.</DialogDescription>
+            <DialogDescription>Un commentaire est obligatoire. Vous pouvez référencer jusqu’à deux pièces déposées dans l’espace partagé.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <Textarea 
@@ -250,11 +356,14 @@ export default function CandidatDetail({ mode }: Props) {
               placeholder="Commentaire obligatoire…" 
               className="min-h-[100px]"
             />
-            <Input 
-              type="file" 
-              multiple 
-              onChange={(e) => setFiles(Array.from(e.target.files ?? []).slice(0, 2))} 
-            />
+            {safeUrl(attachmentConfig?.storageUrl) && (
+              <a href={safeUrl(attachmentConfig?.storageUrl)!} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline">
+                <ExternalLink className="h-4 w-4"/>Accéder à l’espace de stockage partagé
+              </a>
+            )}
+            <Input value={attachmentDescription} onChange={(e) => setAttachmentDescription(e.target.value)} placeholder="Description des pièces jointes" maxLength={50}/>
+            <Input type="url" value={attachmentUrls[0]} onChange={(e) => setAttachmentUrls([e.target.value,attachmentUrls[1]])} placeholder="URL de la pièce jointe 1"/>
+            <Input type="url" value={attachmentUrls[1]} onChange={(e) => setAttachmentUrls([attachmentUrls[0],e.target.value])} placeholder="URL de la pièce jointe 2"/>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAction(null)}>Annuler</Button>
@@ -265,6 +374,32 @@ export default function CandidatDetail({ mode }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!pendingNavigation}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Modifications non enregistrées</AlertDialogTitle>
+            <AlertDialogDescription>Vous avez des modifications non enregistrées sur cet onglet. Voulez-vous les abandonner ?</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingNavigation(null)}>Continuer l’édition</AlertDialogCancel>
+            <AlertDialogAction onClick={abandonChanges}>Abandonner les modifications</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={submitDefinitive !== null} onOpenChange={(open) => !open && setSubmitDefinitive(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Soumettre la fiche de vœux</AlertDialogTitle>
+            <AlertDialogDescription>Après soumission, les vœux seront verrouillés. Confirmer la soumission {submitDefinitive ? 'définitive' : 'provisoire'} ?</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} onClick={() => void submit()}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}Confirmer</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
