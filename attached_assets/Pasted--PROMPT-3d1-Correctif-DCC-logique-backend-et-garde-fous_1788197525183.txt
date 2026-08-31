@@ -1,0 +1,160 @@
+# PROMPT 3d1 — Correctif DCC : logique backend et garde-fous (candidat)
+# Envoyer APRÈS prompt3c. Ne dépend PAS de la validation Figma en cours (voir prompt3d2,
+# tenu en attente) — ce prompt ne touche à aucune mise en page, uniquement logique et garde-fous.
+# Référence : Correctif_DCC_20260826.md, issues A05, A09, A21, A32, A34, A35
+#             prompt3.txt §2 (import), §1 (classe Candidat)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+⚠️ **Avant ce prompt** : exécute `correctif_dcc_20260828.sql` (SQL Console Replit, gratuit) s'il
+ne l'a pas déjà été — il ajoute la colonne `candidat.perso_enfants_consolides`, corrige la table
+`notoriete_dcc` (colonne `active` manquante), et applique le reste des corrections
+référentielles DCC.
+
+---
+
+## 1. Import candidat — durée de mission (A05)
+
+Contrat révisé (prompt3.txt §2, colonnes 23-24 + nouvelles colonnes 48-49) :
+1. Colonne CSV `duree_souhaitee` : stockée telle quelle dans
+   `candidat.projet_duree_mission_souhaitee` (historique de la réponse brute du dossier de
+   candidature), **et** liée à `veut_partir_pour` **uniquement si** la valeur correspond à la
+   `designation` d'un enregistrement **actif** de la table `duree`. Comme `AUTRE` est désormais
+   `active = FALSE`, une valeur "Autre" ne matchera jamais aucun enregistrement actif — **aucun
+   traitement spécial n'est nécessaire**, le filtre `WHERE active = true` sur la requête de
+   résolution suffit à obtenir le comportement voulu (pas de liaison si "Autre" ou toute valeur
+   ne correspondant à aucune durée active).
+2. **Écran Vœux, sélecteur "Durée de la mission"** (déjà couvert par le principe général : tout
+   sélecteur référentiel ne liste que les valeurs `active = true`) — vérifie simplement que ce
+   principe est bien respecté ici, "Autre" ne doit plus apparaître comme option.
+3. Colonne CSV `48. enfant_consolide` (nouvelle, voir prompt3.txt §2) : stocke la valeur JSON
+   brute reçue, telle quelle, dans `candidat.perso_enfants_consolides` — **aucun parsing ni
+   validation à l'import**, ni erreur bloquante si le JSON est absent ou mal formé. Le conjoint
+   n'a **pas** de nouvelle colonne — il réutilise `nom_prenom_conjoint` (colonne 19, déjà dans le
+   contrat, déjà géré).
+
+---
+
+## 2. Garde-fou — changement d'onglet en cours d'édition (A21, remplace l'ancien point sur le bandeau)
+
+Sur l'écran détail candidat (et poste, même composant), si un onglet est en mode édition avec des
+modifications non enregistrées, et que l'utilisateur tente de **naviguer vers un autre onglet**
+(ou de quitter l'écran), affiche une **popup applicative de confirmation** (pas de `confirm()`
+JavaScript natif — voir §3 ci-dessous, même principe) : *"Vous avez des modifications non
+enregistrées sur cet onglet. Voulez-vous les abandonner ?"* avec deux boutons — "Continuer
+l'édition" (annule la navigation) et "Abandonner les modifications" (quitte l'onglet, perd les
+changements non sauvegardés).
+
+---
+
+## 3. Remplacer les popups natives du navigateur par des popups applicatives
+
+Trouvé lors des tests : la soumission de la fiche de vœux candidat déclenche actuellement un
+`confirm()` JavaScript natif ("Après soumission, vos vœux seront verrouillés. Confirmer ?").
+**Audite l'ensemble du frontend** (pas seulement cet écran) pour tout usage de `confirm()` ou
+`alert()` natifs, et remplace-les par le composant de popup applicative déjà utilisé ailleurs dans
+l'application (même style que les popups d'action du bandeau, conception.md §6.1.2) — cohérence
+visuelle avec le reste de l'app, et compatible avec la contrainte UX candidat (profils peu
+digitalisés, une popup navigateur brute est déroutante).
+
+---
+
+## 4. Validation des champs obligatoires avant soumission de la fiche de vœux
+
+`soumettre_voeux_provisoire()` et `soumettre_voeux_definitif()` doivent **vérifier côté backend**
+(pas seulement côté frontend) que tous les champs obligatoires de la fiche de vœux sont renseignés
+avant d'accepter la soumission — retourne une erreur 400 explicite listant les champs manquants
+sinon. Règle : **tous les champs sont obligatoires par principe** ; pour un champ à liste de
+valeurs (langues, compétences, milieu, logement, destinations...), "obligatoire" signifie **au
+moins une valeur sélectionnée**, pas nécessairement toutes.
+
+---
+
+## 5. Workflow recruteur — soumission de vœux pour le compte du candidat
+
+**Bug de workflow trouvé** (candidate de test Anne Girard, sans soumission de vœux) : rien
+n'empêche aujourd'hui `valider_appel2()` (AP2 → CHO) d'être déclenché alors que la fiche de vœux
+provisoire n'a **jamais été soumise** — ce n'est pourtant pas censé être possible dans le
+processus réel.
+
+**Correctifs à apporter** :
+1. Ajoute une précondition à `valider_appel2()` (prompt3.txt §1) :
+   `fiche_de_voeux.flag_fiche_de_voeux_soumise = true` **OU** `date_voeux_provisoires` renseignée
+   (selon le champ réellement utilisé comme marqueur de soumission — vérifie lequel est déjà posé
+   par `soumettre_voeux_provisoire()` et utilise le même). Si la précondition n'est pas remplie,
+   le bouton `[VALIDER L'APPEL 2]` doit être **désactivé ou masqué**, pas juste refusé côté API,
+   avec un message clair au recruteur ("La fiche de vœux provisoire doit être soumise avant de
+   valider cet appel.").
+2. **Nouvelle action recruteur** : bouton `[SOUMETTRE LA FICHE DE VŒUX POUR LE CANDIDAT]`,
+   disponible sur l'onglet Vœux quand l'état = AP2 et que les vœux provisoires n'ont pas encore
+   été soumis (utile quand le candidat n'a pas encore de compte actif ou ne peut pas soumettre
+   lui-même). Déclenche exactement la même logique que `soumettre_voeux_provisoire()`, mais avec
+   traçabilité de l'acteur réel : pose `fiche_de_voeux.modifie_par` = nom du recruteur (colonne
+   déjà existante) et la date de soumission comme d'habitude — **ne pas créer de nouvelle
+   méthode dupliquée**, ajoute juste un paramètre d'acteur à la méthode existante.
+3. Confirme (test rapide) que la précondition symétrique sur `valider_session_choisir()`
+   (CHO → ATA, vœux définitifs) fonctionne toujours correctement — déjà vérifié fonctionnelle par
+   Damien le 28/08/2026, aucune régression attendue mais à re-tester après ce prompt.
+
+---
+
+## 6. Bug — "Mot de passe oublié" (Correctif DCC A37)
+
+Une candidate importée (Anne Girard, compte `user_` confirmé existant) a essayé le lien "mot de
+passe oublié" sans succès. **Le log fourni ne montre aucune requête backend correspondant à cette
+action** (juste un `GET /` → 404 sans rapport) — ça exclut a priori un problème d'envoi d'email
+(SMTP), puisqu'aucune requête n'a même atteint le serveur pour déclencher une tentative d'envoi.
+Piste la plus probable : le lien/bouton "Mot de passe oublié" côté frontend n'est pas câblé sur une
+route API existante, ou pointe vers une URL de route qui n'existe pas (d'où potentiellement le
+`GET /` 404 observé, si un routing SPA mal configuré retombe sur la racine).
+
+**À faire** : reproduis le clic sur "Mot de passe oublié" en observant le réseau (Network tab) et
+les logs serveur au même moment, identifie la route (ou l'absence de route) réellement appelée, et
+corrige. Si la route existe bien et échoue spécifiquement à l'étape d'envoi d'email (SMTP), alors
+seulement c'est un problème d'infrastructure à traiter plus tard sur le serveur de production — ne
+pas s'arrêter à cette hypothèse sans l'avoir vérifiée, le log actuel ne la confirme pas.
+
+---
+
+## 7. Pièces jointes — lien cliquable + espace de stockage configurable (Correctif DCC A22)
+
+**Bonne nouvelle en réexaminant le schéma** : `etape.url1_piece_jointe` et `url2_piece_jointe`
+sont **déjà** des colonnes `VARCHAR(250)` qui stockent une URL, pas un fichier binaire — le modèle
+que Damien voulait (URL en base, fichier ailleurs) est donc déjà en place côté candidat. Le "non
+cliquable" observé (onglet "Progression et documents") est donc très probablement un simple bug
+d'affichage frontend : l'URL est affichée en texte brut au lieu d'être rendue comme un vrai lien
+`<a href="..." target="_blank">`. **Corrige cet affichage** partout où `url1_piece_jointe`/
+`url2_piece_jointe` sont montrés (actuellement : onglet "Progression et documents", écran
+candidat). La refonte plus large en table `piece_jointe` (0 à N pièces par étape, cf. discussion
+A22) est **reportée à prompt4** (Opportunité) — pas nécessaire pour corriger ce bug précis.
+
+**Espace de stockage — paramètre configurable** : Damien n'a pas encore de solution de stockage
+définitive (dépend du serveur de déploiement prod/préprod, pas encore connu). En attendant, ajoute
+une variable d'environnement pointant vers un espace de stockage temporaire (un dossier partagé,
+ex. Google Drive) :
+```
+# .env.example (backend)
+PIECE_JOINTE_STORAGE_URL=https://drive.google.com/drive/folders/XXXXXXXXXXXXXXXXXXXXXXXX?usp=sharing
+```
+Affiche cette URL comme un **bouton/lien cliquable** ("Accéder à l'espace de stockage partagé")
+dans la popup d'ajout de pièce jointe (pattern générique, conception.md §6.1.2) — le recruteur y
+dépose son fichier manuellement, récupère le lien de partage généré par Google Drive (ou l'outil
+utilisé), puis le colle dans le champ URL de la pièce jointe. **Aucune intégration API réelle avec
+Google Drive n'est nécessaire** — c'est un simple rappel visuel pointant vers un dossier, pas un
+upload automatisé.
+
+⚠️ **Le jour du déploiement sur un autre environnement (préprod/prod), il faudra changer la valeur
+de `PIECE_JOINTE_STORAGE_URL`** dans les variables d'environnement du nouvel hébergement — aucune
+action de code nécessaire, seulement une reconfiguration.
+
+---
+
+## Points de vigilance
+
+- Ne touche à aucune mise en page/disposition d'écran dans ce prompt (bandeau, sections,
+  grille 4 colonnes, parcours compétences) — ces points sont validés séparément via une maquette
+  Figma avant d'être envoyés à Replit (prompt3d2, à venir).
+- Vérifie que le bug `notoriete_dcc` (PATCH 400) est bien résolu une fois
+  `correctif_dcc_20260828.sql` exécuté — si le composant Admin référentiels est bien générique
+  (lit les colonnes dynamiquement), l'ajout de la colonne `active` en base peut suffire sans
+  modification de code ; teste avant de chercher plus loin.
