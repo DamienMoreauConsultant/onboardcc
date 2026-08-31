@@ -221,7 +221,7 @@ export default function CandidatDetail({ mode }: Props) {
   if (!detail) return <div className="p-8 text-destructive">{error || 'Candidat introuvable.'}</div>;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-8 p-6 pb-16">
+    <div className="mx-auto max-w-7xl space-y-8 p-6 pb-16">
       <CandidatBanner
         detail={detail}
         mode={mode}
@@ -264,6 +264,7 @@ export default function CandidatDetail({ mode }: Props) {
             canEdit={mode === 'recruteur' && Boolean(refs)}
             candidateMode={mode === 'candidat'}
             onEdit={() => setEditing('etat-civil')}
+            onCancel={() => setEditing(null)}
             onSave={(v) => void save('etat-civil', v)}
             onDirtyChange={(changed) => onDirtyChange('etat-civil',changed)}
             refs={refs}
@@ -278,6 +279,7 @@ export default function CandidatDetail({ mode }: Props) {
             canEdit={mode === 'recruteur'}
             candidateMode={mode === 'candidat'}
             onEdit={() => setEditing('projet')}
+            onCancel={() => setEditing(null)}
             onSave={(v) => void save('projet', v)}
             onDirtyChange={(changed) => onDirtyChange('projet',changed)}
             refs={refs}
@@ -292,6 +294,7 @@ export default function CandidatDetail({ mode }: Props) {
             canEdit={Boolean(refs) && (mode === 'recruteur' || candidateCanEditVoeux)}
             candidateMode={mode === 'candidat'}
             onEdit={() => setEditing('voeux')}
+            onCancel={() => setEditing(null)}
             onSave={(v) => void save('voeux', v)}
             onDirtyChange={(changed) => onDirtyChange('voeux',changed)}
             refs={refs}

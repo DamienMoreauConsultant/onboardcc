@@ -13,7 +13,7 @@ export type CandidatRow = {
 export type CandidatDetail = CandidatRow & Record<string, any>;
 export type CandidatsPage = { items: CandidatRow[]; total: number; page: number; pageSize: number };
 type CandidatsApiPage = { candidats: CandidatRow[]; total: number; page: number; page_size: number };
-export type ReferenceOption = { id: number; label: string };
+export type ReferenceOption = { id: number; label: string; id_domaine?: number | null };
 export type VoeuxReferences = {
   durees: ReferenceOption[];
   environnements: ReferenceOption[];

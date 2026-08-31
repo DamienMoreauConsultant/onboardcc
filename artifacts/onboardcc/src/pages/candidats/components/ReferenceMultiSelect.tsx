@@ -42,7 +42,7 @@ export function ReferenceMultiSelect({ options = [], value = [], onChange, mode 
       }
     } else if (mode === 'region') {
       if (!value.find(v => itemId(v) === opt.id)) {
-        onChange([...value, { id_region: opt.id, degre: 'neutre' }]);
+        onChange([...value, { id_region: opt.id, degre: 'Non' }]);
       }
     }
   };
@@ -125,14 +125,14 @@ export function ReferenceMultiSelect({ options = [], value = [], onChange, mode 
                 )}
 
                 {mode === 'region' && (
-                  <Select value={v.degre ?? 'neutre'} onValueChange={(val) => updateLevel(id, val)} disabled={disabled}>
+                  <Select value={v.degre ?? 'Non'} onValueChange={(val) => updateLevel(id, val)} disabled={disabled}>
                     <SelectTrigger className="w-[180px] h-8 bg-background">
                       <SelectValue placeholder="Volonté" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="neutre">Neutre</SelectItem>
-                      <SelectItem value="veut aller">Veut aller</SelectItem>
-                      <SelectItem value="ne veut pas aller">Ne veut pas aller</SelectItem>
+                      {['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'Non'].map((degree) => (
+                        <SelectItem key={degree} value={degree}>{degree}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 )}

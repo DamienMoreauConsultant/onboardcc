@@ -1,3 +1,4 @@
 - [Historique des postes](poste-history.md) — `etape` est candidat-only ; les actions de fiche de poste ont un historique dédié.
 - [Dates d’import des postes](poste-import-dates.md) — les dates CRM doivent être validées en `JJ/MM/AAAA` puis converties en ISO avant PostgreSQL.
 - [Sécurité du mot de passe oublié](password-reset-safety.md) — une demande anonyme émet un lien expirant ; elle ne remplace jamais directement le mot de passe.
+- [Couverture des destinations](voeux-destination-coverage.md) — chaque sauvegarde de vœux doit sérialiser toutes les régions actives avec un degré P1–P6 ou Non.

@@ -321,7 +321,7 @@ router.get('/referentiels/voeux', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMI
       pool.query("SELECT id_duree id, periode label FROM duree WHERE COALESCE(active,true) ORDER BY periode"),
       pool.query("SELECT id_environnement id, designation label FROM environnement WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_hebergement id, designation label FROM hebergement WHERE COALESCE(active,true) ORDER BY designation"),
-      pool.query("SELECT id_competences id, designation label FROM competences WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_competences id, designation label, id_domaine FROM competences WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_langue id, designation label FROM langue WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_niveau_langue id, designation label FROM niveau_langue ORDER BY ordre"),
       pool.query("SELECT id_region id, designation label FROM region WHERE COALESCE(active,true) ORDER BY designation"),
@@ -355,7 +355,7 @@ router.get('/:id', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN']), as
       `SELECT c.*, co.nom_contact, co.prenom_contact, co.email_contact, co.tel_contact,
                co.genre, co.date_naissance, co.nationalite,
                 co.nom_naissance,co.lieu_naissance, co.id_adresse,
-                a.adresse1,a.adresse2,a.code_postal,a.ville,a.id_pays,
+                 a.adresse1,a.adresse2,a.code_postal,a.ville,a.id_pays,pays.designation AS pays_designation,
                 ec.designation AS etat_designation,
                 f.id_fiche_de_voeux,f.flag_fiche_de_voeux_soumise,
                 f.flag_candidat_deja_mis_en_lien,f.part_seul,f.zone_orange,
@@ -366,6 +366,7 @@ router.get('/:id', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN']), as
                 f.date_voeux_definitifs,f.verrouille,f.verrouille_par,f.date_verrouillage,
                row_to_json(a) AS adresse, row_to_json(f) AS fiche_de_voeux,
                COALESCE((SELECT json_agg(x) FROM (SELECT l.*,p.niveau,p.autre_langue FROM parle p JOIN langue l ON l.id_langue=p.id_langue WHERE p.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') langues,
+                COALESCE((SELECT json_agg(x) FROM (SELECT n.*,nd.designation FROM connait_la_dcc_par n JOIN notoriete_dcc nd ON nd.id_notoriete_dcc=n.id_notoriete_dcc WHERE n.id_candidat=c.id_candidat)x),'[]') connait_la_dcc_par,
                COALESCE((SELECT json_agg(x) FROM (SELECT d.* FROM a_etudie_dans z JOIN domaine d ON d.id_domaine=z.id_domaine WHERE z.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') domaines_formation,
                COALESCE((SELECT json_agg(x) FROM (SELECT d.* FROM a_travaille_dans z JOIN domaine d ON d.id_domaine=z.id_domaine WHERE z.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') domaines_experience,
                 COALESCE((SELECT json_agg(x) FROM (SELECT r.*,z.degre FROM veut_aller_a z JOIN region r ON r.id_region=z.id_region WHERE z.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') regions,
@@ -379,7 +380,8 @@ router.get('/:id', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN']), as
        FROM candidat c
        JOIN contact co ON co.id_contact = c.id_contact
        JOIN etat_candidat ec ON ec.id_etat_candidat = c.id_etat_candidat
-       LEFT JOIN adresse a ON a.id_adresse=co.id_adresse
+        LEFT JOIN adresse a ON a.id_adresse=co.id_adresse
+        LEFT JOIN pays ON pays.id_pays=a.id_pays
        LEFT JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat
        WHERE c.id_candidat = $1`,
       [req.params.id]
@@ -416,7 +418,7 @@ router.patch('/:id/etat-civil', requireRole(RECRUITERS), async (req,res) => {
   } catch(e){await client.query('ROLLBACK');console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});} finally {client.release();}
 });
 router.patch('/:id/projet', requireRole(RECRUITERS), async (req,res) => {
-  const allowed=['engagements','annonces_recherchees','perso_depart_en_couple','perso_nom_prenom_conjoint','perso_etat_de_vie','perso_date_mariage','perso_est_parent','perso_pars_avec_enfants','projet_date_depart_souhaitee','projet_numero_offre_mission','projet_motivations','projet_questionnements','projet_avancement','projet_experience_interculturelle','projet_formation_dialogue_interculturel','projet_experience_de_volontariat','projet_raison_du_depart_avec_la_dcc','projet_attente_de_la_dcc','projet_lien_avec_une_autre_structure','projet_lien_avec_une_autre_structure_detail','profil_statut','profil_statut_administration_de_tutelle','profil_experience_engagement','profil_experience_engagement_detail','candidature_information_du_candidat','candidature_disponibilite_du_candidat','candidature_preference_session_choisir'];
+  const allowed=['engagements','annonces_recherchees','perso_depart_en_couple','perso_nom_prenom_conjoint','perso_etat_de_vie','perso_date_mariage','perso_est_parent','perso_pars_avec_enfants','projet_date_depart_souhaitee','projet_duree_mission_souhaitee','projet_numero_offre_mission','projet_motivations','projet_questionnements','projet_avancement','projet_experience_interculturelle','projet_formation_dialogue_interculturel','projet_experience_de_volontariat','projet_raison_du_depart_avec_la_dcc','projet_attente_de_la_dcc','projet_lien_avec_une_autre_structure','projet_lien_avec_une_autre_structure_detail','profil_statut','profil_statut_administration_de_tutelle','profil_experience_engagement','profil_experience_engagement_detail','candidature_information_du_candidat','candidature_disponibilite_du_candidat','candidature_preference_session_choisir'];
   const keys=allowed.filter(k=>k in req.body);
   const relationFields = ['domaines_formation', 'domaines_experience_pro'].filter((field) => Array.isArray(req.body[field]));
   if(!keys.length && !relationFields.length) return void res.status(400).json({error:'Aucun champ modifiable.'});
@@ -532,7 +534,8 @@ router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) 
         const exists=await client.query('SELECT 1 FROM region WHERE id_region=$1 AND COALESCE(active,true)',[id]);
         if(!exists.rows.length)throw new Error('REF:regions');
         const rawDegree=typeof item==='object' && item ? (item as Record<string,unknown>).degre : null;
-        const degree=rawDegree==='veut aller'||rawDegree==='ne veut pas aller'?rawDegree:null;
+        const degree=typeof rawDegree==='string' && ['P1','P2','P3','P4','P5','P6','Non'].includes(rawDegree) ? rawDegree : null;
+        if(!degree) throw new Error('REF:degré de destination');
         await client.query('INSERT INTO veut_aller_a(id_fiche_de_voeux,id_region,degre) VALUES($1,$2,$3)',[f.id_fiche_de_voeux,id,degree]);
       }
     }
@@ -646,13 +649,23 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
       ['a_la_competence_de','Compétences à mettre au service'],
       ['veut_vivre_dans','Milieu souhaité'],
       ['veut_habiter_dans','Logement'],
-      ['veut_aller_a','Destinations'],
       ['veut_partir_pour','Durée'],
     ];
     for(const [table,label] of relationChecks) {
       const count=await client.query(`SELECT 1 FROM ${table} WHERE id_fiche_de_voeux=$1 LIMIT 1`,[fiche.id_fiche_de_voeux]);
       if(!count.rows.length) missing.push(label);
     }
+    const destinationCoverage=await client.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM region WHERE COALESCE(active,true)) AS active_regions,
+         COUNT(DISTINCT va.id_region)::int AS completed_regions
+       FROM veut_aller_a va
+       JOIN region r ON r.id_region=va.id_region AND COALESCE(r.active,true)
+       WHERE va.id_fiche_de_voeux=$1
+         AND va.degre IN ('P1','P2','P3','P4','P5','P6','Non')`,
+      [fiche.id_fiche_de_voeux],
+    );
+    if(destinationCoverage.rows[0].completed_regions!==destinationCoverage.rows[0].active_regions) missing.push('Destinations');
     if(missing.length) {
       const error=new Error('MISSING') as Error & {missing?:string[]};
       error.missing=missing;
