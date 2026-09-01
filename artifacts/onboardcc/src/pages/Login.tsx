@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { authApi } from '@/api/auth';
 import { useToast } from '@/hooks/use-toast';
 
+const FORGOT_PASSWORD_MESSAGE = 'Si un compte actif correspond à cet identifiant, un lien de réinitialisation sera envoyé.';
+
 export default function Login() {
   const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
@@ -59,11 +61,12 @@ export default function Login() {
     if(!forgotLogin.trim()) return;
     setForgotSubmitting(true);
     try {
-      const message=await authApi.forgotPassword(forgotLogin.trim());
-      toast({title:'Demande envoyée',description:message});
+      await authApi.forgotPassword(forgotLogin.trim());
+      toast({title:'Demande envoyée',description:FORGOT_PASSWORD_MESSAGE});
       setForgotOpen(false);
     } catch(error:any) {
-      toast({title:'Réinitialisation impossible',description:error.response?.data?.error ?? 'Impossible de traiter la demande.',variant:'destructive'});
+      toast({title:'Demande envoyée',description:FORGOT_PASSWORD_MESSAGE});
+      setForgotOpen(false);
     } finally {
       setForgotSubmitting(false);
     }

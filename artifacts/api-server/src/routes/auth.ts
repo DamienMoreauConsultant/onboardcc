@@ -23,6 +23,7 @@ import { requireRole } from '../middleware/requireRole';
 import { sendPasswordResetEmail, smtpIsConfigured } from '../lib/candidateInvitations';
 
 const router = Router();
+const FORGOT_PASSWORD_MESSAGE = 'Si un compte actif correspond à cet identifiant, un lien de réinitialisation sera envoyé.';
 
 /**
  * POST /api/auth/login
@@ -141,7 +142,7 @@ router.post('/login', async (req, res) => {
 router.post('/mot-de-passe-oublie', async (req, res) => {
   const login = typeof req.body?.login === 'string' ? req.body.login.trim() : '';
   if (!login) return void res.status(400).json({error:'Identifiant ou email requis.'});
-  const genericMessage = 'Si un compte actif correspond à cet identifiant, un lien de réinitialisation sera envoyé.';
+  let emailForLog: string | null = null;
   try {
     const found = await pool.query(
       `SELECT u.id_user,u.active,c.email_contact,c.prenom_contact
@@ -150,8 +151,12 @@ router.post('/mot-de-passe-oublie', async (req, res) => {
        LIMIT 1`,
       [login],
     );
-    if(!found.rows.length || found.rows[0].active===false) return void res.status(202).json({message:genericMessage});
-    if(!smtpIsConfigured()) return void res.status(503).json({error:'Le service d’envoi d’email n’est pas configuré. Contactez la DCC.'});
+    if(!found.rows.length || found.rows[0].active===false) return void res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
+    emailForLog = found.rows[0].email_contact ?? null;
+    if(!smtpIsConfigured()) {
+      console.error('Erreur mot de passe oublié : SMTP non configuré', { login, email: emailForLog });
+      return void res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
+    }
     const nonce=randomBytes(24).toString('base64url');
     const nonceHash=createHash('sha256').update(nonce).digest('hex');
     const claimed=await pool.query(
@@ -162,7 +167,7 @@ router.post('/mot-de-passe-oublie', async (req, res) => {
        RETURNING id_user`,
       [nonceHash,found.rows[0].id_user],
     );
-    if(!claimed.rows.length) return void res.status(202).json({message:genericMessage});
+    if(!claimed.rows.length) return void res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
     const secret=(process.env.JWT_SECRET || process.env.SESSION_SECRET)!;
     const token=jwt.sign({purpose:'password-reset',sub:String(found.rows[0].id_user),nonce},secret,{expiresIn:'30m'});
     const frontendUrl=(process.env.FRONTEND_URL || '').replace(/\/$/,'');
@@ -170,13 +175,18 @@ router.post('/mot-de-passe-oublie', async (req, res) => {
     try {
       await sendPasswordResetEmail(found.rows[0].email_contact,found.rows[0].prenom_contact,resetUrl);
     } catch(error) {
-      await pool.query('UPDATE user_ SET password_reset_requested_at=NULL,password_reset_nonce_hash=NULL WHERE id_user=$1',[found.rows[0].id_user]);
-      throw error;
+      try {
+        await pool.query('UPDATE user_ SET password_reset_nonce_hash=NULL WHERE id_user=$1',[found.rows[0].id_user]);
+      } catch(cleanupError) {
+        console.error('Erreur nettoyage mot de passe oublié après échec d’envoi', { login, email: emailForLog, error: cleanupError });
+      }
+      console.error('Erreur envoi email mot de passe oublié', { login, email: emailForLog, error });
+      return void res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
     }
-    res.status(202).json({message:genericMessage});
+    res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
   } catch(err) {
-    console.error('Erreur mot de passe oublié :',err);
-    res.status(500).json({error:'Impossible de traiter la demande pour le moment.'});
+    console.error('Erreur technique mot de passe oublié', { login, email: emailForLog, error: err });
+    res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
   }
 });
 
