@@ -54,7 +54,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   return (
     <div className="flex h-[100dvh] w-full bg-background overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-64 bg-sidebar text-sidebar-foreground flex flex-col shadow-xl z-10 shrink-0">
+      <aside className="hidden w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground shadow-xl z-10 md:flex">
         <div className="p-6 flex items-center gap-3">
           <div className="h-10 w-10 bg-sidebar-primary rounded-md flex items-center justify-center shadow-sm">
             <span className="text-sidebar-primary-foreground font-display font-bold text-xl tracking-wider">DCC</span>
@@ -97,6 +97,30 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
 
       {/* Main content */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
+        <header className="shrink-0 border-b bg-sidebar text-sidebar-foreground md:hidden">
+          <div className="flex h-14 items-center justify-between px-4">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary">
+                <span className="font-display text-sm font-bold text-sidebar-primary-foreground">DCC</span>
+              </div>
+              <div>
+                <p className="font-display text-sm font-bold leading-none">onboard<span className="text-sidebar-primary">cc</span></p>
+                <p className="mt-1 text-[10px] uppercase tracking-wider text-sidebar-foreground/60">{user.role}</p>
+              </div>
+            </div>
+            <Button size="icon" variant="ghost" className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" onClick={logout} aria-label="Déconnexion">
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </div>
+          <nav className="flex gap-1 overflow-x-auto px-3 pb-2">
+            {navItems.map((item) => (
+              <Link key={item.href} href={item.href} className={`inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-xs font-medium ${location.startsWith(item.href) ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground/75 hover:bg-sidebar-border hover:text-sidebar-foreground'}`}>
+                <item.icon className="h-3.5 w-3.5" />
+                <span>{item.label}</span>
+              </Link>
+            ))}
+          </nav>
+        </header>
         <div className="flex-1 overflow-y-auto bg-muted/30">
           {children}
         </div>

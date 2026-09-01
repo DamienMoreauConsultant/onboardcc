@@ -1,0 +1,74 @@
+# PROMPT 2c — Correctif DCC : refonte visuelle de l'écran Poste
+# Envoyer APRÈS prompt2b (backend billet d'avion + visibilité CHZ, correctif_dcc_20260828.sql).
+# Référence : Correctif_DCC_20260826.md, issues A24, A25, A26, A27
+#             prompt2.txt §5-§6 (écrans détail poste), prompt_figma_make_maquette.txt (maquette validée)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+Ce prompt ne touche à aucune logique métier ni au scoring (prompt4) — uniquement la mise en page
+de l'écran détail poste (`/recruteur/postes/:id` et `/cm/postes/:id`), suite à la maquette Figma
+déjà validée par Damien.
+
+---
+
+## 1. Entête — réduction de hauteur (A24)
+
+Remplace l'entête actuelle par 2 lignes maximum, sans label répété inutilement :
+
+- **Ligne 1** : flèche retour discrète directement suivie du **crm_key** (ex. "POSTE-041") en
+  gras — pas de ligne "Retour à la liste" séparée, pas de ligne "Identification · #92" (ID
+  technique) séparée. Puis, sur la même ligne : badge statut (`etat_poste.designation`), type
+  (`statut_volontaire`), candidat pré-affecté (picto silhouette + nom si `candidat_preaffecte` =
+  TRUE, sinon rien), partenaire/ONG (`ong`), et le bouton d'action `[FERMER LE POSTE]`/
+  `[RÉOUVRIR LE POSTE]` s'il y a la place (sinon repasse en ligne 2 ou dans un menu, à ton
+  appréciation visuelle).
+- **Ligne 2** : fonction, pays, domaine, date de démarrage (`date_arrivee_souhaitee`, **sans
+  l'heure** — même règle que partout ailleurs dans l'app, affichage `JJ/MM/AAAA`).
+
+---
+
+## 2. Onglet "Informations générales" (renommé, ex-"Critères et conditions") — A25
+
+Renomme l'onglet. 2 sections séparées par une barre horizontale :
+
+**Section "Contacts"** — disposée en **3 colonnes**, dans cet ordre exact :
+1. **CM / CZ** (1ère colonne) : CM (via `gere_poste`, `contact.role` = `CM1` ou `CM2` — un seul
+   champ, fusionne les 2 s'il y en a 2), Chargé de zone (via `gere_poste`, `contact.role` = `CHZ`).
+2. **Contact partenaire** (2ème colonne, entre CM/CZ et Contact mission) : nom/prénom, adresse,
+   téléphone, email (via `gere_poste`, `contact.role` = `PAR`).
+3. **Contact mission** (3ème colonne) : nom/prénom, adresse, téléphone, email (via `gere_poste`,
+   `contact.role` = `MIS`).
+
+**Section "Conditions"** : date de demande (`date_demande`, **sans l'heure**), priorité
+(`priorite`), **billet d'avion** (`id_type_billet_avion` → badge, référentiel administrable
+Partenaire/DCC/Volontaire — voir prompt2b, ne construis pas ce champ en booléen), indemnité
+partenaire (`indemnite_mensuelle_partenaire`), indemnité DCC (`indemnite_mensuelle_dcc`), gîte et
+couvert (`gite_et_couvert`), hébergement (`hebergement_detail`), **deuxième poste possible —
+2 champs Oui/Non distincts** (`deuxieme_poste_possible_partenaire` et
+`deuxieme_poste_possible_alentour` — ne pas fusionner en un seul champ), **préférence de genre**
+(`preference_genre` — libellé exact "Préférence de genre", **pas** "STATUT").
+
+---
+
+## 3. Onglet "Détail du poste" — A26
+
+**Une seule colonne, un seul champ par ligne** (pas de grille multi-colonnes ici, contrairement
+aux autres onglets) :
+- **ODD lié** (`odd_lie`) — nouveau, en première ligne, mis en avant avec un petit picto.
+- Contexte de mission (`contexte_mission`).
+- Objectifs (`objectifs_mission`).
+- Tâches (`taches`).
+- Compétences (`competences_detail`).
+- Dimension ecclésiale (`dimension_ecclesial`).
+
+---
+
+## Points de vigilance
+
+- N'oublie pas d'exécuter `correctif_dcc_20260828.sql` (section "A27 — billet_avion") et le
+  backend `prompt2b_correctif_dcc_poste_backend.txt` **avant** ce prompt si ce n'est pas déjà
+  fait — ce prompt visuel suppose que `id_type_billet_avion` existe déjà.
+- Applique la même restructuration sur `/cm/postes/:id` (déjà en lecture seule côté CM, RP-12 —
+  ne change pas cette règle, seulement la mise en page).
+- Vérifie que le RBAC déjà en place (bandeau lecture seule pour le CM, actions Recruteur/Admin
+  uniquement) continue de s'appliquer correctement après cette réorganisation visuelle.

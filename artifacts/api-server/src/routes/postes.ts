@@ -749,11 +749,15 @@ router.get(
            (SELECT json_agg(json_build_object('crm_key', e.crm_key, 'designation', e.designation))
             FROM evolue_dans ed JOIN environnement e ON e.id_environnement = ed.id_environnement
             WHERE ed.id_poste = fp.id_poste)           AS environnements_json,
-           -- Contacts gestionnaires : CM1, CM2, CHZ, MIS, PAR (tableau JSON)
+            -- Contacts gestionnaires : CM1, CM2, CHZ, MIS, PAR (tableau JSON)
            (SELECT json_agg(json_build_object(
                     'id_contact', c.id_contact, 'crm_key', c.crm_key,
-                    'nom', c.nom_contact, 'prenom', c.prenom_contact, 'role', c.role))
+                     'nom', c.nom_contact, 'prenom', c.prenom_contact, 'role', c.role,
+                     'telephone', c.tel_contact, 'email', c.email_contact,
+                     'adresse1', a.adresse1, 'adresse2', a.adresse2,
+                     'code_postal', a.code_postal, 'ville', a.ville))
             FROM gere_poste gp JOIN contact c ON c.id_contact = gp.id_contact
+                  LEFT JOIN adresse a ON a.id_adresse = c.id_adresse
             WHERE gp.id_poste = fp.id_poste)           AS contacts_json,
            (SELECT json_agg(json_build_object(
                     'action', hp.action, 'commentaire', hp.commentaire,

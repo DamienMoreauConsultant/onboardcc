@@ -13,7 +13,26 @@ export type PosteRow = {
   opp_en_affectation: number;
   flag_poste_deja_mis_en_lien: boolean;
 };
-export type PosteDetail = PosteRow & Record<string, any>;
+export type PosteContact = {
+  id_contact: number;
+  crm_key: string;
+  nom: string | null;
+  prenom: string | null;
+  role: string;
+  telephone?: string | null;
+  email?: string | null;
+  adresse1?: string | null;
+  adresse2?: string | null;
+  code_postal?: string | null;
+  ville?: string | null;
+};
+export type PosteDetail = PosteRow & {
+  etat_designation: string;
+  domaine_designation: string;
+  billet_avion_designation?: string | null;
+  contacts_json?: PosteContact[] | null;
+  [key: string]: any;
+};
 export type ImportLine = { ligne: number; statut: 'ok' | 'erreur'; message: string };
 
 export const postesApi = {
