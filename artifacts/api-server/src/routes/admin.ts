@@ -42,6 +42,7 @@ const TABLES_CONFIG: Record<string, {
   domaine:           { pk: 'id_domaine',        label: 'Domaines',        editableFields: ['crm_key','designation','active'] },
   competences:       { pk: 'id_competences',    label: 'Compétences',     editableFields: ['crm_key','designation','active','id_domaine'] },
   notoriete_dcc:     { pk: 'id_notoriete_dcc',  label: 'Notoriété DCC',   editableFields: ['designation','active'] },
+  type_billet_avion: { pk: 'id_type_billet_avion', label: 'Type de billet d’avion', editableFields: ['crm_key','designation','active'] },
   etat_poste:        { pk: 'id_etat_poste',     label: 'États de poste',  editableFields: ['designation','active'] },
   etat_opportunite:  { pk: 'id_etat_opportunite',label: 'États d\'opportunité', editableFields: ['designation','active'] },
   niveau_langue:     { pk: 'id_niveau_langue',  label: 'Niveaux de langue',editableFields: ['designation','ordre'] },

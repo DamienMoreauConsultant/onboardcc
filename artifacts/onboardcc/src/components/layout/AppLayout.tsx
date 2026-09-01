@@ -21,10 +21,14 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         ];
       case 'CM1':
       case 'CM2':
-      case 'CHZ':
         return [
           { label: 'Missions', href: '/cm', icon: Briefcase },
           { label: 'Mes postes', href: '/cm/postes', icon: Briefcase },
+        ];
+      case 'CHZ':
+        return [
+          { label: 'Missions', href: '/cm', icon: Briefcase },
+          { label: 'Mes postes', href: '/recruteur/postes', icon: Briefcase },
         ];
       case 'CAN':
         return [

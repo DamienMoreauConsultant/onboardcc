@@ -1,0 +1,74 @@
+# PROMPT 2b — Correctif DCC : billet d'avion en référentiel administrable (backend uniquement)
+# Envoyer APRÈS prompt2. Ne dépend PAS de la validation Figma en cours pour l'écran Poste
+# (voir prompt_figma_make_maquette.txt) — ce prompt ne touche à aucune mise en page.
+# Référence : Correctif_DCC_20260826.md, issue A27 (gap "billet_avion")
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+⚠️ **Avant ce prompt** : exécute `correctif_dcc_20260828.sql` (section "A27 — billet_avion") s'il
+ne l'a pas déjà été — il crée la table `type_billet_avion`, la peuple avec 3 valeurs par défaut
+(Partenaire, DCC, Volontaire), ajoute `fiche_de_poste.id_type_billet_avion` (FK) et migre
+best-effort les valeurs booléennes existantes.
+
+---
+
+## 1. Contexte
+
+Le formulaire réel de fiche de poste DCC attend un **qualificatif** pour le billet d'avion
+("Partenaire", "DCC", ou occasionnellement "Volontaire" qui paie lui-même) — pas un simple
+Oui/Non. La colonne `fiche_de_poste.billet_avion` (BOOLEAN) est remplacée par
+`fiche_de_poste.id_type_billet_avion` (FK vers la nouvelle table `type_billet_avion`),
+**administrable par l'Admin** au même titre que les autres référentiels (pays, durée...).
+
+## 2. Backend
+
+1. Ajoute `type_billet_avion` à la **liste blanche** des tables administrables
+   (`routes/admin.js`, même mécanisme que les référentiels existants, prompt1) — colonnes
+   `crm_key`, `designation`, `active`, comme les autres.
+2. Toutes les routes/requêtes qui lisent ou écrivent `fiche_de_poste.billet_avion` (écran détail
+   poste, import CSV) doivent être basculées sur `id_type_billet_avion` (jointure vers
+   `type_billet_avion.designation` pour l'affichage, résolution par `crm_key` pour l'import).
+3. **Contrat d'import poste** (prompt2.txt, colonne 21 `billet_avion`) : passe de "Optional
+   (booléen)" à "Optional — résout `type_billet_avion.crm_key` → `id_type_billet_avion`", même
+   principe que les autres colonnes à résolution référentielle (pays, hébergement...).
+4. Une fois le code basculé et testé, **supprime l'ancienne colonne**
+   `fiche_de_poste.billet_avion` (BOOLEAN) — elle ne doit plus être utilisée nulle part :
+   ```sql
+   ALTER TABLE fiche_de_poste DROP COLUMN IF EXISTS billet_avion;
+   ```
+
+## 3. Écran Admin référentiels
+
+Ajoute "Type de billet d'avion" à la liste déroulante "Choisir un référentiel" de
+`/admin/referentiels` (prompt1) — aucun champ supplémentaire nécessaire (structure standard
+crm_key/designation/active), même composant générique.
+
+---
+
+## 4. Visibilité CHZ sur les postes (Correctif DCC A23, tranché 31/08/2026)
+
+Un utilisateur avec `role_applicatif = 'RECRUTEUR'` **et** `role_contact = 'CHZ'` doit avoir les
+**droits d'action** d'un Recruteur classique (routes `/recruteur/...` complètes), mais une
+**visibilité restreinte** aux seuls postes où il apparaît dans `gere_poste` — comme un CM,
+malgré des droits plus larges.
+
+Ajoute ce filtre conditionnel sur `GET /api/postes` (liste) et `GET /api/postes/:id` (détail) :
+```sql
+-- Pseudo-code : si l'utilisateur connecté a role_contact = 'CHZ', restreindre aux postes
+-- où il apparaît dans gere_poste. Sinon (REC classique), aucune restriction.
+WHERE (:role_contact != 'CHZ'
+       OR id_poste IN (SELECT id_poste FROM gere_poste WHERE id_contact = :id_contact))
+```
+Réutilise la même jointure que celle déjà construite pour `/cm/postes` (prompt2 §4) — pas de
+nouvelle logique de fond, juste une condition supplémentaire sur les routes recruteur existantes.
+**`/recruteur/candidats` n'est pas concerné** (pas de notion de rattachement à un poste précis
+côté candidat, un CZ voit tous les candidats comme un Recruteur classique).
+
+---
+
+## Points de vigilance
+
+- Ne touche à aucune mise en page de l'écran Poste dans ce prompt (header, onglets renommés) —
+  ces points sont validés séparément via Figma Make avant d'être envoyés à Replit.
+- Vérifie qu'aucune autre route ou composant frontend ne référence encore `billet_avion` (booléen)
+  avant de supprimer la colonne — grep le code avant de la dropper.

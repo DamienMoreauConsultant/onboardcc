@@ -38,6 +38,7 @@ const TABLES = [
   { id: 'etat_poste', name: 'état de poste' },
   { id: 'stages', name: 'stages' },
   { id: 'notoriete_dcc', name: 'notoriété DCC' },
+  { id: 'type_billet_avion', name: 'type de billet d’avion' },
   { id: 'etat_opportunite', name: 'état d\'opportunité' },
   { id: 'etat_candidat', name: 'état candidat' },
 ];

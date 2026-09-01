@@ -6,7 +6,8 @@
  *
  * Accès RBAC :
  *   - REC / ADMIN : liste complète, import, fermer, réouvrir
- *   - CM1 / CM2 / CHZ : liste restreinte (gere_poste uniquement), détail lecture seule
+ *   - CHZ : liste restreinte (gere_poste uniquement), mais droits d'action recruteur
+ *   - CM1 / CM2 : liste restreinte (gere_poste uniquement), détail lecture seule
  *
  * Ordre des routes : les routes statiques (/import/template, /etats)
  * sont déclarées AVANT la route dynamique /:id pour éviter les conflits.
@@ -64,6 +65,7 @@ type RefData = {
   competences: Record<string, number>;
   environnement: Record<string, number>;
   langue: Record<string, number>;
+  billetAvion: Record<string, number>;
   contacts: Record<string, number>;
 };
 
@@ -72,7 +74,7 @@ type RefData = {
  * Évite les N+1 queries pendant la validation ligne par ligne.
  */
 async function loadRefData(): Promise<RefData> {
-  const [pays, hebergement, duree, domaine, competences, environnement, langue, contacts] =
+  const [pays, hebergement, duree, domaine, competences, environnement, langue, billetAvion, contacts] =
     await Promise.all([
       pool.query('SELECT crm_key, id_pays        AS id FROM pays'),
       pool.query('SELECT crm_key, id_hebergement AS id FROM hebergement'),
@@ -81,6 +83,7 @@ async function loadRefData(): Promise<RefData> {
       pool.query('SELECT crm_key, id_competences AS id FROM competences'),
       pool.query('SELECT crm_key, id_environnement AS id FROM environnement'),
       pool.query('SELECT crm_key, id_langue      AS id FROM langue'),
+      pool.query('SELECT crm_key, id_type_billet_avion AS id FROM type_billet_avion WHERE COALESCE(active,true)'),
       pool.query('SELECT crm_key, id_contact     AS id FROM contact'),
     ]);
 
@@ -95,6 +98,7 @@ async function loadRefData(): Promise<RefData> {
     competences: toMap(competences.rows),
     environnement: toMap(environnement.rows),
     langue: toMap(langue.rows),
+    billetAvion: toMap(billetAvion.rows),
     contacts: toMap(contacts.rows),
   };
 }
@@ -161,6 +165,8 @@ function validateRow(
     errors.push(`Domaine inconnu : crm_key=${row.domaine.trim()} — créez-le d'abord`);
   if (row.langue_requise?.trim() && !refs.langue[row.langue_requise.trim()])
     errors.push(`Langue inconnue : crm_key=${row.langue_requise.trim()} — créez-le d'abord`);
+  if (row.billet_avion?.trim() && !refs.billetAvion[row.billet_avion.trim()])
+    errors.push(`Type de billet d'avion inconnu : crm_key=${row.billet_avion.trim()} — créez-le d'abord`);
 
   // Listes multi-valeurs séparées par ';'
   for (const key of (row.competences_recherchees ?? '').split(';').map((s) => s.trim()).filter(Boolean)) {
@@ -225,6 +231,16 @@ async function ensurePosteHistory(client: { query: Function }) {
   `);
 }
 
+/** Un CHZ conserve les actions recruteur, mais uniquement sur les postes qu'il gère. */
+async function chzCanAccessPoste(role: string, idContact: number, idPoste: number): Promise<boolean> {
+  if (role !== 'CHZ') return true;
+  const access = await pool.query(
+    'SELECT 1 FROM gere_poste WHERE id_poste=$1 AND id_contact=$2',
+    [idPoste, idContact],
+  );
+  return access.rows.length > 0;
+}
+
 type PosteFilterSpec = { expression: string; joins: string; conditionSql: string };
 const POSTE_FILTERS: Record<string, PosteFilterSpec> = {
   etat: {
@@ -278,7 +294,7 @@ function posteFilterSql(filters: Record<string, string[]>, startIndex: number) {
 ───────────────────────────────────────────────────────────────────── */
 router.get(
   '/import/template',
-  requireRole(['REC', 'ADMIN']),
+  requireRole(['REC', 'CHZ', 'ADMIN']),
   (_req, res) => {
     const csv = CSV_COLUMNS.join(',') + '\n';
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -343,7 +359,7 @@ router.get(
 ───────────────────────────────────────────────────────────────────── */
 router.post(
   '/import/verifier',
-  requireRole(['REC', 'ADMIN']),
+  requireRole(['REC', 'CHZ', 'ADMIN']),
   upload.single('file'),
   async (req, res) => {
     if (!req.file) {
@@ -385,7 +401,7 @@ router.post(
 ───────────────────────────────────────────────────────────────────── */
 router.post(
   '/import/executer',
-  requireRole(['REC', 'ADMIN']),
+  requireRole(['REC', 'CHZ', 'ADMIN']),
   upload.single('file'),
   async (req, res) => {
     if (!req.file) {
@@ -461,7 +477,7 @@ router.post(
           `INSERT INTO fiche_de_poste (
              crm_key, id_etat_poste, statut_volontaire, ong, candidat_preaffecte,
              nom_candidat, fonction, date_demande, date_arrivee_souhaitee, priorite,
-             billet_avion, indemnite_mensuelle_partenaire, indemnite_mensuelle_dcc,
+             id_type_billet_avion, indemnite_mensuelle_partenaire, indemnite_mensuelle_dcc,
              gite_et_couvert, hebergement_detail, preference_genre,
              deuxieme_poste_possible_partenaire, deuxieme_poste_possible_alentour,
              nouveau_poste, nom_ancien_volontaire, odd_lie,
@@ -484,7 +500,7 @@ router.post(
              date_demande                      = EXCLUDED.date_demande,
              date_arrivee_souhaitee            = EXCLUDED.date_arrivee_souhaitee,
              priorite                          = EXCLUDED.priorite,
-             billet_avion                      = EXCLUDED.billet_avion,
+             id_type_billet_avion              = EXCLUDED.id_type_billet_avion,
              indemnite_mensuelle_partenaire     = EXCLUDED.indemnite_mensuelle_partenaire,
              indemnite_mensuelle_dcc            = EXCLUDED.indemnite_mensuelle_dcc,
              gite_et_couvert                   = EXCLUDED.gite_et_couvert,
@@ -522,7 +538,7 @@ router.post(
             dateDemande.iso,
             dateDemarrage.iso,
             row.priorite?.trim()                    || null,
-            parseBool(row.billet_avion),
+            row.billet_avion?.trim() ? refs.billetAvion[row.billet_avion.trim()] : null,
             parseIntOrNull(row.indemnite_mensuelle_partenaire),
             parseIntOrNull(row.indemnite_mensuelle_dcc),
             row.gite_et_couvert?.trim()             || null,
@@ -718,6 +734,7 @@ router.get(
            fp.*,
            ep.designation   AS etat_designation,
            p.designation    AS pays_designation,
+           tba.designation  AS billet_avion_designation,
            h.designation    AS hebergement_designation,
            dur.periode      AS duree_designation,
            d.designation    AS domaine_designation,
@@ -749,6 +766,7 @@ router.get(
          JOIN hebergement h  ON h.id_hebergement    = fp.id_hebergement
          JOIN duree dur      ON dur.id_duree         = fp.id_duree
          JOIN domaine d      ON d.id_domaine         = fp.id_domaine
+         LEFT JOIN type_billet_avion tba ON tba.id_type_billet_avion = fp.id_type_billet_avion
          LEFT JOIN langue_poste lp ON lp.id_poste   = fp.id_poste
          LEFT JOIN langue l        ON l.id_langue    = lp.id_langue
          WHERE fp.id_poste = $1`,
@@ -786,13 +804,17 @@ router.get(
 ───────────────────────────────────────────────────────────────────── */
 router.patch(
   '/:id/fermer',
-  requireRole(['REC', 'ADMIN']),
+  requireRole(['REC', 'CHZ', 'ADMIN']),
   actionUpload.array('pieces_jointes', 2),
   async (req, res) => {
     const idPoste = parseInt(req.params.id as string, 10);
     if (isNaN(idPoste)) { res.status(400).json({ error: 'id_poste invalide.' }); return; }
 
     try {
+      if (!await chzCanAccessPoste(req.user!.role, req.user!.id_contact, idPoste)) {
+        res.status(403).json({ error: 'Accès refusé : vous ne gérez pas ce poste.' });
+        return;
+      }
       const current = await pool.query(
         `SELECT ep.designation FROM fiche_de_poste fp
          JOIN etat_poste ep ON ep.id_etat_poste = fp.id_etat_poste
@@ -848,13 +870,17 @@ router.patch(
 ───────────────────────────────────────────────────────────────────── */
 router.patch(
   '/:id/reouvrir',
-  requireRole(['REC', 'ADMIN']),
+  requireRole(['REC', 'CHZ', 'ADMIN']),
   actionUpload.array('pieces_jointes', 2),
   async (req, res) => {
     const idPoste = parseInt(req.params.id as string, 10);
     if (isNaN(idPoste)) { res.status(400).json({ error: 'id_poste invalide.' }); return; }
 
     try {
+      if (!await chzCanAccessPoste(req.user!.role, req.user!.id_contact, idPoste)) {
+        res.status(403).json({ error: 'Accès refusé : vous ne gérez pas ce poste.' });
+        return;
+      }
       const current = await pool.query(
         `SELECT ep.designation FROM fiche_de_poste fp
          JOIN etat_poste ep ON ep.id_etat_poste = fp.id_etat_poste

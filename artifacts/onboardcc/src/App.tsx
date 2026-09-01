@@ -42,17 +42,17 @@ function Router() {
         <RoleGuard allowedRoles={['REC']}><AppLayout><CandidatsList /></AppLayout></RoleGuard>
       </Route>
       <Route path="/recruteur/postes/import">
-        <RoleGuard allowedRoles={['REC']}>
+        <RoleGuard allowedRoles={['REC', 'CHZ']}>
           <AppLayout><PosteImport /></AppLayout>
         </RoleGuard>
       </Route>
       <Route path="/recruteur/postes/:id">
-        <RoleGuard allowedRoles={['REC']}>
+        <RoleGuard allowedRoles={['REC', 'CHZ']}>
           <AppLayout><PosteDetail mode="recruteur" /></AppLayout>
         </RoleGuard>
       </Route>
       <Route path="/recruteur/postes">
-        <RoleGuard allowedRoles={['REC']}>
+        <RoleGuard allowedRoles={['REC', 'CHZ']}>
           <AppLayout><PostesList mode="recruteur" /></AppLayout>
         </RoleGuard>
       </Route>
