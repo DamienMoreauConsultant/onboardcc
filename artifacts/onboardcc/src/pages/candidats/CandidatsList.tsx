@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, RefreshCw, Users } from 'lucide-react';
 import { candidatsApi, type CandidatRow } from '@/api/candidats';
+import { formatDateFR } from '@/lib/date';
 import { ColumnFilter } from '@/components/data-table/ColumnFilter';
 import { KpiHeader } from '@/components/data-table/KpiHeader';
 import { ScrollableTable, stickyTableHeaderClass } from '@/components/data-table/ScrollableTable';
@@ -109,7 +110,7 @@ export default function CandidatsList() {
                         <td className="px-3 py-3">{row.duree || '—'}</td>
                         <td className="px-3 py-3">{row.langues || '—'}</td>
                         <td className="px-3 py-3"><Badge variant="outline">{row.etat_designation}</Badge></td>
-                        <td className={`px-3 py-3 ${row.alerte_revue ? 'font-medium text-destructive' : ''}`}>{row.alerte_revue && <AlertTriangle className="mr-1 inline h-4 w-4" />}{row.date_revue || '—'}</td>
+                        <td className={`px-3 py-3 ${row.alerte_revue ? 'font-medium text-destructive' : ''}`}>{row.alerte_revue && <AlertTriangle className="mr-1 inline h-4 w-4" />}{formatDateFR(row.date_revue)}</td>
                         <td className="px-3 py-3 text-center">{row.opportunites_a_qualifier ?? 0}</td>
                         <td className="px-3 py-3 text-center">{row.opportunites_approuvees ?? 0}</td>
                         <td className="px-3 py-3 text-center">{row.opportunites_affectation ?? 0}</td>

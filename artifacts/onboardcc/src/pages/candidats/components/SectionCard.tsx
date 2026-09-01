@@ -9,6 +9,7 @@ import { CandidatDetail as Detail, VoeuxReferences } from '@/api/candidats';
 import { ReferenceMultiSelect } from './ReferenceMultiSelect';
 import { BooleanControl } from './BooleanControl';
 import { CompetencesProposees } from './CompetencesProposees';
+import { formatDateFR } from '@/lib/date';
 
 type Section = 'etat-civil' | 'projet' | 'voeux';
 type Field = [string, string];
@@ -87,6 +88,7 @@ function initialValue(key: string, detail: Detail): unknown {
 
 function readValue(value: unknown, key: string, refs?: VoeuxReferences): string {
   if (value === null || value === undefined || value === '') return '—';
+  if (dateFields.includes(key)) return formatDateFR(value);
   if (typeof value === 'boolean') return value ? 'Oui' : 'Non';
   if (!Array.isArray(value)) return String(value);
   if (refs) {
@@ -113,12 +115,6 @@ function parseChildren(raw: unknown): Array<Record<string, unknown>> {
   } catch {
     return [];
   }
-}
-
-function dateLabel(value: unknown) {
-  if (typeof value !== 'string' || !value) return '—';
-  const [year, month, day] = value.slice(0, 10).split('-');
-  return year && month && day ? `${day}/${month}/${year}` : value;
 }
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
@@ -370,7 +366,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
                   <SectionHeading>Famille</SectionHeading>
                   <div className="grid gap-3 md:grid-cols-2">
                     {spouse && <div className="rounded-lg bg-muted/40 p-3"><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Conjoint</dt><dd className="mt-1 text-sm">{spouse}</dd></div>}
-                    {children.length > 0 && <div className="rounded-lg bg-muted/40 p-3"><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Enfants</dt><dd className="mt-1 space-y-1 text-sm">{children.map((child, index) => <div key={index}>{[child.prenom, child.nom].filter(Boolean).join(' ') || '—'} · {String(child.genre ?? '—')} · {dateLabel(child.date_naissance ?? child.dateNaissance)}</div>)}</dd></div>}
+                    {children.length > 0 && <div className="rounded-lg bg-muted/40 p-3"><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Enfants</dt><dd className="mt-1 space-y-1 text-sm">{children.map((child, index) => <div key={index}>{[child.prenom, child.nom].filter(Boolean).join(' ') || '—'} · {String(child.genre ?? '—')} · {formatDateFR(child.date_naissance ?? child.dateNaissance)}</div>)}</dd></div>}
                   </div>
                 </section>
               );

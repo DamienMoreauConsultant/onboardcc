@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { CandidatDetail, VoeuxReferences } from '@/api/candidats';
+import { formatDateFR } from '@/lib/date';
 
 type Props = {
   detail: CandidatDetail;
@@ -35,12 +36,6 @@ const readStr = (value: unknown, key: string, refs?: VoeuxReferences) => {
     }
   }
   return value.map((item) => typeof item === 'object' && item !== null ? (item.designation ?? item.periode ?? item.type_stage ?? item.crm_key ?? '—') : String(item)).join(', ') || '—';
-};
-
-const dateLabel = (value: unknown) => {
-  if (typeof value !== 'string' || !value) return '—';
-  const [year, month, day] = value.slice(0, 10).split('-');
-  return year && month && day ? `${day}/${month}/${year}` : value;
 };
 
 export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, onReviseReview, onSave, onAction, onEditVoeux, onSubmit, refs }: Props) {
@@ -87,12 +82,12 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 pl-7 text-sm">
-          <span className="text-muted-foreground">né·e le {dateLabel(detail.date_naissance)}</span>
+          <span className="text-muted-foreground">né·e le {formatDateFR(detail.date_naissance)}</span>
           <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">{status}</Badge>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-4 pl-7">
           <p className="min-w-0 flex-1 text-sm font-medium text-muted-foreground">
-            {readStr(detail.domaines_formation, 'domaines_formation', refs)} · {readStr(detail.regions, 'regions', refs)} · Disponible le {dateLabel(detail.projet_date_depart_souhaitee ?? detail.date_depart_souhaite)} · {readStr(detail.durees, 'durees', refs)}
+            {readStr(detail.domaines_formation, 'domaines_formation', refs)} · {readStr(detail.regions, 'regions', refs)} · Disponible le {formatDateFR(detail.projet_date_depart_souhaitee ?? detail.date_depart_souhaite)} · {readStr(detail.durees, 'durees', refs)}
           </p>
           {mode === 'recruteur' && (
             <div className="flex items-end gap-2">

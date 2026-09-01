@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { candidatsApi, type CandidatDetail as Detail } from '@/api/candidats';
 import { useAuth } from '@/contexts/AuthContext';
+import { formatDateFR } from '@/lib/date';
 import { CandidatBanner } from './components/CandidatBanner';
 import { SectionCard } from './components/SectionCard';
 
@@ -324,7 +325,7 @@ export default function CandidatDetail({ mode }: Props) {
                     <div key={item.id_historique} className="rounded-lg border bg-card p-4 shadow-sm">
                       <div className="flex items-center justify-between gap-3">
                         <strong className="text-sm font-semibold">{item.designation}</strong>
-                        <span className="text-xs text-muted-foreground">{item.date_evenement?.slice(0, 10)}</span>
+                        <span className="text-xs text-muted-foreground">{formatDateFR(item.date_evenement)}</span>
                       </div>
                       <p className="mt-2 text-sm text-muted-foreground">{item.note_ecrite || '—'}</p>
                       {(item.url1_piece_jointe || item.url2_piece_jointe) && (

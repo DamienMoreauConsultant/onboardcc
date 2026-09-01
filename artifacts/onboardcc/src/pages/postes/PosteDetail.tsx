@@ -25,20 +25,12 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { postesApi, type PosteContact, type PosteDetail as PosteDetailData } from '@/api/postes';
+import { formatDateFR } from '@/lib/date';
 
 type Props = { mode: 'recruteur' | 'cm' };
 
 const closeable = ['À pourvoir', 'Pré-affecté', 'Pré-réservé', 'Réservé'];
 const reopenable = ['Pré-affecté', 'Fermé'];
-
-function formatDate(value: unknown) {
-  if (!value) return null;
-  const text = String(value);
-  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (isoMatch) return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
-  const frenchMatch = text.match(/^(\d{2})[/-](\d{2})[/-](\d{4})/);
-  return frenchMatch ? `${frenchMatch[1]}/${frenchMatch[2]}/${frenchMatch[3]}` : text.split('T')[0];
-}
 
 function displayValue(value: unknown) {
   return value === null || value === undefined || value === '' ? '—' : String(value);
@@ -187,7 +179,7 @@ export default function PosteDetail({ mode }: Props) {
             <span className="inline-flex items-center gap-1.5 font-medium text-foreground"><BriefcaseBusiness className="h-4 w-4 text-primary" aria-hidden="true" />{displayValue(poste.fonction)}</span>
             <span className="inline-flex items-center gap-1.5"><MapPin className="h-4 w-4" aria-hidden="true" />{displayValue(poste.pays_designation)}</span>
             <span>{displayValue(poste.domaine_designation)}</span>
-            <span className="inline-flex items-center gap-1.5"><CalendarDays className="h-4 w-4" aria-hidden="true" />{displayValue(formatDate(poste.date_arrivee_souhaitee))}</span>
+              <span className="inline-flex items-center gap-1.5"><CalendarDays className="h-4 w-4" aria-hidden="true" />{formatDateFR(poste.date_arrivee_souhaitee)}</span>
           </div>
         </div>
       </Card>
@@ -232,7 +224,7 @@ export default function PosteDetail({ mode }: Props) {
             </CardHeader>
             <CardContent>
               <dl className="grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-3">
-                <Field label="Date de demande" value={formatDate(poste.date_demande)} icon={CalendarDays} />
+                <Field label="Date de demande" value={formatDateFR(poste.date_demande)} icon={CalendarDays} />
                 <Field label="Priorité" value={poste.priorite} />
                 <div>
                   <dt className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground"><Plane className="h-4 w-4 text-primary" aria-hidden="true" />Billet d’avion</dt>
