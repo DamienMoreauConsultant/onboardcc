@@ -91,7 +91,7 @@ function readValue(value: unknown, key: string, refs?: VoeuxReferences): string 
   if (!Array.isArray(value)) return String(value);
   if (refs) {
     const lookup = (items: any[], id: unknown) => items.find((item) => item.id === id)?.label;
-    if (key === 'langues') return value.map((item) => `${lookup(refs.langues, item.id_langue) ?? ''} (${item.niveau || '?'})`).filter(Boolean).join(', ') || '—';
+    if (key === 'langues') return value.map((item) => `${lookup(refs.langues, item.id_langue) ?? ''} (${lookup(refs.niveauxLangue, item.id_niveau_langue) ?? item.niveau ?? '?'})`).filter(Boolean).join(', ') || '—';
     if (key === 'domaines_formation' || key === 'domaines_experience') return value.map((item) => lookup(refs.domaines, item.id ?? item.id_domaine)).filter(Boolean).join(', ') || '—';
     if (key === 'durees') return value.map((item) => lookup(refs.durees, item.id ?? item.id_duree)).filter(Boolean).join(', ') || '—';
     if (key === 'environnements') return value.map((item) => lookup(refs.environnements, item.id ?? item.id_environnement)).filter(Boolean).join(', ') || '—';
@@ -181,7 +181,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
       delete payload.connait_la_dcc_par;
     }
     if (section === 'voeux') {
-      payload.langues = (values.langues ?? []).map((item: any) => ({ id_langue: item.id_langue, niveau: item.niveau || null, autre_langue: item.autre_langue || null }));
+      payload.langues = (values.langues ?? []).map((item: any) => ({ id_langue: item.id_langue, id_niveau_langue: item.id_niveau_langue ?? null, autre_langue: item.autre_langue || null }));
       payload.competences = (values.competences ?? []).map((item: any) => ({ id: item.id ?? item.id_competences ?? item.id_competence, niveau: item.niveau || null, autre_competence: item.autre_competence || null }));
       payload.regions = regionValues.map((item) => ({ id: item.id_region, degre: item.degre }));
       for (const key of ['durees', 'environnements', 'hebergements']) payload[key] = (values[key] ?? []).map((item: any) => ({ id: idOf(item), ...(key === 'durees' && item.projet_duree_specifique ? { projet_duree_specifique: item.projet_duree_specifique } : {}) }));

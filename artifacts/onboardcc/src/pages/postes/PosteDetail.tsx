@@ -258,6 +258,8 @@ export default function PosteDetail({ mode }: Props) {
             <CardContent>
               <dl className="space-y-7">
                 <Field label="ODD lié" value={poste.odd_lie} icon={ShieldAlert} emphasis />
+                <Field label="Langue requise" value={poste.langue_designation} />
+                <Field label="Niveau requis" value={poste.langue_niveau_requis} />
                 <Field label="Contexte de mission" value={poste.contexte_mission} />
                 <Field label="Objectifs" value={poste.objectifs_mission} />
                 <Field label="Tâches" value={poste.taches} />

@@ -1,0 +1,72 @@
+# PROMPT 3d1d — Correctif DCC : harmonisation crm_key sur notoriete_dcc et niveau_langue
+# Envoyer quand tu veux, indépendant des autres correctifs en cours.
+# ⚠️ Exécute d'abord correctif_dcc_20260901_referentiels_crmkey.sql (SQL Console Replit, gratuit).
+# Référence : Correctif_DCC_20260826.md, issue A41
+#             prompt3.txt §2 (import candidat), prompt2.txt §2 (import poste), prompt1.txt (Admin)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+## Contexte
+
+`notoriete_dcc` et `niveau_langue` étaient les 2 seuls référentiels sans `crm_key`, contrairement
+à tous les autres (`pays`, `domaine`, `duree`, `langue`...). Le script SQL associé a ajouté
+`crm_key` aux deux, et transformé `parle.niveau`/`langue_poste.niveau_requis` (texte libre
+historique) en vraie clé étrangère `id_niveau_langue` — les anciennes colonnes texte existent
+encore en base en parallèle, le temps de basculer le code.
+
+---
+
+## 1. Import candidat (`routes/candidats.ts`)
+
+Contrat révisé (voir prompt3.txt §2, colonnes 27 et 36) :
+- **Colonne 27 `langues`** (`code:niveau;...`) : la partie niveau attend désormais le **crm_key**
+  de `niveau_langue` (ex. `NATIF`, `COURANT`) au lieu du libellé (`Natif`, `Courant`). Résous et
+  peuple `parle.id_niveau_langue` (FK) au lieu de `parle.niveau` (texte).
+- **Colonne 36 `connait_dcc_par`** : attend désormais le **crm_key** de `notoriete_dcc` (ex.
+  `BOUCHE_A_OREILLE`) au lieu du libellé complet. Résous `notoriete_dcc.crm_key` →
+  `connait_la_dcc_par.id_notoriete_dcc` (la FK existait déjà, seule la clé de résolution change).
+- Applique la même validation "ligne en erreur si le code n'existe pas en base" que pour les
+  autres colonnes à résolution référentielle (contrat déjà établi).
+
+## 2. Import poste (`routes/postes.ts`)
+
+Contrat révisé (voir prompt2.txt §2, colonne 13 `niveau_langue_requis`) : attend désormais le
+**crm_key** de `niveau_langue` au lieu du libellé. Résous et peuple
+`langue_poste.id_niveau_langue` (FK) au lieu de `langue_poste.niveau_requis` (texte).
+
+## 3. Affichage (frontend candidat et poste)
+
+Partout où le niveau de langue ou la notoriété DCC sont affichés (onglet Vœux — sélecteur
+`ReferenceMultiSelect` pour les langues ; onglet Dossier de candidature — "Comment connais-tu la
+DCC" ; écran poste — langue requise), affiche `niveau_langue.designation` /
+`notoriete_dcc.designation` via la jointure sur la FK — jamais le `crm_key` brut à l'écran, il
+reste un identifiant technique interne (même règle que pour tous les autres référentiels).
+
+## 4. Module Admin (`routes/admin.ts`, prompt1.txt)
+
+Ajoute `notoriete_dcc` et `niveau_langue` à la **liste blanche** des tables administrables
+(colonnes `crm_key`, `designation`, `active` — même mécanisme générique que les autres
+référentiels). ⚠️ `notoriete_dcc` a déjà une colonne `active` (ajoutée par un correctif précédent) ;
+`niveau_langue` n'en a pas — ajoute-la si l'écran Admin l'exige pour fonctionner (même schéma
+que les autres tables), sinon documente l'écart plutôt que de l'ajouter sans besoin réel.
+
+## 5. Nettoyage final (uniquement une fois les points 1-4 vérifiés et testés)
+
+Une fois le code entièrement basculé sur `id_niveau_langue`/`crm_key` et testé (import réel,
+affichage réel), supprime les anciennes colonnes texte devenues inutiles :
+```sql
+ALTER TABLE parle DROP COLUMN niveau;
+ALTER TABLE langue_poste DROP COLUMN niveau_requis;
+```
+Ne fais **pas** ce DROP avant d'avoir confirmé qu'aucune route/composant ne lit plus ces colonnes
+(grep le code avant).
+
+---
+
+## Points de vigilance
+
+- Les 2 requêtes de vérification à la fin du script SQL ("non résolus") doivent renvoyer 0 — si
+  ce n'est pas le cas, il existe des données historiques (`parle.niveau`/`langue_poste.niveau_requis`)
+  ne correspondant à aucun niveau connu (faute de frappe probable) : signale-le avant de continuer,
+  ne les supprime pas silencieusement.
+- Ne touche à aucune mise en page — uniquement la source de données affichée/résolue.

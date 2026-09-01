@@ -38,7 +38,7 @@ const CSV_COLUMNS = [
   'administration_tutelle','experience_engagement','experience_engagement_detail','info_complementaire','disponibilites_contact',
   'sessions_choisir_preference','enfant_consolide',
 ];
-type Refs = Record<'pays'|'duree'|'domaine'|'langue'|'notoriete', Record<string, number>>;
+type Refs = Record<'pays'|'duree'|'domaine'|'langue'|'niveau'|'notoriete', Record<string, number>>;
 const bool = (v?: string) => ['true', '1', 'oui', 'yes'].includes((v ?? '').trim().toLowerCase());
 const validBool = (v?: string) => ['true','false','oui','non','yes','no','1','0'].includes((v ?? '').trim().toLowerCase());
 const entries = (v?: string) => (v ?? '').split(';').map(x => x.trim()).filter(Boolean);
@@ -82,12 +82,13 @@ const CSV_LENGTH_RULES: CsvLengthRule[] = [
 const mapRows = (rows: Array<{ crm_key?: string; designation?: string; id: number }>) =>
   Object.fromEntries(rows.map(r => [(r.crm_key ?? r.designation)!, r.id]));
 async function refs(): Promise<Refs> {
-  const [pays, duree, domaine, langue, notoriete] = await Promise.all([
+  const [pays, duree, domaine, langue, niveau, notoriete] = await Promise.all([
     pool.query('SELECT crm_key,id_pays id FROM pays'), pool.query("SELECT COALESCE(to_jsonb(d)->>'designation',d.periode) designation,id_duree id FROM duree d WHERE COALESCE(active,true)"),
     pool.query('SELECT crm_key,id_domaine id FROM domaine'), pool.query('SELECT crm_key,id_langue id FROM langue'),
-    pool.query('SELECT designation,id_notoriete_dcc id FROM notoriete_dcc WHERE COALESCE(active,true)'),
+    pool.query('SELECT crm_key,id_niveau_langue id FROM niveau_langue WHERE COALESCE(active,true)'),
+    pool.query('SELECT crm_key,id_notoriete_dcc id FROM notoriete_dcc WHERE COALESCE(active,true)'),
   ]);
-  return { pays: mapRows(pays.rows), duree: mapRows(duree.rows), domaine: mapRows(domaine.rows), langue: mapRows(langue.rows), notoriete: mapRows(notoriete.rows) };
+  return { pays: mapRows(pays.rows), duree: mapRows(duree.rows), domaine: mapRows(domaine.rows), langue: mapRows(langue.rows), niveau: mapRows(niveau.rows), notoriete: mapRows(notoriete.rows) };
 }
 function headers(fields?: string[]): string | null {
   const actual = (fields ?? []).map(x => x.trim());
@@ -113,8 +114,13 @@ function validate(row: Record<string,string>, line: number, r: Refs) {
   }
   if (row.pays?.trim() && !r.pays[row.pays.trim()]) errors.push(`Pays inconnu : crm_key=${row.pays.trim()} — créez-le d'abord`);
   for (const f of ['domaines_formation','domaines_experience_pro']) for (const k of entries(row[f])) if (!r.domaine[k]) errors.push(`Domaine inconnu : crm_key=${k} — créez-le d'abord`);
-  for (const item of entries(row.langues)) { const [k, niveau] = item.split(':').map(x => x.trim()); if (!k || !niveau || !r.langue[k]) errors.push(`Langue invalide ou inconnue : ${item}`); }
-  for (const k of entries(row.connait_dcc_par)) if (!r.notoriete[k]) errors.push(`Notoriété DCC inconnue : designation=${k} — créez-la d'abord`);
+  for (const item of entries(row.langues)) {
+    const [langueKey, niveauKey] = item.split(':').map(x => x.trim());
+    if (!langueKey || !niveauKey) errors.push(`Langue invalide : ${item} — format attendu crm_key_langue:crm_key_niveau`);
+    if (langueKey && !r.langue[langueKey]) errors.push(`Langue inconnue : crm_key=${langueKey} — créez-la d'abord`);
+    if (niveauKey && !r.niveau[niveauKey]) errors.push(`Niveau de langue inconnu : crm_key=${niveauKey} — créez-le d'abord`);
+  }
+  for (const k of entries(row.connait_dcc_par)) if (!r.notoriete[k]) errors.push(`Notoriété DCC inconnue : crm_key=${k} — créez-la d'abord`);
   if (row.etat_de_vie?.trim() === 'Marié' && !row.date_mariage?.trim()) errors.push('date_mariage est requis lorsque etat_de_vie = Marié');
   if (bool(row.depart_en_couple) && !row.nom_prenom_conjoint?.trim()) errors.push('nom_prenom_conjoint est requis lorsque depart_en_couple = TRUE');
   if (bool(row.est_parent) && !row.pars_avec_enfants?.trim()) errors.push('pars_avec_enfants est requis lorsque est_parent = TRUE');
@@ -241,7 +247,7 @@ router.post('/import/executer', requireRole(['REC','ADMIN']), upload.single('fil
       if(activeDurationId) await client.query('INSERT INTO veut_partir_pour(id_fiche_de_voeux,id_duree,projet_duree_specifique) VALUES($1,$2,$3)',[idF,activeDurationId,text(row.duree_precision_si_autre)]);
       for(const k of entries(row.domaines_formation)) await client.query('INSERT INTO a_etudie_dans VALUES($1,$2)',[idF,r.domaine[k]]);
       for(const k of entries(row.domaines_experience_pro)) await client.query('INSERT INTO a_travaille_dans VALUES($1,$2)',[idF,r.domaine[k]]);
-      for(const item of entries(row.langues)){const [k,n]=item.split(':').map(x=>x.trim());await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,niveau) VALUES($1,$2,$3)',[idF,r.langue[k],n]);}
+      for(const item of entries(row.langues)){const [k,n]=item.split(':').map(x=>x.trim());await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,id_niveau_langue) VALUES($1,$2,$3)',[idF,r.langue[k],r.niveau[n]]);}
       for(const k of entries(row.connait_dcc_par)) await client.query('INSERT INTO connait_la_dcc_par(id_candidat,id_notoriete_dcc,detail,autre_designation) VALUES($1,$2,$3,$4)',[idCandidate,r.notoriete[k],text(row.connait_dcc_detail),text(row.connait_dcc_detail)]);
       const has=await client.query('SELECT 1 FROM user_ WHERE id_contact=$1',[idContact]);
       if(!has.rows.length) {
@@ -323,7 +329,7 @@ router.get('/referentiels/voeux', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMI
       pool.query("SELECT id_hebergement id, designation label FROM hebergement WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_competences id, designation label, id_domaine FROM competences WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_langue id, designation label FROM langue WHERE COALESCE(active,true) ORDER BY designation"),
-      pool.query("SELECT id_niveau_langue id, designation label FROM niveau_langue ORDER BY ordre"),
+      pool.query("SELECT id_niveau_langue id, designation label FROM niveau_langue WHERE COALESCE(active,true) ORDER BY ordre"),
       pool.query("SELECT id_region id, designation label FROM region WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_domaine id, designation label FROM domaine WHERE COALESCE(active,true) ORDER BY designation"),
     ]);
@@ -365,7 +371,7 @@ router.get('/:id', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN']), as
                 f.categorie_ecclesiale_detail,f.acces_candidat,f.date_voeux_provisoires,
                 f.date_voeux_definitifs,f.verrouille,f.verrouille_par,f.date_verrouillage,
                row_to_json(a) AS adresse, row_to_json(f) AS fiche_de_voeux,
-               COALESCE((SELECT json_agg(x) FROM (SELECT l.*,p.niveau,p.autre_langue FROM parle p JOIN langue l ON l.id_langue=p.id_langue WHERE p.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') langues,
+               COALESCE((SELECT json_agg(x) FROM (SELECT l.*,p.id_niveau_langue,nl.designation AS niveau,p.autre_langue FROM parle p JOIN langue l ON l.id_langue=p.id_langue LEFT JOIN niveau_langue nl ON nl.id_niveau_langue=p.id_niveau_langue WHERE p.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') langues,
                 COALESCE((SELECT json_agg(x) FROM (SELECT n.*,nd.designation FROM connait_la_dcc_par n JOIN notoriete_dcc nd ON nd.id_notoriete_dcc=n.id_notoriete_dcc WHERE n.id_candidat=c.id_candidat)x),'[]') connait_la_dcc_par,
                COALESCE((SELECT json_agg(x) FROM (SELECT d.* FROM a_etudie_dans z JOIN domaine d ON d.id_domaine=z.id_domaine WHERE z.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') domaines_formation,
                COALESCE((SELECT json_agg(x) FROM (SELECT d.* FROM a_travaille_dans z JOIN domaine d ON d.id_domaine=z.id_domaine WHERE z.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') domaines_experience,
@@ -564,14 +570,12 @@ router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) 
       for(const item of req.body.langues){
         const id=referenceId(item,'id_langue');
         const value=typeof item==='object' && item ? item as Record<string,unknown> : {};
-        const level=optionalText(value.niveau);
+        const levelId=referenceId(value,'id_niveau_langue');
         const ok=await client.query('SELECT 1 FROM langue WHERE id_langue=$1 AND COALESCE(active,true)',[id]);
         if(!ok.rows.length)throw new Error('REF:langues');
-        if(level){
-          const validLevel=await client.query('SELECT 1 FROM niveau_langue WHERE designation=$1',[level]);
-          if(!validLevel.rows.length)throw new Error('REF:niveau_langue');
-        }
-        await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,niveau,autre_langue) VALUES($1,$2,$3,$4)',[f.id_fiche_de_voeux,id,level,optionalText(value.autre_langue)]);
+        const validLevel=await client.query('SELECT 1 FROM niveau_langue WHERE id_niveau_langue=$1 AND COALESCE(active,true)',[levelId]);
+        if(!validLevel.rows.length)throw new Error('REF:niveau_langue');
+        await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,id_niveau_langue,autre_langue) VALUES($1,$2,$3,$4)',[f.id_fiche_de_voeux,id,levelId,optionalText(value.autre_langue)]);
       }
     }
     if(relationFields.length && !keys.length) await client.query(

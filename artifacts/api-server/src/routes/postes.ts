@@ -65,6 +65,7 @@ type RefData = {
   competences: Record<string, number>;
   environnement: Record<string, number>;
   langue: Record<string, number>;
+  niveauLangue: Record<string, number>;
   billetAvion: Record<string, number>;
   contacts: Record<string, number>;
 };
@@ -74,7 +75,7 @@ type RefData = {
  * Évite les N+1 queries pendant la validation ligne par ligne.
  */
 async function loadRefData(): Promise<RefData> {
-  const [pays, hebergement, duree, domaine, competences, environnement, langue, billetAvion, contacts] =
+  const [pays, hebergement, duree, domaine, competences, environnement, langue, niveauLangue, billetAvion, contacts] =
     await Promise.all([
       pool.query('SELECT crm_key, id_pays        AS id FROM pays'),
       pool.query('SELECT crm_key, id_hebergement AS id FROM hebergement'),
@@ -83,6 +84,7 @@ async function loadRefData(): Promise<RefData> {
       pool.query('SELECT crm_key, id_competences AS id FROM competences'),
       pool.query('SELECT crm_key, id_environnement AS id FROM environnement'),
       pool.query('SELECT crm_key, id_langue      AS id FROM langue'),
+      pool.query('SELECT crm_key, id_niveau_langue AS id FROM niveau_langue WHERE COALESCE(active,true)'),
       pool.query('SELECT crm_key, id_type_billet_avion AS id FROM type_billet_avion WHERE COALESCE(active,true)'),
       pool.query('SELECT crm_key, id_contact     AS id FROM contact'),
     ]);
@@ -98,6 +100,7 @@ async function loadRefData(): Promise<RefData> {
     competences: toMap(competences.rows),
     environnement: toMap(environnement.rows),
     langue: toMap(langue.rows),
+    niveauLangue: toMap(niveauLangue.rows),
     billetAvion: toMap(billetAvion.rows),
     contacts: toMap(contacts.rows),
   };
@@ -163,8 +166,14 @@ function validateRow(
     errors.push(`Durée inconnue : crm_key=${row.duree_mission.trim()} — créez-le d'abord`);
   if (row.domaine?.trim() && !refs.domaine[row.domaine.trim()])
     errors.push(`Domaine inconnu : crm_key=${row.domaine.trim()} — créez-le d'abord`);
-  if (row.langue_requise?.trim() && !refs.langue[row.langue_requise.trim()])
+  const hasRequiredLanguage = Boolean(row.langue_requise?.trim());
+  const hasRequiredLanguageLevel = Boolean(row.niveau_langue_requis?.trim());
+  if (hasRequiredLanguage !== hasRequiredLanguageLevel)
+    errors.push('langue_requise et niveau_langue_requis doivent être renseignés ensemble');
+  if (hasRequiredLanguage && !refs.langue[row.langue_requise.trim()])
     errors.push(`Langue inconnue : crm_key=${row.langue_requise.trim()} — créez-le d'abord`);
+  if (hasRequiredLanguageLevel && !refs.niveauLangue[row.niveau_langue_requis.trim()])
+    errors.push(`Niveau de langue inconnu : crm_key=${row.niveau_langue_requis.trim()} — créez-le d'abord`);
   if (row.billet_avion?.trim() && !refs.billetAvion[row.billet_avion.trim()])
     errors.push(`Type de billet d'avion inconnu : crm_key=${row.billet_avion.trim()} — créez-le d'abord`);
 
@@ -584,8 +593,8 @@ router.post(
         // Langue (0 ou 1 par poste — clé primaire sur id_poste)
         if (row.langue_requise?.trim() && refs.langue[row.langue_requise.trim()]) {
           await client.query(
-            'INSERT INTO langue_poste (id_poste, id_langue, niveau_requis) VALUES ($1,$2,$3)',
-            [idPoste, refs.langue[row.langue_requise.trim()], row.niveau_langue_requis?.trim() || null],
+            'INSERT INTO langue_poste (id_poste, id_langue, id_niveau_langue) VALUES ($1,$2,$3)',
+            [idPoste, refs.langue[row.langue_requise.trim()], row.niveau_langue_requis?.trim() ? refs.niveauLangue[row.niveau_langue_requis.trim()] : null],
           );
         }
 
@@ -740,7 +749,7 @@ router.get(
            d.designation    AS domaine_designation,
            l.crm_key        AS langue_crm_key,
            l.designation    AS langue_designation,
-           lp.niveau_requis AS langue_niveau_requis,
+           nl.designation   AS langue_niveau_requis,
            -- Compétences recherchées (tableau JSON)
            (SELECT json_agg(json_build_object('crm_key', c.crm_key, 'designation', c.designation))
             FROM recherche r JOIN competences c ON c.id_competences = r.id_competences
@@ -773,6 +782,7 @@ router.get(
          LEFT JOIN type_billet_avion tba ON tba.id_type_billet_avion = fp.id_type_billet_avion
          LEFT JOIN langue_poste lp ON lp.id_poste   = fp.id_poste
          LEFT JOIN langue l        ON l.id_langue    = lp.id_langue
+         LEFT JOIN niveau_langue nl ON nl.id_niveau_langue = lp.id_niveau_langue
          WHERE fp.id_poste = $1`,
         [idPoste],
       );

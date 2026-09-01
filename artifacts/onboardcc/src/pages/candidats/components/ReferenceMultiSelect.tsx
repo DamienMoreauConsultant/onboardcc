@@ -34,7 +34,7 @@ export function ReferenceMultiSelect({ options = [], value = [], onChange, mode 
       }
     } else if (mode === 'langue') {
       if (!value.find(v => itemId(v) === opt.id)) {
-        onChange([...value, { id_langue: opt.id, niveau: levelOptions[0]?.label ?? '' }]);
+        onChange([...value, { id_langue: opt.id, id_niveau_langue: levelOptions[0]?.id ?? null }]);
       }
     } else if (mode === 'competence') {
       if (!value.find(v => itemId(v) === opt.id)) {
@@ -52,7 +52,8 @@ export function ReferenceMultiSelect({ options = [], value = [], onChange, mode 
   };
 
   const updateLevel = (id: number, newVal: any) => {
-    if (mode === 'langue' || mode === 'competence') onChange(value.map(v => itemId(v) === id ? { ...v, niveau: newVal } : v));
+    if (mode === 'langue') onChange(value.map(v => itemId(v) === id ? { ...v, id_niveau_langue: Number(newVal) } : v));
+    else if (mode === 'competence') onChange(value.map(v => itemId(v) === id ? { ...v, niveau: newVal } : v));
     else if (mode === 'region') onChange(value.map(v => itemId(v) === id ? { ...v, degre: newVal } : v));
   };
 
@@ -98,13 +99,13 @@ export function ReferenceMultiSelect({ options = [], value = [], onChange, mode 
                 <span className="flex-1 text-sm">{opt.label}</span>
                 
                 {mode === 'langue' && (
-                  <Select value={String(v.niveau ?? '')} onValueChange={(val) => updateLevel(id, val)} disabled={disabled}>
+                  <Select value={String(v.id_niveau_langue ?? '')} onValueChange={(val) => updateLevel(id, val)} disabled={disabled}>
                     <SelectTrigger className="w-[140px] h-8 bg-background">
                       <SelectValue placeholder="Niveau" />
                     </SelectTrigger>
                     <SelectContent>
                       {levelOptions.map(l => (
-                        <SelectItem key={l.id} value={l.label}>{l.label}</SelectItem>
+                        <SelectItem key={l.id} value={String(l.id)}>{l.label}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
