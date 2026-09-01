@@ -20,7 +20,7 @@ const etatCivilSections: { title: string; fields: Field[] }[] = [
     fields: [
       ['nom_contact', 'Nom'], ['nom_naissance', 'Nom de naissance'], ['prenom_contact', 'Prénom'], ['genre', 'Genre'],
       ['date_naissance', 'Date de naissance'], ['lieu_naissance', 'Lieu de naissance'], ['nationalite', 'Nationalité'],
-      ['perso_etat_de_vie', 'État de vie'], ['perso_date_mariage', 'Date de mariage'],
+      ['perso_etat_de_vie', 'État de vie'],
     ],
   },
   {
@@ -64,6 +64,11 @@ const projetSections: { title: string; fields: Field[] }[] = [
 ];
 
 const booleans = ['profil_experience_engagement', 'projet_lien_avec_une_autre_structure', 'zone_orange', 'conditions_spartiates', 'hopital_proche', 'fonctionnaire_dispo_demandee', 'nouveau_poste', 'nouvelle_langue', 'part_seul'];
+const iconBooleanFields = [
+  'profil_experience_engagement', 'projet_lien_avec_une_autre_structure',
+  'fonctionnaire_dispo_demandee', 'nouvelle_langue', 'nouveau_poste',
+  'zone_orange', 'conditions_spartiates', 'hopital_proche', 'part_seul',
+];
 const structured = ['domaines_formation', 'domaines_experience'];
 const dateFields = ['date_naissance', 'perso_date_mariage', 'projet_date_depart_souhaitee', 'date_depart_souhaite'];
 const longTextFields = [
@@ -101,6 +106,12 @@ function readValue(value: unknown, key: string, refs?: VoeuxReferences): string 
     if (key === 'regions') return value.map((item) => `${lookup(refs.regions, item.id_region) ?? ''} (${item.degre || 'Non'})`).filter(Boolean).join(', ') || '—';
   }
   return value.map((item) => typeof item === 'object' && item !== null ? (item.designation ?? item.periode ?? item.type_stage ?? item.crm_key ?? '—') : String(item)).join(', ') || '—';
+}
+
+function nullableBool(value: unknown): boolean | null {
+  if (value === true || value === 'true' || value === 'Oui' || value === 'oui') return true;
+  if (value === false || value === 'false' || value === 'Non' || value === 'non') return false;
+  return null;
 }
 
 function boolValue(value: unknown) {
@@ -148,6 +159,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
     ['engagements', 'Engagements'], ['categorie_ecclesiale', 'Catégorie ecclésiale'], ['categorie_ecclesiale_detail', 'Détail de la catégorie ecclésiale'],
   ];
   const keys = section === 'voeux' ? voeuxFields.map(([key]) => key) : allFields.map(([key]) => key);
+  if (section === 'etat-civil') keys.push('perso_date_mariage');
   const [values, setValues] = useState<Record<string, any>>({});
 
   useEffect(() => {
@@ -194,6 +206,9 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
 
   const renderEditor = (key: string, label: string, forcedReadOnly = false) => {
     const allowed = editable && canEdit && !forcedReadOnly;
+    if (iconBooleanFields.includes(key)) {
+      return <BooleanControl value={nullableBool(values[key])} onChange={(value) => setValue(key, value)} disabled={!allowed} />;
+    }
     if (!allowed) return <dd className="whitespace-pre-wrap text-sm">{readValue(values[key], key, refs)}</dd>;
     if (booleans.includes(key)) return <BooleanControl value={boolValue(values[key])} onChange={(value) => setValue(key, value)} />;
     if (refs && (structured.includes(key) || ['langues', 'durees', 'environnements', 'hebergements'].includes(key))) {
@@ -281,7 +296,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
                               <SelectTrigger className="h-8 w-24 bg-background"><SelectValue /></SelectTrigger>
                               <SelectContent>{['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'Non'].map((degree) => <SelectItem key={degree} value={degree}>{degree}</SelectItem>)}</SelectContent>
                             </Select>
-                          ) : <span className="font-medium">{region.degre}</span>}
+                          ) : <span className={`font-medium ${region.degre === 'Non' ? 'text-destructive' : 'text-emerald-700'}`}>{region.degre}</span>}
                         </div>
                       ))}
                     </div>
@@ -365,7 +380,21 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
                 <section>
                   <SectionHeading>Famille</SectionHeading>
                   <div className="grid gap-3 md:grid-cols-2">
-                    {spouse && <div className="rounded-lg bg-muted/40 p-3"><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Conjoint</dt><dd className="mt-1 text-sm">{spouse}</dd></div>}
+                    {spouse && (
+                      <div className="rounded-lg bg-muted/40 p-3">
+                        <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Conjoint</dt>
+                        <dd className="mt-2 flex items-center gap-2 text-sm">
+                          {!candidateMode && (
+                            <BooleanControl value={nullableBool(detail.part_seul)} onChange={() => undefined} disabled />
+                          )}
+                          <span>{spouse}</span>
+                        </dd>
+                        <div className="mt-3">
+                          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Date du mariage</dt>
+                          {renderEditor('perso_date_mariage', 'Date du mariage')}
+                        </div>
+                      </div>
+                    )}
                     {children.length > 0 && <div className="rounded-lg bg-muted/40 p-3"><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Enfants</dt><dd className="mt-1 space-y-1 text-sm">{children.map((child, index) => <div key={index}>{[child.prenom, child.nom].filter(Boolean).join(' ') || '—'} · {String(child.genre ?? '—')} · {formatDateFR(child.date_naissance ?? child.dateNaissance)}</div>)}</dd></div>}
                   </div>
                 </section>
@@ -377,7 +406,30 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
             <section key={group.title}>
               <SectionHeading>{group.title}</SectionHeading>
               <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {group.fields.map(([key, label]) => fieldBlock(key, label, key === 'pays' || key === 'connait_la_dcc_par', longTextFields.includes(key) ? 'sm:col-span-2 lg:col-span-2' : ''))}
+                {group.fields.map(([key, label]) => {
+                  if (key === 'projet_lien_avec_une_autre_structure_detail' || key === 'profil_experience_engagement_detail') return null;
+                  if (key === 'projet_lien_avec_une_autre_structure' || key === 'profil_experience_engagement') {
+                    const detailKey = key === 'projet_lien_avec_une_autre_structure'
+                      ? 'projet_lien_avec_une_autre_structure_detail'
+                      : 'profil_experience_engagement_detail';
+                    const detailLabel = key === 'projet_lien_avec_une_autre_structure'
+                      ? 'Détail autre structure'
+                      : 'Détail des engagements';
+                    return (
+                      <div className="rounded-lg bg-muted/40 p-3 sm:col-span-2 lg:col-span-2" key={key}>
+                        <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
+                        <div className="mt-2 flex items-start gap-3">
+                          {renderEditor(key, label)}
+                          <div className="min-w-0 flex-1">
+                            <span className="text-xs text-muted-foreground">{detailLabel}</span>
+                            {renderEditor(detailKey, detailLabel)}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return fieldBlock(key, label, key === 'pays' || key === 'connait_la_dcc_par', longTextFields.includes(key) ? 'sm:col-span-2 lg:col-span-2' : '');
+                })}
               </dl>
             </section>
           ))

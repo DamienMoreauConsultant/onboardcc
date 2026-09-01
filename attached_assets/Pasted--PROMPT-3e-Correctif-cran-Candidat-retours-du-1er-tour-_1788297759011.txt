@@ -1,0 +1,116 @@
+# PROMPT 3e — Correctif écran Candidat : retours du 1er tour de tests manuels de Damien
+# Référence : Correctif_DCC_20260826.md, issues A12, A13, A15, A19, A31 (relecture de test du
+#             01/09/2026, après déploiement de prompt3d1/3d1b/3d1c/3d1d/3d2)
+#             prompt3.txt §2 (import), prompt3d2_correctif_dcc_visuel.txt (sections déjà livrées)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+Ce correctif regroupe 5 retouches visuelles trouvées lors du 1er tour de tests manuels complets
+de Damien sur l'environnement Replit. Toutes portent sur des écrans déjà livrés (prompt3d2) —
+aucun changement de schéma, d'import, ni du contrat d'interface n'est nécessaire pour ce lot
+(détail par point ci-dessous).
+
+---
+
+## 1. Onglet "État civil" — section "Famille" absente à l'écran (A12)
+
+La section "Famille" est spécifiée depuis le 31/08/2026 (`prompt3d2` section 1, suite à la
+décision A09) mais n'est pas visible sur l'écran actuellement déployé — vrai manque
+d'implémentation, pas un manque de spec. Construis-la, avec 2 ajustements par rapport à la
+spec initiale demandés par Damien après relecture :
+
+**Bloc "Conjoint"** (affiché si `candidat.perso_nom_prenom_conjoint` non vide) :
+- Un **picto (✓ ou ✗, pas de texte Oui/Non — même pattern que le picto "catégorie ecclésiale"
+  déjà livré en Avis DCC)** pour `fiche_de_voeux.part_seul`, placé **juste avant** le nom du
+  conjoint sur la même ligne (ex. "[✗] Marc Girard").
+  ⚠️ **RBAC** : `part_seul` reste RECRUTEUR SEUL (comme déjà le cas partout ailleurs où ce champ
+  apparaît). Ce picto ne doit **jamais** s'afficher sur `/candidat/etat-civil` (vue candidat) —
+  masque tout le bloc picto (garde conditionnelle sur le rôle, même principe que le bloc "Avis
+  DCC" déjà masqué côté candidat dans l'onglet Vœux). Le nom du conjoint seul reste visible côté
+  candidat.
+- **Date du mariage civile** (`candidat.perso_date_mariage`) : déplace ce champ depuis la
+  section "Identité" vers ce bloc "Conjoint" (à côté du nom du conjoint) — il concerne le
+  couple, pas l'identité individuelle du candidat. Ne l'affiche qu'une seule fois (retire-le de
+  "Identité").
+
+**Bloc "Enfants"** : inchangé par rapport à la spec initiale — parse et affiche
+`candidat.perso_enfants_consolides` (JSON), une ligne par enfant (nom/prénom/genre/date de
+naissance). Rien à afficher si absent/invalide. Jamais éditable depuis cet écran.
+
+Aucun changement de base de données, d'import ni de contrat d'interface : les 4 champs
+(`perso_nom_prenom_conjoint`, `perso_date_mariage`, `perso_enfants_consolides`, `part_seul`)
+existent déjà tous, seul l'affichage change.
+
+---
+
+## 2. Onglet "Dossier de candidature" — regroupements picto (A13)
+
+Même pattern que le picto "catégorie ecclésiale" déjà livré (✓/✗ groupé visuellement avec son
+détail, au lieu d'un texte Oui/Non sur une ligne séparée du champ détail) :
+
+- Regroupe **lien avec une autre structure** (booléen) + **détail autre structure** en un seul
+  bloc visuel (picto directement suivi du champ détail).
+- Regroupe **expérience d'engagement** (booléen) + **détail des engagements** en un seul bloc
+  visuel, même pattern.
+
+Ces 4 champs sont déjà affichés (section A et section B de l'onglet, prompt3d2 section 2) —
+retouche purement de regroupement visuel, aucun changement de champ.
+
+---
+
+## 3. Onglet "Vœux" — champs booléens : picto + suppression de l'état ambigu par défaut (A15)
+
+Les boutons Oui/Non actuels (sections B1/B2/Avis DCC) présentent un état visuel qui peut
+laisser croire qu'une valeur est déjà sélectionnée par défaut, alors qu'aucune valeur n'a
+encore été choisie par l'utilisateur. Remplace, pour tous les champs booléens suivants, le
+toggle Oui/Non actuel par le **même picto ✓/✗ que la catégorie ecclésiale** (déjà livré), avec
+un **3ème état visuel neutre explicite ("non renseigné")** tant qu'aucun choix n'a été fait par
+l'utilisateur — jamais de ✓ ou ✗ pré-affiché sans action utilisateur :
+- `fiche_de_voeux.fonctionnaire_dispo_demandee`, `nouvelle_langue`, `nouveau_poste` (B1)
+- `zone_orange`, `conditions_spartiates`, `hopital_proche` (B2)
+- `fiche_de_voeux.part_seul` (Avis DCC, RECRUTEUR SEUL — inchangé sur ce point)
+
+⚠️ Ceci est un ajustement de clarté visuelle, pas un nouveau contrôle de complétude : la
+validation obligatoire de ces champs à la soumission (aucun NULL accepté) est déjà couverte par
+`prompt3d1_correctif_dcc_backend.txt` (section 4, issue A34) — ne duplique pas cette logique
+ici, ce correctif ne touche que l'affichage frontend.
+
+---
+
+## 4. Onglet "Vœux" — zone Destinations (B3) : nettoyage et code couleur (A19)
+
+- Si un résumé/liste des destinations apparaît ailleurs sur l'onglet Vœux qu'en zone B3 (ex.
+  dans un bandeau ou un résumé en tête d'onglet), supprime-le — la zone B3 (une ligne par
+  région, sélecteur `veut_aller_a.degre`) doit rester l'**unique** endroit où les destinations
+  sont affichées.
+- Dans la zone B3, applique un code couleur sur la valeur sélectionnée de chaque région : **rouge
+  pour "Non"**, **vert pour P1 à P6** (les 6 valeurs traitées visuellement à l'identique entre
+  elles, seule "Non" se distingue par la couleur).
+
+---
+
+## 5. Espace candidat — cohérence visuelle avec la vue Recruteur (A31)
+
+Les 4 points ci-dessus doivent se répercuter automatiquement côté `/candidat/...` grâce à la
+réutilisation de composant déjà en place (`prompt3.txt` section 7 : la vue candidat réutilise
+les mêmes composants que la vue détail Recruteur). Vérifie simplement, lors des tests de ce
+correctif, que c'est bien le cas à l'écran — et en particulier :
+- Le picto `part_seul` ajouté au §1 ci-dessus **ne doit pas apparaître** sur
+  `/candidat/etat-civil` (voir garde RBAC au §1).
+- Le bloc "Avis DCC" (dont `part_seul` version Vœux) reste entièrement masqué côté candidat,
+  comme déjà spécifié.
+
+Si un écart d'affichage est constaté entre les 2 vues sur l'un des 4 points malgré la
+réutilisation de composant attendue, corrige-le comme un bug d'implémentation (pas un manque de
+spec) et signale-le dans ton rapport de complétion.
+
+---
+
+## Points de vigilance
+
+- Aucun changement de base de données, d'import, ni de contrat d'interface pour ce correctif —
+  uniquement de l'affichage frontend sur des champs déjà existants.
+- Ce prompt ne concerne que l'écran Candidat. Le correctif Poste équivalent de ce même tour de
+  tests (issue A25) est dans un fichier séparé : `prompt2d_correctif_dcc_poste_environnement.txt`.
+- Vérifie qu'aucun `confirm()`/`alert()` natif n'a été réintroduit par erreur sur ces écrans
+  (audit déjà fait au prompt3d1, section 3 — reste à zéro occurrence).

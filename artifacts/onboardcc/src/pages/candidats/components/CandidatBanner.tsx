@@ -87,7 +87,7 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
         </div>
         <div className="flex flex-wrap items-end justify-between gap-4 pl-7">
           <p className="min-w-0 flex-1 text-sm font-medium text-muted-foreground">
-            {readStr(detail.domaines_formation, 'domaines_formation', refs)} · {readStr(detail.regions, 'regions', refs)} · Disponible le {formatDateFR(detail.projet_date_depart_souhaitee ?? detail.date_depart_souhaite)} · {readStr(detail.durees, 'durees', refs)}
+            {readStr(detail.domaines_formation, 'domaines_formation', refs)} · Disponible le {formatDateFR(detail.projet_date_depart_souhaitee ?? detail.date_depart_souhaite)} · {readStr(detail.durees, 'durees', refs)}
           </p>
           {mode === 'recruteur' && (
             <div className="flex items-end gap-2">
