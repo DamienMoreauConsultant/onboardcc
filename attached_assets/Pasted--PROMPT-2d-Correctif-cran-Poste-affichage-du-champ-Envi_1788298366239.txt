@@ -1,0 +1,45 @@
+# PROMPT 2d — Correctif écran Poste : affichage du champ Environnement (A25)
+# Référence : Correctif_DCC_20260826.md, issue A25 (relecture de test du 01/09/2026)
+#             prompt2.txt (import, colonne 17 "environnement")
+#             prompt2c_correctif_dcc_poste_visuel.txt (section "Conditions", déjà livrée)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+## Contexte
+
+En testant l'onglet "Informations générales" de l'écran Poste (livré via prompt2c), Damien
+constate que le champ Environnement (ex. "milieu urbain : grande ville, banlieue" sur la fiche
+de poste papier) n'apparaît nulle part à l'écran, alors qu'il est utilisé côté candidat dans
+l'onglet Vœux (section Conditions B2, "milieu souhaité").
+
+**Bonne nouvelle : ce n'est PAS un manque de modèle de données ni d'import.** Le référentiel
+`environnement` et la table de liaison `evolue_dans` (0..N, poste ↔ environnement) existent déjà
+en base, sont déjà résolus à l'import (`prompt2.txt`, colonne 17 "environnement", `Optional,
+liste ';'`), et sont déjà utilisés côté candidat pour `veut_vivre_dans`. Il s'agit uniquement
+d'un oubli d'affichage dans la section "Conditions" de l'onglet "Informations générales" —
+aucune modification de schéma, d'import, ni du contrat d'interface n'est nécessaire.
+
+## Modification demandée
+
+Dans la section **"Conditions"** de l'onglet "Informations générales" de l'écran Poste (spec
+initiale : `prompt2c_correctif_dcc_poste_visuel.txt`, section 2), ajoute l'affichage du champ
+**Environnement** (`evolue_dans`, sélection multiple sur le référentiel `environnement`) :
+- Position suggérée : à proximité de "gîte et couvert" / "hébergement" (même thématique de
+  conditions de vie sur place), avant "préférence de genre".
+- Réutilise le composant déjà existant `ReferenceMultiSelect` (introduit au prompt3c, déjà
+  utilisé pour les compétences candidat et pour `veut_vivre_dans` côté Vœux) — même mécanisme
+  de sélection multiple avec badges, en lecture seule pour le CM (`/cm/postes/:id`, RP-12,
+  inchangé), éditable pour Recruteur/Admin.
+- Libellé du champ : "Environnement" (cohérent avec le libellé déjà utilisé côté candidat pour
+  `veut_vivre_dans` dans l'onglet Vœux, pour que le rapprochement visuel soit immédiat pour
+  l'utilisateur).
+
+## Points de vigilance
+
+- Ne touche à rien d'autre dans l'onglet "Informations générales" (sections Contacts/Conditions
+  déjà validées et déployées via prompt2c) — ce correctif est ciblé sur ce seul champ manquant.
+- Vérifie que `evolue_dans` est bien peuplé sur les données de test existantes (POSTE-041) ;
+  si ce n'est pas le cas, ce n'est pas un bug de ce correctif — l'import fonctionne, il suffit
+  que le fichier d'import contienne la colonne 17 renseignée pour ce poste.
+- Aucun changement nécessaire dans `prompt2.txt` ni dans un éventuel contrat d'interface poste
+  (le mapping existe déjà et n'est pas modifié par ce correctif, purement visuel).

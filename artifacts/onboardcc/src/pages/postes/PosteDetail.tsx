@@ -25,6 +25,8 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { postesApi, type PosteContact, type PosteDetail as PosteDetailData } from '@/api/postes';
+import { candidatsApi, type ReferenceOption } from '@/api/candidats';
+import { ReferenceMultiSelect } from '@/pages/candidats/components/ReferenceMultiSelect';
 import { formatDateFR } from '@/lib/date';
 
 type Props = { mode: 'recruteur' | 'cm' };
@@ -94,6 +96,8 @@ function ContactCard({ title, contact, roles }: { title: string; contact?: Poste
 export default function PosteDetail({ mode }: Props) {
   const [, params] = useRoute(`${mode === 'cm' ? '/cm' : '/recruteur'}/postes/:id`);
   const [poste, setPoste] = useState<PosteDetailData | null>(null);
+  const [environmentOptions, setEnvironmentOptions] = useState<ReferenceOption[]>([]);
+  const [environmentValues, setEnvironmentValues] = useState<Array<{ id: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [action, setAction] = useState<'fermer' | 'reouvrir' | null>(null);
@@ -103,9 +107,20 @@ export default function PosteDetail({ mode }: Props) {
 
   useEffect(() => {
     if (!params?.id) return;
-    void postesApi
-      .detail(Number(params.id))
-      .then(setPoste)
+    void Promise.all([postesApi.detail(Number(params.id)), candidatsApi.voeuxReferences()])
+      .then(([nextPoste, references]) => {
+        setPoste(nextPoste);
+        setEnvironmentOptions(references.environnements);
+        const environments = Array.isArray(nextPoste.environnements_json) ? nextPoste.environnements_json : [];
+        setEnvironmentValues(
+          environments
+            .map((environment: { crm_key?: string; designation?: string }) => {
+              const option = references.environnements.find((item) => item.label === environment.designation);
+              return option ? { id: option.id } : null;
+            })
+            .filter((value): value is { id: number } => value !== null),
+        );
+      })
       .catch((err: any) => setError(err?.response?.data?.error ?? 'Poste introuvable.'))
       .finally(() => setLoading(false));
   }, [params?.id]);
@@ -234,6 +249,18 @@ export default function PosteDetail({ mode }: Props) {
                 <Field label="Indemnité DCC" value={poste.indemnite_mensuelle_dcc} />
                 <Field label="Gîte et couvert" value={poste.gite_et_couvert} icon={Home} />
                 <Field label="Hébergement" value={poste.hebergement_detail} />
+                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                  <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Environnement</dt>
+                  <dd className="mt-2">
+                    <ReferenceMultiSelect
+                      options={environmentOptions}
+                      value={environmentValues}
+                      onChange={setEnvironmentValues}
+                      disabled={mode === 'cm'}
+                      placeholder="Sélectionner un environnement..."
+                    />
+                  </dd>
+                </div>
                 <Field label="Deuxième poste possible — partenaire" value={yesNo(poste.deuxieme_poste_possible_partenaire)} />
                 <Field label="Deuxième poste possible — alentours" value={yesNo(poste.deuxieme_poste_possible_alentour)} />
                 <Field label="Préférence de genre" value={poste.preference_genre} />
