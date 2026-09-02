@@ -1,0 +1,44 @@
+# Suivi PROMPT 4 — Clarification sur la qualification système (note_mission = 0)
+# Référence : test de bout en bout du 02/09/2026 (cycle de vie complet d'une opportunité)
+# ============================================================================
+
+Dans le test de bout en bout que tu viens d'exécuter, l'opportunité 192 est créée à l'étape 1
+avec `note_mission = 0`. Le rapport indique ensuite que "la qualification système a placé les
+deux opportunités dans l'état Non qualifié" avant l'étape 2 (`proposer_CM`).
+
+Or la règle de qualification (prompt4.txt §4, "Évaluation système") dit explicitement :
+```
+soumettre_voeux_definitif() →
+  pour chaque opportunité "Provisoire" de ce candidat :
+    recalculer score()
+    si note_mission >= 5/10  → état = "Non qualifié"
+    sinon                    → état = "Rejeté système", flag_opportunite_non_retenu = true
+```
+
+Avec `note_mission = 0`, le résultat attendu est **"Rejeté système"**, pas "Non qualifié".
+
+## Ce qu'il faut clarifier, avant toute correction
+
+1. **Le passage à "Non qualifié" dans ton test a-t-il été obtenu en appelant réellement la
+   fonction `soumettre_voeux_definitif()` (ou équivalent), ou en forçant l'état directement en
+   base pour simplifier la suite du scénario de test ?**
+   - Si c'est un raccourci de test (2ème cas) : ce n'est pas un bug applicatif, dis-le clairement
+     et confirme séparément, avec un test isolé et réel (candidat avec 0 compétence en commun
+     avec le poste, vœux définitifs soumis), que la vraie fonction produit bien "Rejeté système"
+     dans ce cas.
+   - Si la vraie fonction a réellement été appelée et a produit "Non qualifié" malgré
+     `note_mission = 0` : **c'est un bug réel** dans l'implémentation de la qualification
+     système — trouve la cause exacte (mauvaise condition, mauvais seuil, mauvaise variable
+     lue...) avant de corriger, comme d'habitude.
+
+2. Dans les deux cas, fournis un test réel (pas juste une relecture de code) qui prouve que :
+   - `note_mission >= 5` → "Non qualifié"
+   - `note_mission < 5` → "Rejeté système", `flag_opportunite_non_retenu = true`
+   - Aucune opportunité avec `note_mission < 5` ne peut atteindre "Proposée au CM" (le CM ne
+     doit jamais voir un candidat sans aucune compétence en commun avec le poste).
+
+## Point de vigilance
+
+N'exécute ce test que dans une transaction annulée (`ROLLBACK`), comme pour les tests
+précédents — aucune donnée ne doit être conservée. Réponds avec le résultat détaillé, pas un
+simple "corrigé"/"confirmé".
