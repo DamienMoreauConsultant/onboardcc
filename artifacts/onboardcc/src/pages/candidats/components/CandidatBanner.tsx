@@ -55,11 +55,12 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
     <Card className="border-primary/20 bg-primary/5">
       <CardContent className="space-y-3 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Link href={mode === 'recruteur' ? '/recruteur/candidats' : '/candidat'} aria-label="Retour" className="rounded-full p-1 text-muted-foreground hover:bg-background hover:text-primary">
               <ArrowLeft className="h-4 w-4" />
             </Link>
             <h1 className="truncate font-display text-2xl font-bold text-foreground">{detail.nom_contact} {detail.prenom_contact}</h1>
+            <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">{status}</Badge>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {mode === 'recruteur' ? (
@@ -80,10 +81,6 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
               </>
             )}
           </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 pl-7 text-sm">
-          <span className="text-muted-foreground">né·e le {formatDateFR(detail.date_naissance)}</span>
-          <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">{status}</Badge>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-4 pl-7">
           <p className="min-w-0 flex-1 text-sm font-medium text-muted-foreground">

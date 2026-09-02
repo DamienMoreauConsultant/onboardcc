@@ -15,10 +15,10 @@ import { formatDateFR } from '@/lib/date';
 import { CandidatBanner } from './components/CandidatBanner';
 import { SectionCard } from './components/SectionCard';
 
-type Props = { mode: 'recruteur' | 'candidat' };
 type Section = 'etat-civil' | 'projet' | 'voeux';
+type Props = { mode: 'recruteur' | 'candidat'; initialSection?: Section };
 
-export default function CandidatDetail({ mode }: Props) {
+export default function CandidatDetail({ mode, initialSection }: Props) {
   const { user } = useAuth();
   const [, params] = useRoute('/recruteur/candidats/:id');
   const [, navigate] = useLocation();
@@ -29,7 +29,7 @@ export default function CandidatDetail({ mode }: Props) {
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<Section | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [activeTab, setActiveTab] = useState(mode === 'candidat' ? 'voeux' : 'etat-civil');
+  const [activeTab, setActiveTab] = useState<Section>(initialSection ?? (mode === 'candidat' ? 'voeux' : 'etat-civil'));
   const [pendingNavigation, setPendingNavigation] = useState<{kind:'tab'|'route'|'history';value:string}|null>(null);
   const historyGuard = useRef({restoring:false,leaving:false});
   const [action, setAction] = useState<string | null>(null);
@@ -64,6 +64,12 @@ export default function CandidatDetail({ mode }: Props) {
   useEffect(() => {
     void reload();
   }, [id]);
+
+  // Dans l'espace candidat, chaque onglet possède une URL stable afin que
+  // l'État civil (et donc la section Famille) soit directement accessible.
+  useEffect(() => {
+    if (initialSection) setActiveTab(initialSection);
+  }, [initialSection]);
 
   useEffect(() => {
     setReviewDate(detail?.date_revue?.slice(0, 10) ?? '');
@@ -167,7 +173,9 @@ export default function CandidatDetail({ mode }: Props) {
       return;
     }
     setEditing(null);
-    setActiveTab(nextTab);
+    const section = nextTab as Section;
+    setActiveTab(section);
+    if (mode === 'candidat') navigate(`/candidat/${section}`);
   };
 
   const abandonChanges = () => {
@@ -175,7 +183,11 @@ export default function CandidatDetail({ mode }: Props) {
     setEditing(null);
     setDirty(false);
     setPendingNavigation(null);
-    if(pending?.kind==='tab') setActiveTab(pending.value);
+    if(pending?.kind==='tab') {
+      const section = pending.value as Section;
+      setActiveTab(section);
+      if (mode === 'candidat') navigate(`/candidat/${section}`);
+    }
     if(pending?.kind==='route') {
       historyGuard.current.leaving=true;
       navigate(pending.value,{replace:true});

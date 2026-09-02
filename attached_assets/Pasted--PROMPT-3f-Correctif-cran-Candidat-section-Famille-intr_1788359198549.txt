@@ -1,0 +1,66 @@
+# PROMPT 3f — Correctif écran Candidat : section Famille introuvable + bandeaux compactés
+# Référence : Correctif_DCC_20260826.md, issues A12, A19, A31 (relecture de test du 02/09/2026,
+#             après déploiement de prompt3e qui prétendait déjà avoir livré la section Famille)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+## 1. Section "Famille" toujours absente à l'écran (A12) — DIAGNOSTIC D'ABORD
+
+Le rapport de complétion de `prompt3e` (Section 1) affirmait avoir ajouté et testé la section
+Famille avec succès sur des données réelles (dossier candidat n°49 : conjoint + date de mariage
++ 2 enfants). En retestant, Damien constate qu'elle est **toujours absente** de l'écran État
+civil.
+
+**Ne réaffirme pas simplement que c'est fait — investigue la cause avant de recorriger :**
+1. Vérifie dans l'historique git que le code de la section Famille (ajouté par `prompt3e`) est
+   bien présent et n'a pas été écrasé/perdu par un correctif envoyé après (`prompt2d`,
+   `prompt2e`, `prompt2f` — normalement sans impact sur les écrans candidat, confirme que c'est
+   bien le cas).
+2. Reteste précisément sur le dossier candidat n°49 (même donnée que le test précédent). Si
+   toujours invisible : ouvre la console navigateur et les logs serveur au chargement de l'écran
+   État civil — erreur JavaScript silencieuse, appel API en échec, ou composant qui ne se monte
+   pas ?
+3. Vérifie si le problème est spécifique à un rôle (le bloc a-t-il pu être masqué par erreur pour
+   Recruteur en plus de Candidat, par une garde RBAC mal placée ?) ou général à tous les rôles.
+4. Rapporte dans ton rapport de complétion la cause exacte trouvée (build non redéployé, bug de
+   condition d'affichage, erreur silencieuse, autre) — pas seulement "corrigé".
+
+Une fois la cause trouvée et corrigée, revérifie l'intégralité de la spec d'origine (`prompt3e`
+Section 1, inchangée) : bloc Conjoint (picto `part_seul` recruteur seul + nom + date de mariage),
+bloc Enfants (JSON parsé), rien affiché si absent/invalide, jamais éditable.
+
+---
+
+## 2. Bandeau candidat (vue Recruteur) — compactage supplémentaire (A19)
+
+Sur la structure de bandeau livrée (prompt3d2 §4 : ligne 1 = nom, ligne 2 = naissance + badge
+d'état, ligne 3 = métadonnées), applique ces changements pour gagner 2 lignes :
+- **Supprime entièrement la mention de date de naissance** ("né·e le JJ/MM/AAAA") du bandeau.
+- **Déplace le badge d'état sur la ligne 1**, à côté du nom du candidat (au lieu de sa propre
+  ligne 2, qui disparaît).
+- Élimine tout espace vide résiduel qui apparaîtrait suite à la suppression de l'ancienne
+  ligne 2 (pas de ligne blanche ou de padding laissé par erreur).
+- La ligne des métadonnées (domaine, région, disponibilité, durée) et le bloc "Prochaine revue"
+  en bas à droite restent inchangés.
+
+---
+
+## 3. Bandeau candidat (espace candidat) — même principe (A31)
+
+Même correctif que le §2 ci-dessus, appliqué à `/candidat/...` (bandeau réutilisé via le même
+composant partagé, prompt3.txt §7) : supprime la date de naissance, badge d'état sur la ligne 1.
+Gain attendu : 1 ligne (l'espace candidat a une ligne de moins à l'origine que la vue Recruteur,
+pas de ligne "Prochaine revue").
+
+Une fois §1 corrigé, vérifie aussi que la section Famille apparaît correctement sur
+`/candidat/etat-civil` (réutilisation du même composant que la vue Recruteur), avec le picto
+`part_seul` bien absent côté candidat (garde RBAC déjà spécifiée en prompt3e §1/§5).
+
+---
+
+## Points de vigilance
+
+- Le §1 (diagnostic Famille) est le point le plus important de ce prompt — ne le traite pas
+  comme un simple "recommencer la même chose", trouve pourquoi ça n'a pas fonctionné la
+  première fois.
+- Aucun changement de base de données, d'import, ni de contrat d'interface pour ce correctif.

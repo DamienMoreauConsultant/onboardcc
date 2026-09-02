@@ -83,7 +83,13 @@ function Router() {
         </RoleGuard>
       </Route>
       <Route path="/candidat/voeux">
-        <RoleGuard allowedRoles={['CAN']}><AppLayout><CandidatDetail mode="candidat" /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['CAN']}><AppLayout><CandidatDetail mode="candidat" initialSection="voeux" /></AppLayout></RoleGuard>
+      </Route>
+      <Route path="/candidat/etat-civil">
+        <RoleGuard allowedRoles={['CAN']}><AppLayout><CandidatDetail mode="candidat" initialSection="etat-civil" /></AppLayout></RoleGuard>
+      </Route>
+      <Route path="/candidat/projet">
+        <RoleGuard allowedRoles={['CAN']}><AppLayout><CandidatDetail mode="candidat" initialSection="projet" /></AppLayout></RoleGuard>
       </Route>
 
       <Route path="/admin/referentiels">

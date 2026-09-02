@@ -119,6 +119,9 @@ function boolValue(value: unknown) {
 }
 
 function parseChildren(raw: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(raw)) {
+    return raw.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'));
+  }
   if (typeof raw !== 'string' || !raw.trim()) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -374,7 +377,9 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
             ))}
             {(() => {
               const children = parseChildren(detail.perso_enfants_consolides);
-              const spouse = detail.perso_nom_prenom_conjoint;
+              const spouse = typeof detail.perso_nom_prenom_conjoint === 'string'
+                ? detail.perso_nom_prenom_conjoint.trim()
+                : '';
               if (!spouse && children.length === 0) return null;
               return (
                 <section>
@@ -391,7 +396,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
                         </dd>
                         <div className="mt-3">
                           <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Date du mariage</dt>
-                          {renderEditor('perso_date_mariage', 'Date du mariage')}
+                          {renderEditor('perso_date_mariage', 'Date du mariage', true)}
                         </div>
                       </div>
                     )}
