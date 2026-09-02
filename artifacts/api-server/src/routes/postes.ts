@@ -19,6 +19,7 @@ import Papa from 'papaparse';
 import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
 import { parseFrenchDate } from '../lib/frenchDate';
+import { Opportunite } from '../services/matching';
 
 const router = Router();
 
@@ -631,13 +632,11 @@ router.post(
         }
       }
 
+      for (const idPoste of [...new Set(postesAffectes)]) {
+        await Opportunite.synchroniserPoste(idPoste, client);
+      }
       await client.query('COMMIT');
 
-      /**
-       * TODO (Prompt 4) : appeler matching_algo() pour chaque poste dont
-       * flag_create_opportunity = true (i.e. non pré-affectés).
-       * Les postes pré-affectés (candidat_preaffecte=true) bypassent le matching.
-       */
       console.log(`[import] Terminé — ${postesAffectes.length} poste(s) traité(s) : ids=${postesAffectes.join(',')}`);
 
       res.json({
@@ -856,6 +855,7 @@ router.patch(
         await client.query('BEGIN');
         await ensurePosteHistory(client);
         await client.query('UPDATE fiche_de_poste SET id_etat_poste = 6 WHERE id_poste = $1', [idPoste]);
+        await Opportunite.marquerObsoletesPourPoste(idPoste, client);
         await client.query(
           `INSERT INTO historique_poste (id_poste, id_contact, action, commentaire, pieces_jointes)
            VALUES ($1, $2, 'FERMETURE', $3, $4::jsonb)`,
@@ -921,7 +921,8 @@ router.patch(
       try {
         await client.query('BEGIN');
         await ensurePosteHistory(client);
-        await client.query('UPDATE fiche_de_poste SET id_etat_poste = 1 WHERE id_poste = $1', [idPoste]);
+        await client.query('UPDATE fiche_de_poste SET id_etat_poste = 1,flag_create_opportunity=true WHERE id_poste = $1', [idPoste]);
+        await Opportunite.synchroniserPoste(idPoste, client);
         await client.query(
           `INSERT INTO historique_poste (id_poste, id_contact, action, commentaire, pieces_jointes)
            VALUES ($1, $2, 'REOUVERTURE', $3, $4::jsonb)`,

@@ -21,6 +21,7 @@ import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
 import { nullableDate, parseFrenchDate } from '../lib/frenchDate';
 import { sendCandidateInvitations, smtpIsConfigured, type CandidateInvitation } from '../lib/candidateInvitations';
+import { Opportunite } from '../services/matching';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 2 } });
@@ -593,6 +594,7 @@ router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) 
        WHERE id_fiche_de_voeux=$1`,
       [f.id_fiche_de_voeux, f.id_etat_candidat],
     );
+    if(!candidate) await Opportunite.evaluerModificationVoeux(f.id_fiche_de_voeux, client);
     await client.query('COMMIT');res.json({message:'Vœux mis à jour.'});
   }catch(e:any){
     await client.query('ROLLBACK');
@@ -678,10 +680,16 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
     const author=`${req.user!.prenom} ${req.user!.nom}`;
     await client.query(
       definitive
-        ? `UPDATE fiche_de_voeux SET verrouille=true,verrouille_par=$1,date_verrouillage=CURRENT_DATE,date_voeux_definitifs=CURRENT_DATE,modifie_par=$1,date_modification=CURRENT_DATE WHERE id_fiche_de_voeux=$2`
+        ? `UPDATE fiche_de_voeux SET verrouille=true,verrouille_par=$1,date_verrouillage=CURRENT_DATE,date_voeux_definitifs=CURRENT_DATE,modifie_par=$1,date_modification=CURRENT_DATE,flag_create_opportunity=true WHERE id_fiche_de_voeux=$2`
         : `UPDATE fiche_de_voeux SET flag_fiche_de_voeux_soumise=true,verrouille=true,verrouille_par=$1,date_verrouillage=CURRENT_DATE,date_voeux_provisoires=CURRENT_DATE,modifie_par=$1,date_modification=CURRENT_DATE WHERE id_fiche_de_voeux=$2`,
       [author,fiche.id_fiche_de_voeux],
     );
+    await Opportunite.calculerDateDepartPossible(fiche.id_fiche_de_voeux, definitive, client);
+    if (definitive) {
+      await Opportunite.evaluerSoumissionDefinitive(fiche.id_fiche_de_voeux, client);
+    } else {
+      await Opportunite.creerPourCandidat(fiche.id_fiche_de_voeux, client);
+    }
     await client.query('COMMIT');
     res.json({message:definitive?'Vœux définitifs soumis.':'Vœux provisoires soumis.'});
   } catch(e:any) {

@@ -1,0 +1,454 @@
+# PROMPT 4 — Opportunité : classe objet, algorithme de scoring, écrans
+# Envoyer APRÈS validation du prompt 3
+# Référence : conception.md §6.4 (Spécification — Opportunité, le cœur de l'application)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout,
+# en particulier ce fichier : c'est le module le plus complexe de l'application.
+# ============================================================================
+
+Implémente la classe objet **Opportunité** (couple Fiche de vœux ↔ Fiche de poste), l'algorithme
+de scoring complet, et les écrans "onglet Opportunités" côté Poste et côté Candidat.
+
+Tables : `opportunite`, `etat_opportunite`, `criteres_detailles`, plus lecture croisée de
+`fiche_de_voeux` et `fiche_de_poste` et de toutes leurs tables de critères.
+
+---
+
+## 1. Référentiel `etat_opportunite` (déjà peuplé par prompt_0_sql.sql)
+
+Provisoire → Non qualifié / Rejeté système → Proposée au CM → Approuvé CM → Mise en lien →
+Accord de principe → Accepté → Affecté
+(branches de sortie : Rejeté recruteur, Rejeté CM, Refus candidat, Refus partenaire, Obsolète)
+
+⚠️ **Nuance validée DCC (10/07/2026, point 8)** : il y a en réalité **2 mécanismes distincts** de mise à
+l'écart d'une opportunité, à ne pas confondre :
+1. **État littéral "Obsolète"** (colonne `id_etat_opportunite`) : déclenché automatiquement quand une
+   opportunité "Non qualifié" n'est plus disponible (candidat ou poste disparu/réaffecté ailleurs).
+   Mécanisme inchangé, déjà correct.
+2. **Flag `flag_opportunite_obsolete`** (nouvelle colonne booléenne, à ajouter à la table `opportunite`
+   dans `prompt_0_sql.sql`) : posé par la règle R5 sur les opportunités **sœurs** (même candidat OU même
+   poste) quand une opportunité atteint "Affecté" — **sans changer leur état sous-jacent**, juste pour
+   les masquer de la vue recruteur. Contrairement à l'état "Obsolète", ce flag est **réversible** : si
+   l'opportunité "Affecté" fait l'objet d'un changement d'hypothèse (échec, non-départ), le flag repasse
+   à `false` sur les opportunités sœurs concernées (voir §4).
+
+```
+Provisoire ──(soumission vœux définitifs, note mission≥5/10)──► Non qualifié ──(proposer_CM)──► Proposée au CM
+   │
+   └─(note<5/10)──► Rejeté système
+
+Proposée au CM ──(approuver, par le CM)──► Approuvé CM ──(mettre_en_lien, par le recruteur)──► Mise en lien
+              └─(rejeter_cm)──► Rejeté CM                                                    │
+                                                                                    (accordDePrincipe, par le candidat)
+                                                                                               │
+                                                                                   Accord de principe
+                                                                                               │
+                                                                                  (accordDefinitif, par le candidat)
+                                                                                               │
+                                                                                          Accepté
+                                                                                               │
+                                                                                  (decisionDCC, par le recruteur)
+                                                                                               │
+                                                                                           Affecté
+```
+
+---
+
+## 2. Classe objet `Opportunité` *(Back)*
+
+**Constructeur** : `opportunite_new(id_fiche_de_voeux, id_poste)` — insère une ligne avec
+`id_etat_opportunite` = "Provisoire", puis appelle immédiatement `score()` (§4).
+
+**Méthodes de transition** — toutes suivent le pattern générique (popup commentaire, mise à jour
+d'état, historisation le cas échéant) :
+
+| Méthode | Rôle déclencheur | Précondition | Effet |
+|---|---|---|---|
+| `proposer_CM(id_opportunite)` | Recruteur | état = "Non qualifié", aucun flag de verrouillage posé | état → "Proposée au CM", `flag_opportunite_proposee_a_cm = true` |
+| `approuver(id_opportunite)` | Chargé de Mission | état = "Proposée au CM" | état → "Approuvé CM", `fiche_de_poste.id_etat_poste` → "Pré-réservé". **Ne pose aucun verrouillage** — plusieurs candidats peuvent être approuvés en parallèle sur un même poste (règle R3, conception.md §2.3.1) |
+| `rejeter_cm(id_opportunite)` | Chargé de Mission | état = "Proposée au CM" | état → "Rejeté CM", `flag_opportunite_non_retenu = true` |
+| `rejeter_recruteur(id_opportunite)` | Recruteur | état = "Non qualifié" | état → "Rejeté recruteur", `flag_opportunite_non_retenu = true` |
+| `mettre_en_lien(id_opportunite)` | Recruteur | état = "Approuvé CM", `fiche_de_poste.flag_poste_deja_mis_en_lien = false`, `fiche_de_voeux.flag_candidat_deja_mis_en_lien = false` | état → "Mise en lien", `flag_opportunite_retenue = true` ; candidat → "Mis en lien" + `flag_candidat_deja_mis_en_lien = true` ; poste → "Réservé" + `flag_poste_deja_mis_en_lien = true` ; insertion `etape` |
+| `accordDePrincipe(id_opportunite)` | Candidat | état = "Mise en lien" | état → "Accord de principe" ; candidat.etat → "Accord de principe" ; insertion `etape` |
+| `accordDefinitif(id_opportunite)` | Candidat | état = "Accord de principe" | état → "Accepté" ; candidat.etat → "Accepté" ; insertion `etape` (désignation = "Accepté", pas "Accord definitif") |
+| `decisionDCC(id_opportunite)` | Recruteur | état = "Accepté" | **Applique la règle R5 en entier** : opportunité → "Affecté" **ET** candidat.etat → "Affecté" **ET** `fiche_de_poste.id_etat_poste` → "Pourvu" **ET** `flag_opportunite_obsolete = true` sur **toutes les autres opportunités liées au même candidat OU au même poste** (validé DCC 10/07/2026, point 8). Insertion `etape` (désignation = "Affecté"). ⚠️ Point critique : ces mises à jour doivent être dans la **même transaction** — c'est l'aboutissement de tout le pipeline, aucune version partielle ne doit être possible |
+| `refuser_candidat(id_opportunite)` | Candidat | état ∈ {Mise en lien, Accord de principe} | état → "Refus candidat", `flag_opportunite_non_retenu = true` ; voir déverrouillage §3 |
+| `refuser_partenaire(id_opportunite)` | Recruteur (pour compte du partenaire) | état = "Accepté" | état → "Refus partenaire", `flag_opportunite_non_retenu = true` ; voir déverrouillage §3 |
+
+> ✅ **`flag_opportunite_non_retenu` — clarifié DCC (26/08/2026, point 3-b) :** flag générique posé
+> sur toute opportunité rejetée, quelle que soit la cause (refus candidat/partenaire, rejet CM/
+> recruteur, rejet système, ou annulation complète de candidature — voir `prompt3.txt`
+> `annulerCandidature()`). Sert à **simplifier le filtrage d'affichage** (§6/§7 ci-dessous) : au lieu
+> de comparer l'état à une liste, on peut filtrer directement sur ce flag. Posé aussi automatiquement
+> sur "Rejeté système" (§4, évaluation système). Repassé à `false` uniquement par la réactivation R9
+> (changement d'hypothèse, §4) — jamais par un simple refus définitif (Rejeté CM/recruteur restent
+> définitifs, contrairement aux refus candidat/partenaire qui sont réversibles via R7/R9).
+
+---
+
+## 3. Déverrouillage (`refuser_candidat` / `refuser_partenaire` — règle R7, conception.md §2.3.1)
+
+```js
+// Pseudo-code à respecter précisément — à exécuter dans une seule transaction SQL
+opportunite.flag_opportunite_retenue = false;
+candidat.etat = "Attente affectation";
+ficheDeVoeux.flag_candidat_deja_mis_en_lien = false;
+
+if (await existsAnotherOpportunite(idPoste, { etat: "Approuvé CM" })) {
+  fichePoste.id_etat_poste = "Pré-réservé";   // pas "Réservé" — aucun candidat précis engagé
+} else {
+  fichePoste.id_etat_poste = "À pourvoir";
+}
+fichePoste.flag_poste_deja_mis_en_lien = false;
+```
+
+---
+
+## 4. Création automatique des opportunités *(Back)*
+
+```
+Déclencheurs → creer_nouvelle_opportunites_candidat(id_fiche_de_voeux)
+  · candidat.soumettre_voeux_provisoire()
+  · changement_hypothese_partenaire() / changement_hypothese_candidat()
+      (réactivation R9 — un poste/candidat "terminé" redevient disponible)
+      → EN PLUS de créer de nouvelles opportunités : repasse `flag_opportunite_obsolete = false`
+        ET `flag_opportunite_non_retenu = false` sur toutes les opportunités du candidat/poste
+        concerné qui les avaient à `true` (validé DCC 10/07/2026 et 26/08/2026, points 8 et 3-b —
+        ces flags doivent être réversibles en cas de changement d'hypothèse)
+→ pour chaque poste à l'état "À pourvoir" SANS opportunité existante pour cette fiche de vœux :
+     opportunite_new(id_fiche_de_voeux, id_poste)   # état initial "Provisoire", score() appelé
+
+Déclencheurs → creer_nouvelle_opportunites_poste(id_poste)
+  · import d'un **nouveau** poste (`crm_key` inconnu → `INSERT`, `flag_create_opportunity =
+    true` posé par prompt2f)
+  · changement_hypothese_partenaire() / changement_hypothese_candidat()
+→ pour chaque candidat non affecté SANS opportunité existante pour ce poste :
+     opportunite_new(id_fiche_de_voeux, id_poste)
+→ remet `flag_create_opportunity = false` une fois traité.
+```
+
+---
+
+## 4bis. Recalcul suite à mise à jour d'un poste existant *(Back)* — ⚠️ révisé 02/09/2026 (A25)
+
+Le CRM est le référentiel maître des postes en V1 (import CSV, ENF-12/V1) — c'est le **seul**
+canal de mise à jour d'un poste (tranché par Damien 02/09/2026 : pas d'édition manuelle des
+critères d'un poste dans Passerelle aujourd'hui). Toute mise à jour réelle d'un poste doit se
+répercuter sur le scoring des opportunités déjà existantes pour ce poste, sans attendre une
+nouvelle soumission de vœux côté candidat.
+
+**Mécanisme — dérivé de 2 dates sur `fiche_de_poste`, pas d'un flag maintenu manuellement**
+(plus robuste : ne peut pas se désynchroniser d'un oubli de mise à jour du flag quelque part
+dans le code) :
+- `date_maj_crm` : dernière date de modification transmise par le CRM (prompt2f, colonne 42 de
+  l'import — écrite telle quelle à chaque import, sans aucune logique).
+- `date_dernier_recalcul_score` : **filigrane** — reçoit la *valeur* de `date_maj_crm` utilisée
+  lors du dernier recalcul (jamais la date système du jour où le job a tourné, sinon la
+  comparaison casse si le recalcul est différé après l'import).
+
+**Découplé de l'import** : ce mécanisme ne dépend d'aucun flag posé par `prompt2f` — après
+chaque import (ou périodiquement, au choix de l'implémentation, mais immédiatement après
+l'import suffit largement au volume de la DCC), pour chaque poste **importé lors de ce batch** :
+
+```sql
+-- ⚠️ IS DISTINCT FROM, PAS != ni <> : gère correctement le cas date_dernier_recalcul_score IS NULL
+-- (poste jamais encore recalculé via ce mécanisme) — avec !=, une comparaison à NULL renvoie
+-- NULL et exclurait silencieusement la ligne du résultat au lieu de la traiter.
+SELECT id_poste FROM fiche_de_poste
+WHERE date_maj_crm IS DISTINCT FROM date_dernier_recalcul_score
+  AND id_poste IN (:postes_impactes_par_cet_import)
+```
+
+```
+pour chaque id_poste trouvé :
+  pour chaque opportunité de ce poste dont l'état n'est PAS terminal
+  (exclut : état = "Affecté", flag_opportunite_non_retenu = true, flag_opportunite_obsolete =
+   true — même exclusion que le filtre d'affichage §6/§7) :
+    recalculer score()
+    # pas de transition d'état automatique ici (contrairement à soumettre_voeux_definitif()) —
+    # seule la note change, l'état reste piloté par les actions du recruteur/CM/candidat
+  fiche_de_poste.date_dernier_recalcul_score = fiche_de_poste.date_maj_crm
+```
+
+⚠️ `criteres_detailles` : chaque recalcul insère une nouvelle ligne par critère (horodatée),
+l'ancienne ligne reste en base pour l'audit — ne jamais l'écraser.
+
+**Évaluation système** (déclenchée à la soumission des vœux définitifs) :
+
+```
+soumettre_voeux_definitif() →
+  pour chaque opportunité "Provisoire" de ce candidat :
+    recalculer score()
+    si note_mission >= 5/10  → état = "Non qualifié"
+    sinon                    → état = "Rejeté système", flag_opportunite_non_retenu = true
+```
+
+**Recalcul suite à modification recruteur** (`SaveFichedeVoeux()`, prompt3) :
+
+```
+pour chaque opportunité "Non qualifié" de ce candidat :
+  recalculer score()
+  si note_mission tombe < 5/10 → état = "Rejeté système"
+  # pas de trajet inverse ici — seule une nouvelle soumission complète des vœux définitifs
+  # réévalue une opportunité "Rejeté système" vers "Non qualifié"
+```
+
+⚠️ **Aucune opportunité ne passe automatiquement en "Proposée au CM"**, même à score maximal —
+cette transition reste toujours une action manuelle du recruteur (`proposer_CM`).
+
+---
+
+## 5. Algorithme de scoring — `score(id_opportunite)` *(le module le plus important de ce prompt)*
+
+**Toutes les notes doivent être des variables lues depuis `.env`, jamais codées en dur**
+(ex. `NOTE_REGION_TROUVE=10`) — la DCC doit pouvoir les ajuster sans toucher au code.
+
+Pour **chaque critère** évalué, insère une ligne dans `criteres_detailles` (`critere`, `valeur_poste`,
+`valeur_candidat`, `note_obtenue`, `date_evaluation`) — c'est la trace d'audit du calcul.
+
+```js
+// services/matching.js — appelé à chaque création d'opportunité, modification de vœux ou de poste
+async function score(idOpportunite) {
+  const voeux = await getFicheDeVoeux(idOpportunite);
+  const poste = await getFichePoste(idOpportunite);
+
+  const noteRegion        = scoringRegion(voeux, poste);
+  const noteDateDepart    = scoringDateDepart(voeux, poste);  // utilise fiche_de_voeux.date_depart_possible
+  const noteEnvironnement = scoringEnvironnement(voeux, poste);
+  const noteLogement      = scoringLogementCouple(voeux, poste);
+  const noteDuree         = scoringDuree(voeux, poste);
+  const noteLangue        = scoringLangue(voeux, poste);
+  const noteCompetences   = scoringCompetences(voeux, poste);
+  const noteZoneOrange    = scoringZoneOrange(voeux, poste);
+  const noteSpartiate     = scoringConditionSpartiate(voeux, poste);
+  const noteHopital       = scoringHopitalProche(voeux, poste);
+
+  const noteContexte = moyenne([noteRegion, noteEnvironnement, noteLogement, noteDuree, noteLangue]);
+  const noteMission  = noteCompetences;
+  const noteWarning  = Math.min(noteZoneOrange, noteHopital, noteSpartiate);
+
+  await updateOpportunite(idOpportunite, { noteContexte, noteMission, noteWarning });
+}
+
+// Chaque fonction scoringXxx() doit aussi écrire sa ligne dans criteres_detailles
+// (critere, valeur_poste, valeur_candidat, note_obtenue, date_evaluation) — voir règle ci-dessous.
+```
+
+### Règles détaillées par critère
+
+**Région** (utilise `veut_aller_a.degre`) — ⚠️ **révisé 01/09/2026 (Correctif DCC, points A18/A28,
+puis barème affiné le même jour)** : depuis la refonte de l'onglet Vœux, `degre` a exactement
+**7 valeurs possibles** : `P1` à `P6` (préférences classées) ou `Non` (ne veut pas y aller). La
+fiche de vœux impose une valeur pour **chaque** région active du référentiel (plus de case
+neutre/non renseignée — voir prompt3d2 §3). Un poste appartient à un **pays unique**, qui
+appartient lui-même à une **région unique** (`pays.id_region`, cardinalité 1,1 côté Pays dans le
+MCD) — la région du poste n'est donc jamais ambiguë : pas de "meilleur score parmi plusieurs
+régions" à calculer ici (contrairement à Environnement/Durée ci-dessous, où c'est le *candidat*
+qui multi-sélectionne, pas le poste). Note calculée directement à partir du degré donné par le
+candidat à cette région précise, sur 4 paliers :
+```
+si degre(region_du_poste) ∈ {P1, P2} → 10
+si degre(region_du_poste) ∈ {P3, P4} → 7
+si degre(region_du_poste) ∈ {P5, P6} → 3
+si degre(region_du_poste) == "Non"   → 0
+```
+
+**Date de départ** *(règle révisée et validée DCC 26/08/2026 — remplace toute version antérieure)* :
+
+D'abord, calculer la **date de départ possible** du candidat (fonction `dateDepartPossible()`,
+validée DCC — point 12) :
+
+```js
+// Constantes — à rendre facilement modifiables (la DCC prévient que les mois de session
+// Choisir peuvent changer un jour) :
+const STAGES_DEPART = [
+  { moisStage: 1, moisDepart: 2 },   // stage Janvier → départ Février
+  { moisStage: 7, moisDepart: 8 },   // stage Juillet → départ Août
+];                                    // fixes, pas prévus de changer
+const SESSIONS_CHOISIR_MOIS = [3, 6, 10];  // Mars, Juin, Octobre — révisables
+const DELAI_MIN_AVANT_STAGE_MOIS = 1;
+const DELAI_MIN_AVANT_SESSION_CHOISIR_SEMAINES = 4;
+
+// ⚠️ RÈGLE ABSOLUE, validée DCC 26/08/2026 (point 12) : on ne raisonne JAMAIS en jours ici, QUE
+// en mois. Une date comme 15/06/2026 est STRICTEMENT ÉQUIVALENTE à 06/2026 — le jour du mois est
+// ignoré partout dans cette fonction et dans tout ce qui en découle. Convertir systématiquement
+// toute date en un entier "moisIndex = année*12 + mois" pour comparer/calculer, jamais en
+// comparant des objets Date bruts (qui, eux, comparent aussi le jour et fausseraient le résultat).
+
+function moisIndex(dateOuMoisAnnee) {
+  // Convertit une date quelconque (ex. 15/06/2026) en entier "année*12+mois" — le jour est
+  // toujours ignoré, jamais utilisé dans le calcul.
+  return dateOuMoisAnnee.getFullYear() * 12 + dateOuMoisAnnee.getMonth();
+}
+function moisIndexVersDate(moisIndex) {
+  // Reconversion en objet Date pour stockage — jour TOUJOURS fixé au 1er du mois, jamais un
+  // autre jour, précisément pour ne jamais réintroduire une notion de jour précis.
+  return new Date(Math.floor(moisIndex / 12), moisIndex % 12, 1);
+}
+
+function dateDepartPossible(voeux, dateSysteme) {
+  if (voeux.date_voeux_definitifs !== null) {  // vœux définitifs déjà soumis (colonne existante)
+    const stage = premierStageAvecDelai(moisIndex(dateSysteme), DELAI_MIN_AVANT_STAGE_MOIS, STAGES_DEPART);
+    return stage.moisDepartIndex; // entier mois/année
+  } else {  // vœux provisoires
+    const session = premiereSessionAvecDelai(moisIndex(dateSysteme), DELAI_MIN_AVANT_SESSION_CHOISIR_SEMAINES);
+    const stage = premierStageApres(session, STAGES_DEPART);
+    return stage.moisDepartIndex; // entier mois/année
+  }
+}
+// premierStageAvecDelai / premiereSessionAvecDelai / premierStageApres : travaillent uniquement
+// sur des moisIndex (entiers), cherchent l'occurrence suivante en respectant le délai minimum
+// (exprimé aussi en mois, ex. 4 semaines ≈ 1 mois), en bouclant sur l'année suivante si besoin.
+
+// Résultat stocké dans fiche_de_voeux.date_depart_possible (colonne ajoutée 26/08/2026,
+// prompt_0_sql.sql), recalculé à chaque soumission de fiche de vœux, modifiable manuellement
+// par le recruteur (point 12). Le MAX se fait sur les moisIndex (entiers), PAS sur les objets
+// Date bruts — sinon un vœu souhaité au 15/06/2026 comparé à un stage calculé au 01/06/2026
+// donnerait à tort le 15/06/2026 comme résultat, réintroduisant une notion de jour :
+const moisIndexFinal = Math.max(
+  dateDepartPossible(voeux, dateSysteme),
+  moisIndex(voeux.date_depart_souhaite)
+);
+fiche_de_voeux.date_depart_possible = moisIndexVersDate(moisIndexFinal); // toujours le 1er du mois
+```
+
+Puis, comparer `fiche_de_voeux.date_depart_possible` à `date_arrivee_souhaitee(poste)` — **les deux
+convertis en `moisIndex` avant toute comparaison**, jamais en comparant les objets Date bruts (le
+jour du mois de `date_arrivee_souhaitee`, tel que saisi dans le CRM/l'import poste, doit lui aussi
+être ignoré) :
+
+```
+diff = Math.abs(moisIndex(fiche_de_voeux.date_depart_possible) - moisIndex(fiche_de_poste.date_arrivee_souhaitee))
+# ex. 09/2026 vs 08/2026 → diff = 1, peu importe le jour exact de chaque date en base
+
+diff = 0        → 10
+diff = 1        → 9
+diff ≤ 3        → 5
+diff ≤ 6        → 2
+sinon           → 0
+```
+
+**Environnement** — ⚠️ **révisé 01/09/2026 suite au test A25** : `evolue_dans` (poste ↔
+environnement) est une table de liaison 0..N en base (clé composite `id_environnement,
+id_poste`), mais **en pratique un poste n'a jamais qu'une seule valeur d'environnement
+renseignée** (le référentiel bundle déjà les nuances proches dans une seule désignation, ex.
+"Urbain, grande ville" couvre aussi banlieue). Côté candidat, `veut_vivre_dans` reste un
+multi-choix réel (0..N). Aucun changement de schéma ni d'écran nécessaire pour ce point —
+uniquement l'algorithme de scoring, qui doit rester correct même dans le cas théorique où un
+poste aurait plusieurs valeurs :
+```js
+// Pour chaque valeur d'environnement du poste (evolue_dans, généralement une seule en pratique)
+// et pour chaque choix du candidat (veut_vivre_dans), calcule le score de la paire, puis garde
+// le MEILLEUR score obtenu sur l'ensemble des paires (pas une moyenne) :
+pour chaque valeur poste :
+  pour chaque choix candidat :
+    si valeur poste == choix candidat                    → 10
+    sinon si écart de 1 niveau (`environnement.niveau`)   → 5
+    sinon                                                  → 0
+noteEnvironnement = MAX de tous les scores obtenus
+```
+
+**Logement / Couple** *(règle MATCH-01, conception.md §2.4.2)* :
+```
+si fiche_de_voeux.part_seul :
+    logement du poste dans les choix du candidat (veut_habiter_dans) → 10, sinon 0
+sinon (candidat part en couple/famille) :
+    si fiche_de_poste.deuxieme_poste_possible_partenaire → 9
+    sinon si fiche_de_poste.deuxieme_poste_possible_alentour → 5
+    sinon → 0
+```
+
+**Durée mission** — ⚠️ **précisé 01/09/2026, même principe qu'Environnement** : le poste a une
+durée unique (`fiche_de_poste.id_duree`, `NOT NULL`), le candidat peut multi-sélectionner
+plusieurs durées acceptées (`veut_partir_pour`, 0..N). Pour chaque durée choisie par le
+candidat, calcule le score par rapport à la durée du poste (`duree.niveau`), garde le
+**meilleur** score obtenu :
+```js
+pour chaque durée choisie par le candidat (veut_partir_pour) :
+  si match exact avec la durée du poste       → 10
+  sinon si écart d'1 niveau (`duree.niveau`)   → 5
+  sinon                                         → 0
+noteDuree = MAX de tous les scores obtenus
+```
+
+**Langue** — ⚠️ **vérifié 01/09/2026** : contrairement à Environnement/Durée, pas d'asymétrie à
+traiter ici — `langue_poste.id_poste` est la clé primaire de la table (pas de clé composite), un
+poste ne peut donc exiger qu'**une seule** langue dans le modèle actuel. Règle inchangée :
+```
+si la langue requise par le poste (langue_poste) fait partie des langues parlées du candidat (parle) :
+    si même niveau → 10
+    sinon           → 7
+sinon si fiche_de_voeux.nouvelle_langue == true → 5
+sinon → 0
+```
+
+**Compétences** *(→ alimente note_mission directement)* :
+```
+si TOUTES les compétences demandées (table recherche) sont couvertes par le candidat (a_la_competence_de) → 10
+sinon si AU MOINS UNE compétence demandée est couverte → 7
+sinon si un domaine de compétence est couvert par a_etudie_dans/a_travaille_dans → 5
+sinon → 0
+```
+
+**Zone orange** : poste hors zone orange (`flag_zone_orange = false`) OU candidat accepte (`fiche_de_voeux.zone_orange = true`) → 10, sinon 0.
+
+**Condition spartiate** : poste sans conditions spartiates OU candidat les accepte → 10, sinon 0.
+
+**Hôpital proche** : poste avec hôpital proche (`flag_hopital_proche = true`) OU candidat n'exige
+pas cette condition (`fiche_de_voeux.hopital_proche = false`) → 10, sinon 0.
+
+---
+
+## 6. Écran — Onglet "Opportunités" côté Poste *(Front · Recruteur/CM)*
+
+Dans `/recruteur/postes/:id` et `/cm/postes/:id`, onglet "Liste des opportunités" :
+- Colonne gauche statique : rappel des critères du poste utilisés pour l'évaluation (date, région,
+  environnement, hébergement, langue/niveau requis, zone orange, conditions spartiates, compétences).
+- Colonne droite : liste des opportunités — Nom du candidat, Note contexte, Note mission, Note et
+  évaluation du recruteur.
+
+**Règle d'affichage validée DCC (10/07/2026, point 9) — remplace toute version antérieure :**
+1. Si une opportunité de ce poste (ou de ce candidat, côté §7) est à l'état "Accepté" : n'afficher
+   **qu'elle seule** (les autres sont de toute façon `flag_opportunite_obsolete = true` par R5, voir §2).
+2. Sinon, si une opportunité est dans un état ∈ {"Mise en lien", "Accord de principe"} : elle
+   s'affiche **en haut, en surbrillance**, avec une séparation visuelle marquée par rapport aux
+   autres opportunités listées en dessous.
+3. Sinon : liste normale, aucune opportunité mise en avant.
+- Dans tous les cas, **tri par note décroissante** (note_mission) au sein de chaque groupe.
+- **Masquées par défaut** (toggle "Tout afficher" pour les révéler) : les opportunités dont
+  `flag_opportunite_obsolete = true` **OU** `flag_opportunite_non_retenu = true` (ce 2e flag
+  couvre à lui seul tous les cas de rejet/refus/annulation — plus simple que de comparer l'état à
+  une liste, voir §2), et celles dont note_mission < 5/10.
+- **Affichage de l'état quand `flag_opportunite_obsolete = true`** (précisé DCC 26/08/2026,
+  point 8) : **l'état sous-jacent réel n'est jamais réinitialisé** en base (ex. une opportunité
+  déjà "Approuvé CM" au moment de devenir obsolète reste "Approuvé CM" en base, y compris après
+  réactivation R9). Mais à l'écran, tant que le flag est `true`, afficher **"Obsolète"** (ou
+  `"{état réel} (Obsolète)"`, ex. "Approuvé CM (Obsolète)") — **jamais l'état réel seul**, pour ne
+  pas induire le recruteur en erreur. Dès que le flag repasse à `false` (réactivation R9), l'état
+  réel redevient affiché normalement, avec toute sa progression antérieure conservée.
+- Boutons d'action par ligne selon état (voir tableau §2) : `[Proposer CM]`, `[Mettre en lien]`,
+  `[Approuver]` (CM uniquement), `[Rejeter]`.
+
+## 7. Écran — Onglet "Opportunités" côté Candidat *(Front · Recruteur)*
+
+Dans `/recruteur/candidats/:id`, onglet "Opportunités" :
+- Colonne gauche statique : rappel des vœux du candidat utilisés pour l'évaluation.
+- Colonne droite : Poste (`crm_key`), Pays, Type, Fonction, État, Score mission, Score contexte,
+  Nb candidats sur le poste.
+- Mêmes règles de filtre/tri/mise en avant que §6 (voir règle validée DCC ci-dessus), adaptées au
+  contexte candidat.
+
+## 8. Écran — Détail d'une opportunité côté Candidat *(rôle CAN)*
+
+Accessible depuis une notification/email quand une opportunité atteint "Mise en lien" — affiche
+les informations du poste + boutons `[Accord de principe]`, `[Refuser]` (état = Mise en lien),
+puis `[Accord définitif]`, `[Refuser]` (état = Accord de principe).
+
+---
+
+## Points de vigilance signalés en spécification (à respecter, pas à re-décider)
+
+- `opportunite.decisionDCC()` doit **impérativement** mettre à jour les 3 objets (opportunité,
+  candidat, poste) en une seule transaction — c'est le point le plus critique de ce prompt.
+- La contrainte `UNIQUE(id_fiche_de_voeux, id_poste)` sur `opportunite` (déjà posée par
+  `prompt_0_sql.sql`) doit être respectée par le code applicatif : toujours vérifier l'existence
+  avant `INSERT`, ne jamais s'appuyer uniquement sur un `try/catch` de contrainte violée.

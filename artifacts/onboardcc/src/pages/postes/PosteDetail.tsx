@@ -28,6 +28,7 @@ import { postesApi, type PosteContact, type PosteDetail as PosteDetailData } fro
 import { candidatsApi, type ReferenceOption } from '@/api/candidats';
 import { ReferenceMultiSelect } from '@/pages/candidats/components/ReferenceMultiSelect';
 import { formatDateFR } from '@/lib/date';
+import { OpportunityList } from '@/pages/opportunites/OpportunityList';
 
 type Props = { mode: 'recruteur' | 'cm' };
 
@@ -289,7 +290,7 @@ export default function PosteDetail({ mode }: Props) {
         </TabsContent>
 
         <TabsContent value="opportunites">
-          <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">La liste des opportunités sera développée au prompt 4.{mode === 'cm' ? ' Seules les opportunités proposées au CM seront affichées.' : ''}</CardContent></Card>
+          <OpportunityList mode={mode} postId={poste.id_poste} />
         </TabsContent>
       </Tabs>
 

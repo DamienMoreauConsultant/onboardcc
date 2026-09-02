@@ -17,6 +17,7 @@ import PosteDetail from '@/pages/postes/PosteDetail';
 import CandidatsList from '@/pages/candidats/CandidatsList';
 import CandidatImport from '@/pages/candidats/CandidatImport';
 import CandidatDetail from '@/pages/candidats/CandidatDetail';
+import OpportuniteDetail from '@/pages/opportunites/OpportuniteDetail';
 
 const queryClient = new QueryClient();
 
@@ -34,6 +35,9 @@ function Router() {
       </Route>
       <Route path="/recruteur/candidats/import">
         <RoleGuard allowedRoles={['REC']}><AppLayout><CandidatImport /></AppLayout></RoleGuard>
+      </Route>
+      <Route path="/recruteur/opportunites/:id">
+        <RoleGuard allowedRoles={['REC', 'CHZ']}><AppLayout><OpportuniteDetail mode="recruteur" /></AppLayout></RoleGuard>
       </Route>
       <Route path="/recruteur/candidats/:id">
         <RoleGuard allowedRoles={['REC']}><AppLayout><CandidatDetail mode="recruteur" /></AppLayout></RoleGuard>
@@ -69,6 +73,9 @@ function Router() {
           <AppLayout><PosteDetail mode="cm" /></AppLayout>
         </RoleGuard>
       </Route>
+      <Route path="/cm/opportunites/:id">
+        <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}><AppLayout><OpportuniteDetail mode="cm" /></AppLayout></RoleGuard>
+      </Route>
       <Route path="/cm/postes">
         <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}>
           <AppLayout><PostesList mode="cm" /></AppLayout>
@@ -81,6 +88,9 @@ function Router() {
             <Candidate />
           </AppLayout>
         </RoleGuard>
+      </Route>
+      <Route path="/candidat/opportunites/:id">
+        <RoleGuard allowedRoles={['CAN']}><AppLayout><OpportuniteDetail mode="candidat" /></AppLayout></RoleGuard>
       </Route>
       <Route path="/candidat/voeux">
         <RoleGuard allowedRoles={['CAN']}><AppLayout><CandidatDetail mode="candidat" initialSection="voeux" /></AppLayout></RoleGuard>

@@ -14,6 +14,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { formatDateFR } from '@/lib/date';
 import { CandidatBanner } from './components/CandidatBanner';
 import { SectionCard } from './components/SectionCard';
+import { OpportunityList } from '@/pages/opportunites/OpportunityList';
 
 type Section = 'etat-civil' | 'projet' | 'voeux';
 type Props = { mode: 'recruteur' | 'candidat'; initialSection?: Section };
@@ -317,11 +318,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
         {mode === 'recruteur' && (
           <>
             <TabsContent value="opportunites" className="focus-visible:outline-none">
-              <Card>
-                <CardContent className="p-10 text-center text-sm text-muted-foreground">
-                  {detail.opportunites_total ?? 0} opportunité(s) rattachée(s) à ce candidat.
-                </CardContent>
-              </Card>
+              <OpportunityList mode="recruteur" candidateId={detail.id_candidat} />
             </TabsContent>
             
             <TabsContent value="progression" className="focus-visible:outline-none">

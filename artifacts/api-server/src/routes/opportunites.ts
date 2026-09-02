@@ -1,51 +1,270 @@
-/**
- * routes/opportunites.ts — Routes de gestion des opportunités (matchings candidat-poste)
- *
- * Ce fichier sera développé en détail dans le prompt 4 (module Matching/Opportunités).
- * Pour l'instant, seuls des stubs fonctionnels sont fournis.
- *
- * Une opportunité est le lien entre une fiche de vœux (candidat) et une fiche de poste.
- * Elle porte les notes de matching (contexte, mission, warning) calculées par l'algorithme
- * de scoring (services/matching.ts, développé au prompt 4).
- */
-
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
+import { Opportunite } from '../services/matching';
 
 const router = Router();
+const ALL_ROLES = ['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN'];
+const STAFF_ROLES = ['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN'];
 
-/**
- * GET /api/opportunites
- * Liste les opportunités avec leur état, candidat et poste associés.
- */
-router.get('/', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN']), async (_req, res) => {
+const BASE_SELECT = `
+  SELECT
+    o.id_opportunite,o.id_poste,o.id_fiche_de_voeux,
+    o.note_contexte,o.note_mission,o.note_warning,
+    o.appreciation_recruteur,o.commentaire_charge_mission,
+    o.flag_opportunite_proposee_a_cm,o.flag_opportunite_retenue,
+    o.flag_opportunite_non_retenu,o.flag_opportunite_obsolete,
+    eo.designation AS etat_designation,
+    cand.id_candidat,co.nom_contact,co.prenom_contact,
+    fp.crm_key AS poste_crm_key,fp.ong,fp.fonction,
+    p.designation AS pays_designation,r.designation AS region_designation
+  FROM opportunite o
+  JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite
+  JOIN fiche_de_voeux fdv ON fdv.id_fiche_de_voeux=o.id_fiche_de_voeux
+  JOIN candidat cand ON cand.id_candidat=fdv.id_candidat
+  JOIN contact co ON co.id_contact=cand.id_contact
+  JOIN fiche_de_poste fp ON fp.id_poste=o.id_poste
+  JOIN pays p ON p.id_pays=fp.id_pays
+  JOIN region r ON r.id_region=p.id_region
+`;
+
+function roleScope(req: Request, params: unknown[]) {
+  const role = req.user!.role;
+  if (role === 'CAN') {
+    params.push(req.user!.id_candidat);
+    return ` AND cand.id_candidat=$${params.length}
+      AND eo.designation IN ('Mise en lien','Accord de principe','Accepté','Affecté','Refus candidat','Refus partenaire')`;
+  }
+  if (['CM1', 'CM2'].includes(role)) {
+    params.push(req.user!.id_contact);
+    return ` AND EXISTS(SELECT 1 FROM gere_poste gp WHERE gp.id_poste=o.id_poste AND gp.id_contact=$${params.length})
+      AND eo.designation NOT IN ('Provisoire','Non qualifié','Rejeté système','Rejeté recruteur')`;
+  }
+  if (role === 'CHZ') {
+    params.push(req.user!.id_contact);
+    return ` AND EXISTS(SELECT 1 FROM gere_poste gp WHERE gp.id_poste=o.id_poste AND gp.id_contact=$${params.length})`;
+  }
+  return '';
+}
+
+async function canAccess(req: Request, opportunityId: number): Promise<boolean> {
+  const params: unknown[] = [opportunityId];
+  const scope = roleScope(req, params);
+  const result = await pool.query(`${BASE_SELECT} WHERE o.id_opportunite=$1 ${scope}`, params);
+  return result.rows.length > 0;
+}
+
+router.get('/', requireRole(ALL_ROLES), async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT
-        o.id_opportunite,
-        o.note_contexte,
-        o.note_mission,
-        o.note_warning,
-        o.appreciation_recruteur,
-        eo.designation AS etat_designation,
-        co.nom_contact, co.prenom_contact,
-        fp.ong, fp.fonction,
-        p.designation AS pays_designation
-      FROM opportunite o
-      JOIN etat_opportunite eo ON eo.id_etat_opportunite = o.id_etat_opportunite
-      JOIN fiche_de_voeux fdv  ON fdv.id_fiche_de_voeux = o.id_fiche_de_voeux
-      JOIN candidat cand       ON cand.id_candidat = fdv.id_candidat
-      JOIN contact co          ON co.id_contact = cand.id_contact
-      JOIN fiche_de_poste fp   ON fp.id_poste = o.id_poste
-      JOIN pays p              ON p.id_pays = fp.id_pays
-      ORDER BY o.id_opportunite DESC
-      LIMIT 100
-    `);
+    const params: unknown[] = [];
+    const filters: string[] = ['1=1'];
+    if (req.query.id_poste) {
+      params.push(Number(req.query.id_poste));
+      filters.push(`o.id_poste=$${params.length}`);
+    }
+    if (req.query.id_candidat) {
+      params.push(Number(req.query.id_candidat));
+      filters.push(`cand.id_candidat=$${params.length}`);
+    }
+    const scope = roleScope(req, params);
+    const result = await pool.query(
+      `${BASE_SELECT}
+       WHERE ${filters.join(' AND ')} ${scope}
+       ORDER BY o.flag_opportunite_obsolete, o.note_warning ASC,
+                (COALESCE(o.note_contexte,0)+COALESCE(o.note_mission,0)) DESC,
+                o.id_opportunite DESC
+       LIMIT 250`,
+      params,
+    );
     res.json(result.rows);
   } catch (err) {
     console.error('Erreur GET opportunites :', err);
     res.status(500).json({ error: 'Erreur interne du serveur.' });
+  }
+});
+
+router.get('/:id', requireRole(ALL_ROLES), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || !(await canAccess(req, id))) {
+      return void res.status(404).json({ error: 'Opportunité introuvable.' });
+    }
+    const [opportunity, details] = await Promise.all([
+      pool.query(`${BASE_SELECT} WHERE o.id_opportunite=$1`, [id]),
+      pool.query(
+        `SELECT id_criteres_detailles,date_evaluation,critere,valeur_poste,valeur_candidat,note_obtenue
+         FROM criteres_detailles WHERE id_opportunite=$1
+         ORDER BY date_evaluation DESC,id_criteres_detailles DESC`,
+        [id],
+      ),
+    ]);
+    res.json({ ...opportunity.rows[0], criteres_detailles: details.rows });
+  } catch (err) {
+    console.error('Erreur GET opportunite détail :', err);
+    res.status(500).json({ error: 'Erreur interne du serveur.' });
+  }
+});
+
+type TransitionName =
+  | 'proposer_cm'
+  | 'approuver'
+  | 'rejeter_cm'
+  | 'rejeter_recruteur'
+  | 'mettre_en_lien'
+  | 'accord_de_principe'
+  | 'accord_definitif'
+  | 'decision_dcc'
+  | 'refuser_candidat'
+  | 'refuser_partenaire';
+
+const transitionRules: Record<TransitionName, {
+  roles: string[];
+  from: string[];
+  to: string;
+  commentField?: 'appreciation_recruteur' | 'commentaire_charge_mission';
+}> = {
+  proposer_cm: { roles: ['REC', 'CHZ', 'ADMIN'], from: ['Non qualifié'], to: 'Proposée au CM', commentField: 'appreciation_recruteur' },
+  approuver: { roles: ['CM1', 'CM2'], from: ['Proposée au CM'], to: 'Approuvé CM', commentField: 'commentaire_charge_mission' },
+  rejeter_cm: { roles: ['CM1', 'CM2'], from: ['Proposée au CM'], to: 'Rejeté CM', commentField: 'commentaire_charge_mission' },
+  rejeter_recruteur: { roles: ['REC', 'CHZ', 'ADMIN'], from: ['Non qualifié'], to: 'Rejeté recruteur', commentField: 'appreciation_recruteur' },
+  mettre_en_lien: { roles: ['REC', 'CHZ', 'ADMIN'], from: ['Approuvé CM'], to: 'Mise en lien', commentField: 'appreciation_recruteur' },
+  accord_de_principe: { roles: ['CAN'], from: ['Mise en lien'], to: 'Accord de principe' },
+  accord_definitif: { roles: ['CAN'], from: ['Accord de principe'], to: 'Accepté' },
+  decision_dcc: { roles: ['REC', 'ADMIN'], from: ['Accepté'], to: 'Affecté', commentField: 'appreciation_recruteur' },
+  refuser_candidat: { roles: ['CAN'], from: ['Mise en lien', 'Accord de principe'], to: 'Refus candidat' },
+  refuser_partenaire: { roles: ['REC', 'CHZ', 'ADMIN'], from: ['Accepté'], to: 'Refus partenaire', commentField: 'appreciation_recruteur' },
+};
+
+router.post('/:id/recalculer', requireRole(['REC', 'CHZ', 'ADMIN']), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!(await canAccess(req, id))) return void res.status(404).json({ error: 'Opportunité introuvable.' });
+    res.json(await Opportunite.evaluer(id));
+  } catch (err) {
+    console.error('Erreur recalcul opportunité :', err);
+    res.status(500).json({ error: 'Recalcul impossible.' });
+  }
+});
+
+router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
+  const action = String(req.params.action).replaceAll('-', '_') as TransitionName;
+  const rule = transitionRules[action];
+  if (!rule) return void res.status(404).json({ error: 'Action inconnue.' });
+  if (!rule.roles.includes(req.user!.role)) return void res.status(403).json({ error: 'Rôle non autorisé pour cette action.' });
+  const comment = typeof req.body?.commentaire === 'string' ? req.body.commentaire.trim() : '';
+  if (!comment) return void res.status(400).json({ error: 'Un commentaire est obligatoire.' });
+  if (comment.length > 100) return void res.status(400).json({ error: 'Le commentaire est limité à 100 caractères.' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const current = await client.query(
+      `${BASE_SELECT} WHERE o.id_opportunite=$1 FOR UPDATE OF o,fdv,fp,cand`,
+      [Number(req.params.id)],
+    );
+    if (!current.rows.length) throw new Error('NOT_FOUND');
+    const opportunity = current.rows[0];
+    if (!(await canAccess(req, opportunity.id_opportunite))) throw new Error('NOT_FOUND');
+    if (!rule.from.includes(opportunity.etat_designation)) throw new Error('PRECONDITION');
+    if (action === 'proposer_cm' && (
+      opportunity.flag_opportunite_proposee_a_cm
+      || opportunity.flag_opportunite_retenue
+      || opportunity.flag_opportunite_non_retenu
+      || opportunity.flag_opportunite_obsolete
+    )) throw new Error('LOCKED');
+    if (action === 'mettre_en_lien') {
+      const locks = await client.query(
+        `SELECT fp.flag_poste_deja_mis_en_lien,fdv.flag_candidat_deja_mis_en_lien
+         FROM fiche_de_poste fp CROSS JOIN fiche_de_voeux fdv
+         WHERE fp.id_poste=$1 AND fdv.id_fiche_de_voeux=$2`,
+        [opportunity.id_poste, opportunity.id_fiche_de_voeux],
+      );
+      if (locks.rows[0].flag_poste_deja_mis_en_lien || locks.rows[0].flag_candidat_deja_mis_en_lien) throw new Error('LOCKED');
+    }
+
+    const state = await client.query('SELECT id_etat_opportunite FROM etat_opportunite WHERE designation=$1', [rule.to]);
+    if (!state.rows.length) throw new Error('STATE');
+    const updates = ['id_etat_opportunite=$1'];
+    const values: unknown[] = [state.rows[0].id_etat_opportunite];
+    if (rule.commentField) {
+      values.push(comment);
+      updates.push(`${rule.commentField}=$${values.length}`);
+    }
+    if (action === 'proposer_cm') updates.push('flag_opportunite_proposee_a_cm=true');
+    if (action === 'approuver') updates.push('flag_opportunite_retenue=true');
+    if (['rejeter_cm', 'rejeter_recruteur', 'refuser_candidat', 'refuser_partenaire'].includes(action)) {
+      updates.push('flag_opportunite_non_retenu=true');
+    }
+    values.push(opportunity.id_opportunite);
+    await client.query(`UPDATE opportunite SET ${updates.join(',')} WHERE id_opportunite=$${values.length}`, values);
+
+    if (action === 'approuver') {
+      await client.query(`UPDATE fiche_de_poste SET id_etat_poste=(SELECT id_etat_poste FROM etat_poste WHERE designation='Pré-réservé') WHERE id_poste=$1`, [opportunity.id_poste]);
+    }
+    if (action === 'mettre_en_lien') {
+      await client.query('UPDATE fiche_de_poste SET flag_poste_deja_mis_en_lien=true WHERE id_poste=$1', [opportunity.id_poste]);
+      await client.query(`UPDATE fiche_de_poste SET id_etat_poste=(SELECT id_etat_poste FROM etat_poste WHERE designation='Réservé') WHERE id_poste=$1`, [opportunity.id_poste]);
+      await client.query('UPDATE fiche_de_voeux SET flag_candidat_deja_mis_en_lien=true WHERE id_fiche_de_voeux=$1', [opportunity.id_fiche_de_voeux]);
+      await client.query(`UPDATE candidat SET id_etat_candidat='MEL' WHERE id_candidat=$1`, [opportunity.id_candidat]);
+    }
+    if (action === 'accord_de_principe') {
+      await client.query(`UPDATE candidat SET id_etat_candidat='ACP' WHERE id_candidat=$1`, [opportunity.id_candidat]);
+    }
+    if (action === 'accord_definitif') {
+      await client.query(`UPDATE candidat SET id_etat_candidat='ACC' WHERE id_candidat=$1`, [opportunity.id_candidat]);
+    }
+    if (action === 'decision_dcc') {
+      await client.query(`UPDATE candidat SET id_etat_candidat='AFF' WHERE id_candidat=$1`, [opportunity.id_candidat]);
+      await client.query(
+        `UPDATE fiche_de_poste SET id_etat_poste=(SELECT id_etat_poste FROM etat_poste WHERE designation='Pourvu') WHERE id_poste=$1`,
+        [opportunity.id_poste],
+      );
+      await client.query(
+        `UPDATE opportunite
+         SET flag_opportunite_obsolete=true
+         WHERE id_opportunite<>$1 AND (id_poste=$2 OR id_fiche_de_voeux=$3)`,
+        [opportunity.id_opportunite, opportunity.id_poste, opportunity.id_fiche_de_voeux],
+      );
+    }
+    if (['refuser_candidat', 'refuser_partenaire'].includes(action)) {
+      await client.query('UPDATE opportunite SET flag_opportunite_retenue=false WHERE id_opportunite=$1', [opportunity.id_opportunite]);
+      await client.query(`UPDATE candidat SET id_etat_candidat='ATA' WHERE id_candidat=$1`, [opportunity.id_candidat]);
+      await client.query('UPDATE fiche_de_voeux SET flag_candidat_deja_mis_en_lien=false WHERE id_fiche_de_voeux=$1', [opportunity.id_fiche_de_voeux]);
+      await client.query(
+        `UPDATE fiche_de_poste
+         SET flag_poste_deja_mis_en_lien=false,
+             id_etat_poste=(SELECT id_etat_poste FROM etat_poste WHERE designation=CASE
+               WHEN EXISTS(
+                 SELECT 1 FROM opportunite ox JOIN etat_opportunite ex ON ex.id_etat_opportunite=ox.id_etat_opportunite
+                 WHERE ox.id_poste=$1 AND ox.id_opportunite<>$2 AND ex.designation='Approuvé CM'
+               ) THEN 'Pré-réservé' ELSE 'À pourvoir' END)
+         WHERE id_poste=$1`,
+        [opportunity.id_poste, opportunity.id_opportunite],
+      );
+    }
+    if (['mettre_en_lien', 'accord_de_principe', 'accord_definitif', 'decision_dcc'].includes(action)) {
+      const candidateState: Record<string, string> = {
+        mettre_en_lien: 'MEL',
+        accord_de_principe: 'ACP',
+        accord_definitif: 'ACC',
+        decision_dcc: 'AFF',
+      };
+      await client.query(
+        'INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES($1,$2,$3,$4)',
+        [`${req.user!.prenom} ${req.user!.nom}`, comment, candidateState[action], opportunity.id_candidat],
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ message: 'Transition effectuée.', etat: rule.to });
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    console.error('Erreur transition opportunité :', { id: req.params.id, action, message: err.message });
+    if (err.message === 'NOT_FOUND') return void res.status(404).json({ error: 'Opportunité introuvable.' });
+    if (['PRECONDITION', 'LOCKED'].includes(err.message)) return void res.status(409).json({ error: err.message === 'LOCKED' ? 'Le candidat ou le poste est déjà engagé dans une autre mise en lien.' : 'Cette transition n’est pas autorisée depuis l’état actuel.' });
+    res.status(500).json({ error: 'Erreur interne du serveur.' });
+  } finally {
+    client.release();
   }
 });
 
