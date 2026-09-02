@@ -1,0 +1,50 @@
+# Suivi — Réinitialisation du mot de passe de TOUS les comptes utilisateur (environnement de dev)
+# Objectif : permettre à Damien de tester tous les rôles de bout en bout avec un mot de passe connu
+# ⚠️ Portée élargie à tous les comptes le 02/09/2026, à la demande explicite de Damien — ne
+# jamais reproduire cette action sur un environnement VAL/Prod avec de vrais utilisateurs.
+# ============================================================================
+
+Réinitialise le mot de passe de **tous** les comptes de la table `user_` (tous rôles confondus
+— Admin, Recruteur, CM, Candidat) à la valeur `DccTest2026!`.
+
+## Comment procéder
+
+**N'écris pas de requête SQL avec un hash calculé à part** — utilise directement la fonction de
+hash déjà existante dans le code d'authentification de l'application (celle utilisée par
+l'inscription/le "mot de passe oublié"), pour garantir que le hash produit est strictement
+compatible avec la vérification au moment de la connexion. Écris un petit script ponctuel (ou
+une route temporaire, supprimée après usage) qui :
+
+1. Calcule le hash de `DccTest2026!` avec la fonction de hash déjà utilisée par l'application
+   (même bibliothèque, mêmes paramètres — ne réimplémente rien).
+2. Met à jour `user_.mot_de_passe` (ou colonne équivalente) pour **toutes** les lignes de
+   `user_`, sans exception.
+3. Vérifie et rapporte le nombre exact de lignes modifiées — doit correspondre au nombre total
+   de comptes `user_` en base.
+
+## Puis, un SELECT de contrôle
+
+Une fois la mise à jour faite, exécute et retourne le résultat de cette requête (adapte les noms
+de colonnes/jointures si besoin pour coller au schéma réel) :
+
+```sql
+SELECT u.id_user, c.email, c.nom, c.prenom, u.role_applicatif, c.role AS role_contact
+FROM user_ u
+JOIN contact c ON c.id_contact = u.id_contact
+ORDER BY u.role_applicatif, c.nom;
+```
+
+Objectif : donner à Damien la liste des comptes disponibles (email + rôle) pour qu'il choisisse
+lesquels utiliser pour tester chaque rôle applicatif.
+
+## Points de vigilance
+
+- N'affiche et ne logue jamais le mot de passe en clair ni le hash calculé dans une réponse
+  persistante (console applicative acceptable pour un contrôle ponctuel, pas dans un fichier
+  commité) — le SELECT de contrôle ne doit **jamais** inclure la colonne du mot de passe/hash.
+- Confirme dans ta réponse que la connexion avec ce nouveau mot de passe fonctionne réellement,
+  par un test réel, pour au moins un compte de chaque rôle applicatif existant (Admin,
+  Recruteur, CM, Candidat) — pas juste la mise à jour en base.
+- Rappel explicite pour toi (Replit) : cette action est acceptée uniquement parce qu'il s'agit
+  de l'environnement de développement avec des données de test — ne jamais l'exécuter sur un
+  environnement contenant de vrais utilisateurs (VAL/Prod).
