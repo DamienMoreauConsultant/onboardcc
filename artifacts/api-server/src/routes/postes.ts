@@ -50,7 +50,7 @@ const CSV_COLUMNS = [
   'deuxieme_poste_alentour', 'nouveau_poste', 'nom_ancien_volontaire', 'odd_lie',
   'contexte_mission', 'objectifs_mission', 'taches', 'detail_competences',
   'dimension_ecclesiale', 'cm_principal', 'cm_secondaire', 'chz',
-  'contact_mission', 'contact_partenaire',
+  'contact_mission', 'contact_partenaire', 'date_maj_crm',
 ];
 
 /**
@@ -148,9 +148,9 @@ function validateRow(
     }
   }
 
-  // Les deux dates du fichier CRM sont en JJ/MM/AAAA ; on valide ici,
-  // avant toute possibilité d'écriture dans l'étape d'exécution.
-  for (const col of ['date_demarrage', 'date_demande']) {
+  // Les dates du fichier CRM sont en JJ/MM/AAAA ; date_maj_crm reste
+  // optionnelle mais doit respecter le même contrat lorsqu'elle est fournie.
+  for (const col of ['date_demarrage', 'date_demande', 'date_maj_crm']) {
     const parsedDate = parseFrenchDate(row[col]);
     if (!parsedDate.valid) {
       errors.push(`Date invalide ligne ${lineNum} : ${col}="${row[col]?.trim() ?? ''}" — format attendu JJ/MM/AAAA`);
@@ -220,7 +220,7 @@ function validateHeaders(fields: string[] | undefined): string | null {
       missing.length ? `colonnes manquantes : ${missing.join(', ')}` : '',
       unexpected.length ? `colonnes inconnues : ${unexpected.join(', ')}` : '',
     ].filter(Boolean).join(' ; ');
-    return `En-tête CSV invalide (${details}). Le template comporte exactement 41 colonnes.`;
+    return `En-tête CSV invalide (${details}). Le template comporte exactement 42 colonnes.`;
   }
   return null;
 }
@@ -299,7 +299,7 @@ function posteFilterSql(filters: Record<string, string[]>, startIndex: number) {
 
 /* ─────────────────────────────────────────────────────────────────────
    GET /api/postes/import/template
-   Retourne un fichier CSV vide avec les 41 colonnes en en-tête.
+   Retourne un fichier CSV vide avec les 42 colonnes en en-tête.
 ───────────────────────────────────────────────────────────────────── */
 router.get(
   '/import/template',
@@ -462,6 +462,7 @@ router.post(
         // PostgreSQL ne reçoit ainsi jamais une date française brute.
         const dateDemande = parseFrenchDate(row.date_demande);
         const dateDemarrage = parseFrenchDate(row.date_demarrage);
+        const dateMajCrm = parseFrenchDate(row.date_maj_crm);
 
         /**
          * État initial du poste à l'import (conception.md §2.2.2) :
@@ -480,7 +481,7 @@ router.post(
          * UPSERT sur crm_key (clé d'échange avec le CRM).
          * - Nouveau poste (crm_key inconnu)  → INSERT, flag_create_opportunity = true si non pré-affecté
          * - Poste existant (crm_key connu)   → UPDATE non comparatif (tous les champs écrasés),
-         *                                       flag_update_score = true pour déclencher le recalcul
+         *                                       sans déclencher ici la logique de scoring
          */
         const upsert = await client.query(
           `INSERT INTO fiche_de_poste (
@@ -491,8 +492,8 @@ router.post(
              deuxieme_poste_possible_partenaire, deuxieme_poste_possible_alentour,
              nouveau_poste, nom_ancien_volontaire, odd_lie,
              contexte_mission, objectifs_mission, taches, competences_detail,
-             dimension_ecclesial, flag_zone_orange, flag_condition_spartiates,
-             flag_hopital_proche, flag_create_opportunity, flag_update_score,
+             dimension_ecclesial, date_maj_crm, flag_zone_orange, flag_condition_spartiates,
+             flag_hopital_proche, flag_create_opportunity,
              id_pays, id_hebergement, id_duree, id_domaine
            ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
@@ -525,12 +526,11 @@ router.post(
              taches                            = EXCLUDED.taches,
              competences_detail                = EXCLUDED.competences_detail,
              dimension_ecclesial               = EXCLUDED.dimension_ecclesial,
+              date_maj_crm                      = EXCLUDED.date_maj_crm,
              flag_zone_orange                  = EXCLUDED.flag_zone_orange,
              flag_condition_spartiates         = EXCLUDED.flag_condition_spartiates,
              flag_hopital_proche               = EXCLUDED.flag_hopital_proche,
-            id_etat_poste                     = EXCLUDED.id_etat_poste,
-            flag_create_opportunity            = EXCLUDED.flag_create_opportunity,
-            flag_update_score                 = true,
+              id_etat_poste                     = EXCLUDED.id_etat_poste,
              id_pays                           = EXCLUDED.id_pays,
              id_hebergement                    = EXCLUDED.id_hebergement,
              id_duree                          = EXCLUDED.id_duree,
@@ -563,11 +563,11 @@ router.post(
             row.taches?.trim()                      || null,
             row.detail_competences?.trim()          || null,
             row.dimension_ecclesiale?.trim()        || null,
+            dateMajCrm.iso,
             parseBool(row.zone_orange),
             parseBool(row.conditions_spartiates),
             parseBool(row.hopital_proche),
             flagCreateOpportunity,
-            false,
             idPays,
             idHebergement,
             idDuree,

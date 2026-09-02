@@ -1,0 +1,68 @@
+# PROMPT 2f — Correctif import Poste : mise à jour sur crm_key existant (A25, suite)
+# Référence : Correctif_DCC_20260826.md, issue A25 (relecture de test du 02/09/2026)
+#             prompt2.txt §3 (comportement d'import, déjà spécifié mais pas correctement construit)
+#             correctif_dcc_20260902_poste_maj_crm.sql (à exécuter AVANT ce prompt)
+#             prompt4.txt §4bis (c'est LUI qui décide, de façon autonome, quels postes ont
+#             besoin d'un recalcul — ce prompt-ci ne fait qu'écrire les données, à envoyer après)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+## Contexte
+
+`prompt2.txt` §3 spécifiait déjà, dès l'origine, que l'import d'un poste dont le `crm_key`
+existe déjà en base doit faire un **UPDATE** (pas un ignore). En testant l'import d'un poste
+avec un `crm_key` déjà présent, Damien constate que le poste existant n'est **pas mis à jour**
+— écart entre la spec et le comportement réel.
+
+**Ne suppose pas la cause** : audite le code d'import actuel (`services/importPoste.js` ou
+équivalent) pour trouver précisément pourquoi le cas `crm_key` existant n'aboutit pas à un
+`UPDATE`, avant de corriger. Rapporte la cause trouvée dans ton rapport de complétion.
+
+Le principe métier confirmé par Damien : le CRM est le **référentiel maître** des postes en V1
+(import CSV, ENF-12/V1) — c'est la **seule** façon de mettre à jour un poste existant dans
+l'application (Passerelle ne permet aucune édition manuelle des critères d'un poste ; toute
+correction passe par le CRM, réimportée ensuite).
+
+---
+
+## 1. Nouvelle colonne d'import — 42. `date_maj_crm`
+
+Ajoute au tableau des colonnes d'import (`prompt2.txt` §2) :
+
+| # | Colonne | Obligatoire | Résolution |
+|---|---|---|---|
+| 42 | date_maj_crm | Optional | Date (format à confirmer avec le prestataire, voir contrat) → `fiche_de_poste.date_maj_crm` |
+
+---
+
+## 2. Comportement d'import corrigé — volontairement simple
+
+**`crm_key` inconnu (nouveau poste)** — inchangé par rapport à `prompt2.txt` §3 :
+`INSERT`, `flag_create_opportunity = true`, `id_etat_poste` = "À pourvoir" (ou "Pourvu" direct
+si `candidat_preaffecte = true`). `date_maj_crm` importée telle quelle si fournie
+(`date_dernier_recalcul_score` reste `NULL` — un poste tout juste créé n'a encore aucune
+opportunité recalculée).
+
+**`crm_key` existant (poste déjà en base)** :
+```js
+// UPDATE non comparatif sur TOUS les champs (écrase, y compris les champs vides du fichier —
+// comportement déjà spécifié, ne pas changer), y COMPRIS date_maj_crm. Rien d'autre à faire ici.
+```
+
+⚠️ **Ce prompt ne pose plus aucun flag et ne calcule aucune comparaison de date** — c'est
+volontaire (révisé 02/09/2026 suite à échange avec Damien) : l'import se contente d'écrire les
+données. C'est `prompt4.txt` §4bis (pas encore envoyé) qui, de façon totalement découplée,
+compare lui-même `date_maj_crm` à `date_dernier_recalcul_score` pour décider quels postes ont
+réellement besoin d'un recalcul. Ce découplage évite qu'une logique de scoring (même minimale)
+se retrouve dupliquée ou désynchronisée entre le code d'import et le code de scoring.
+
+---
+
+## 3. Point de vigilance
+
+- Aucun changement de comportement sur l'import candidat (`prompt3.txt`) — ce correctif est
+  strictement scopé à l'import Poste.
+- Exécute `correctif_dcc_20260902_poste_maj_crm.sql` **avant** ce prompt (ajoute
+  `fiche_de_poste.date_maj_crm`/`date_dernier_recalcul_score`, supprime l'ancienne colonne
+  `flag_update_score` devenue inutile — si du code existant y fait encore référence, supprime
+  ces références au passage).
