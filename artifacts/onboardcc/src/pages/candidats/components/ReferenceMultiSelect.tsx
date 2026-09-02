@@ -15,9 +15,10 @@ type Props = {
   levelOptions?: Option[];
   placeholder?: string;
   disabled?: boolean;
+  readOnly?: boolean;
 };
 
-export function ReferenceMultiSelect({ options = [], value = [], onChange, mode = 'simple', levelOptions = [], placeholder = 'Sélectionner...', disabled = false }: Props) {
+export function ReferenceMultiSelect({ options = [], value = [], onChange, mode = 'simple', levelOptions = [], placeholder = 'Sélectionner...', disabled = false, readOnly = false }: Props) {
   const [open, setOpen] = useState(false);
   const itemId = (item: any) => mode === 'simple'
     ? item.id ?? item.id_domaine ?? item.id_duree ?? item.id_environnement ?? item.id_hebergement
@@ -56,6 +57,24 @@ export function ReferenceMultiSelect({ options = [], value = [], onChange, mode 
     else if (mode === 'competence') onChange(value.map(v => itemId(v) === id ? { ...v, niveau: newVal } : v));
     else if (mode === 'region') onChange(value.map(v => itemId(v) === id ? { ...v, degre: newVal } : v));
   };
+
+  if (readOnly) {
+    const labels = value
+      .map((item) => options.find((option) => option.id === itemId(item))?.label)
+      .filter((label): label is string => Boolean(label));
+
+    return (
+      <div className="flex min-h-9 flex-wrap items-center gap-2" aria-label="Valeurs sélectionnées">
+        {labels.length > 0
+          ? labels.map((label) => (
+              <span key={label} className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-sm text-foreground">
+                {label}
+              </span>
+            ))
+          : <span className="text-sm text-muted-foreground">—</span>}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">

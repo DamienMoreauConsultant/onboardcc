@@ -249,15 +249,14 @@ export default function PosteDetail({ mode }: Props) {
                 <Field label="Indemnité DCC" value={poste.indemnite_mensuelle_dcc} />
                 <Field label="Gîte et couvert" value={poste.gite_et_couvert} icon={Home} />
                 <Field label="Hébergement" value={poste.hebergement_detail} />
-                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                <div className="min-w-0">
                   <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Environnement</dt>
                   <dd className="mt-2">
                     <ReferenceMultiSelect
                       options={environmentOptions}
                       value={environmentValues}
                       onChange={setEnvironmentValues}
-                      disabled={mode === 'cm'}
-                      placeholder="Sélectionner un environnement..."
+                      readOnly
                     />
                   </dd>
                 </div>
