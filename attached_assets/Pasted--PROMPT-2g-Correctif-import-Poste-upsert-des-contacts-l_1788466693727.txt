@@ -1,0 +1,141 @@
+# PROMPT 2g — Correctif import Poste : upsert des contacts liés (CM/CZ/MIS/PAR) — A43
+# Référence : Correctif_DCC_20260826.md, issue A43
+#             prompt2.txt §2 (colonnes 37-66, révisées 03/09/2026)
+#             prompt3.txt §2 (mécanisme d'adresse candidat, réutilisé tel quel ici pour MIS/PAR)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ Test en direct devant la DCC prévu le 04/09/2026 — priorité à la fiabilité, teste réellement
+# avant de livrer, ne suppose rien.
+# ============================================================================
+
+## Contexte
+
+Le comportement actuel de l'import poste pour les 5 champs contact (`cm_principal`,
+`cm_secondaire`, `chz`, `contact_mission`, `contact_partenaire`) **rejette** l'import si le
+`crm_key` référencé n'existe pas déjà en base ("CM inconnu : crm_key=XXX — créez-le d'abord").
+Damien a tranché (03/09/2026) : ce comportement doit changer en **upsert**, exactement comme
+pour le poste lui-même (prompt2f) — le CRM devient également le référentiel maître de ces 5
+contacts liés au poste, plus besoin de les créer manuellement avant l'import.
+
+**Raison métier importante** : un même CM peut apparaître sur des dizaines de postes. Si chaque
+import créait un nouveau contact sans vérifier l'existence du `crm_key`, ce CM se retrouverait
+avec plusieurs contacts dupliqués en base — et son compte `user_` (lié à un seul de ces contacts)
+ne verrait pas les postes liés aux autres doublons via `gere_poste`, cassant sa visibilité RBAC.
+L'upsert par `crm_key` est donc **le seul comportement acceptable**, pas une simplicité de confort.
+
+**Pas de nouvelle colonne de schéma nécessaire** : la table `adresse` structurée
+(`adresse1`, `adresse2`, `code_postal`, `ville`, `id_pays`) existe déjà et est déjà utilisée pour
+des contacts MIS/PAR dans les données de test d'origine (`prompt_0_sql.sql`, ex. `MIS_SENEGAL`,
+`PAR_SENEGAL`) — réutilise ce mécanisme tel quel, exactement comme pour l'adresse candidat
+(prompt3.txt §2). Ne crée aucun champ "adresse libre" ni aucune nouvelle colonne.
+
+---
+
+## 1. Nouvelles colonnes d'import — remplacent les colonnes 37 à 41
+
+Remplace les 5 anciennes colonnes crm_key-only par 29 nouvelles colonnes (détail exact dans
+`prompt2.txt` §2, colonnes 37 à 65) :
+
+- `cm1_crmkey`, `cm1_nom`, `cm1_prenom` (rôle CM1)
+- `cm2_crmkey`, `cm2_nom`, `cm2_prenom` (rôle CM2)
+- `cz_crmkey`, `cz_nom`, `cz_prenom` (rôle CHZ)
+- `mis_crmkey`, `mis_nom`, `mis_prenom`, `mis_telephone`, `mis_email`, `mis_adresse1`,
+  `mis_adresse2`, `mis_code_postal`, `mis_ville`, `mis_pays` (rôle MIS)
+- `par_crmkey`, `par_nom`, `par_prenom`, `par_telephone`, `par_email`, `par_adresse1`,
+  `par_adresse2`, `par_code_postal`, `par_ville`, `par_pays` (rôle PAR)
+
+Puis `date_maj_crm`, renumérotée en colonne 66 (était 42).
+
+Chacun des 5 groupes est indépendant et optionnel dans son ensemble (un poste peut ne pas avoir
+de CM secondaire par exemple) — mais **si le `crmkey` du groupe est renseigné, `nom` et
+`prenom` de ce même groupe deviennent obligatoires** (erreur de vérification sinon). Pour
+MIS/PAR, l'adresse reste optionnelle même si `crmkey` est renseigné (un contact peut exister
+sans adresse connue).
+
+---
+
+## 2. Comportement d'import — pour chacun des 5 groupes de contact
+
+Traite les 5 groupes de façon identique (même fonction réutilisée 5 fois, pas 5 implémentations
+séparées) :
+
+```js
+// Pour un groupe donné (ex. CM1), rôle fixé à l'avance selon le groupe :
+if (ligne.cm1_crmkey) {  // groupe renseigné
+  let contact = await trouverContactParCrmKey(ligne.cm1_crmkey);
+  if (contact) {
+    // UPDATE non comparatif sur les champs fournis par ce groupe (nom, prenom)
+    // Le rôle est TOUJOURS remis à la valeur fixe du groupe (CM1 ici), même si le contact
+    // existant avait un autre rôle — voir avertissement qualité de données ci-dessous.
+    await mettreAJourContact(contact.id_contact, { nom: ligne.cm1_nom, prenom: ligne.cm1_prenom, role: 'CM1' });
+  } else {
+    contact = await creerContact({ crm_key: ligne.cm1_crmkey, nom: ligne.cm1_nom, prenom: ligne.cm1_prenom, role: 'CM1' });
+  }
+  await lierContactAuPoste(contact.id_contact, idPoste);  // INSERT gere_poste ... ON CONFLICT DO NOTHING
+}
+// Idem pour cm2 (rôle CM2), cz (rôle CHZ).
+
+// Pour MIS et PAR uniquement, en plus de nom/prenom/telephone/email, gère l'adresse structurée
+// EXACTEMENT comme prompt3.txt §2 le fait pour le candidat :
+if (ligne.mis_crmkey) {
+  let contact = await trouverContactParCrmKey(ligne.mis_crmkey);
+  const idPays = await resoudrePaysCrmKey(ligne.mis_pays);  // même résolution que la colonne 10 du poste
+  if (contact) {
+    await mettreAJourContact(contact.id_contact, {
+      nom: ligne.mis_nom, prenom: ligne.mis_prenom, role: 'MIS',
+      telephone: ligne.mis_telephone, email: ligne.mis_email,
+    });
+    if (ligne.mis_adresse1) {
+      // Met à jour l'adresse déjà liée (contact.id_adresse) EN PLACE, ne crée pas une 2e ligne
+      // adresse à chaque réimport — même principe "UPDATE non comparatif" que partout ailleurs.
+      await mettreAJourAdresse(contact.id_adresse, {
+        adresse1: ligne.mis_adresse1, adresse2: ligne.mis_adresse2,
+        code_postal: ligne.mis_code_postal, ville: ligne.mis_ville, id_pays: idPays,
+      });
+    }
+  } else {
+    let idAdresse = null;
+    if (ligne.mis_adresse1) {
+      idAdresse = await creerAdresse({
+        adresse1: ligne.mis_adresse1, adresse2: ligne.mis_adresse2,
+        code_postal: ligne.mis_code_postal, ville: ligne.mis_ville, id_pays: idPays,
+      });
+    }
+    contact = await creerContact({
+      crm_key: ligne.mis_crmkey, nom: ligne.mis_nom, prenom: ligne.mis_prenom, role: 'MIS',
+      telephone: ligne.mis_telephone, email: ligne.mis_email, id_adresse: idAdresse,
+    });
+  }
+  await lierContactAuPoste(contact.id_contact, idPoste);
+}
+// Idem pour par (rôle PAR).
+```
+
+---
+
+## 3. Vérification (étape "verifier" de l'import)
+
+- Si un `crmkey` de groupe est renseigné mais `nom` ou `prenom` du même groupe est vide → erreur
+  explicite ligne par ligne ("cm1_nom obligatoire si cm1_crmkey renseigné").
+- Si `mis_pays`/`par_pays` est renseigné mais que le code ne résout à aucun `pays.crm_key`
+  existant → erreur explicite, même règle que pour la colonne 10 du poste lui-même.
+- Aucun rejet pour "contact inconnu" plus nécessaire pour ces 5 champs — c'est justement ce
+  comportement qui change avec ce correctif.
+
+---
+
+## 4. Point de vigilance — priorité à ce test avant de livrer
+
+Étant donné le test en direct devant la DCC prévu demain, **teste réellement** ce scénario avant
+de considérer terminé (transaction annulée, comme pour les tests précédents) :
+1. Importe un poste avec un `cm1_crmkey` inconnu → vérifie qu'un nouveau contact est créé, lié
+   au poste.
+2. Réimporte un **autre** poste avec le **même** `cm1_crmkey` → vérifie qu'aucun 2e contact
+   n'est créé (toujours le même `id_contact`), et que ce contact est maintenant lié aux **2**
+   postes via `gere_poste` (2 lignes, pas de doublon).
+3. Importe un poste avec un `mis_crmkey` inconnu ET une adresse complète → vérifie qu'une ligne
+   `adresse` est créée et liée via `contact.id_adresse`.
+4. Réimporte le même `mis_crmkey` avec une adresse différente → vérifie que la ligne `adresse`
+   existante est mise à jour en place (même `id_adresse`), pas une nouvelle ligne créée.
+
+Aucun changement de comportement sur l'import candidat (`prompt3.txt`) — ce correctif est
+strictement scopé à l'import Poste.

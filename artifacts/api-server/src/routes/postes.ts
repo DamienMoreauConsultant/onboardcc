@@ -20,6 +20,11 @@ import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
 import { parseFrenchDate } from '../lib/frenchDate';
 import { Opportunite } from '../services/matching';
+import {
+  linkPosteContact,
+  type PosteContactRole,
+  upsertPosteContact,
+} from '../services/posteContactUpsert';
 
 const router = Router();
 
@@ -50,8 +55,15 @@ const CSV_COLUMNS = [
   'detail_hebergement', 'preference_genre', 'deuxieme_poste_partenaire',
   'deuxieme_poste_alentour', 'nouveau_poste', 'nom_ancien_volontaire', 'odd_lie',
   'contexte_mission', 'objectifs_mission', 'taches', 'detail_competences',
-  'dimension_ecclesiale', 'cm_principal', 'cm_secondaire', 'chz',
-  'contact_mission', 'contact_partenaire', 'date_maj_crm',
+  'dimension_ecclesiale',
+  'cm1_crmkey', 'cm1_nom', 'cm1_prenom',
+  'cm2_crmkey', 'cm2_nom', 'cm2_prenom',
+  'cz_crmkey', 'cz_nom', 'cz_prenom',
+  'mis_crmkey', 'mis_nom', 'mis_prenom', 'mis_telephone', 'mis_email',
+  'mis_adresse1', 'mis_adresse2', 'mis_code_postal', 'mis_ville', 'mis_pays',
+  'par_crmkey', 'par_nom', 'par_prenom', 'par_telephone', 'par_email',
+  'par_adresse1', 'par_adresse2', 'par_code_postal', 'par_ville', 'par_pays',
+  'date_maj_crm',
 ];
 
 /**
@@ -68,7 +80,6 @@ type RefData = {
   langue: Record<string, number>;
   niveauLangue: Record<string, number>;
   billetAvion: Record<string, number>;
-  contacts: Record<string, number>;
 };
 
 /**
@@ -76,7 +87,7 @@ type RefData = {
  * Évite les N+1 queries pendant la validation ligne par ligne.
  */
 async function loadRefData(): Promise<RefData> {
-  const [pays, hebergement, duree, domaine, competences, environnement, langue, niveauLangue, billetAvion, contacts] =
+  const [pays, hebergement, duree, domaine, competences, environnement, langue, niveauLangue, billetAvion] =
     await Promise.all([
       pool.query('SELECT crm_key, id_pays        AS id FROM pays'),
       pool.query('SELECT crm_key, id_hebergement AS id FROM hebergement'),
@@ -87,7 +98,6 @@ async function loadRefData(): Promise<RefData> {
       pool.query('SELECT crm_key, id_langue      AS id FROM langue'),
       pool.query('SELECT crm_key, id_niveau_langue AS id FROM niveau_langue WHERE COALESCE(active,true)'),
       pool.query('SELECT crm_key, id_type_billet_avion AS id FROM type_billet_avion WHERE COALESCE(active,true)'),
-      pool.query('SELECT crm_key, id_contact     AS id FROM contact'),
     ]);
 
   const toMap = (rows: Array<{ crm_key: string; id: number }>) =>
@@ -103,7 +113,6 @@ async function loadRefData(): Promise<RefData> {
     langue: toMap(langue.rows),
     niveauLangue: toMap(niveauLangue.rows),
     billetAvion: toMap(billetAvion.rows),
-    contacts: toMap(contacts.rows),
   };
 }
 
@@ -188,17 +197,30 @@ function validateRow(
       errors.push(`Environnement inconnu : crm_key=${key} — créez-le d'abord`);
   }
 
-  // Contacts référencés (tous optionnels, mais doivent exister s'ils sont renseignés)
-  const contactCols: Array<[string, string]> = [
-    ['cm_principal',       'CM principal'],
-    ['cm_secondaire',      'CM secondaire'],
-    ['chz',                'CHZ'],
-    ['contact_mission',    'Contact mission'],
-    ['contact_partenaire', 'Contact partenaire'],
+  const contactGroups = [
+    { prefix: 'cm1', withAddress: false },
+    { prefix: 'cm2', withAddress: false },
+    { prefix: 'cz', withAddress: false },
+    { prefix: 'mis', withAddress: true },
+    { prefix: 'par', withAddress: true },
   ];
-  for (const [col, label] of contactCols) {
-    if (row[col]?.trim() && !refs.contacts[row[col].trim()])
-      errors.push(`${label} inconnu : crm_key=${row[col].trim()} — créez-le d'abord`);
+  for (const group of contactGroups) {
+    const crmKeyColumn = `${group.prefix}_crmkey`;
+    if (row[crmKeyColumn]?.trim()) {
+      for (const required of ['nom', 'prenom']) {
+        const column = `${group.prefix}_${required}`;
+        if (!row[column]?.trim()) errors.push(`${column} obligatoire si ${crmKeyColumn} renseigné`);
+      }
+      if (group.withAddress && row[`${group.prefix}_adresse1`]?.trim() && !row[`${group.prefix}_pays`]?.trim()) {
+        errors.push(`${group.prefix}_pays obligatoire si ${group.prefix}_adresse1 renseigné`);
+      }
+    }
+    if (group.withAddress) {
+      const country = row[`${group.prefix}_pays`]?.trim();
+      if (country && !refs.pays[country]) {
+        errors.push(`Pays inconnu : crm_key=${country} pour ${group.prefix}_pays`);
+      }
+    }
   }
 
   // Règle conditionnelle : nom_candidat_preaffecte requis si candidat_preaffecte = TRUE
@@ -221,7 +243,7 @@ function validateHeaders(fields: string[] | undefined): string | null {
       missing.length ? `colonnes manquantes : ${missing.join(', ')}` : '',
       unexpected.length ? `colonnes inconnues : ${unexpected.join(', ')}` : '',
     ].filter(Boolean).join(' ; ');
-    return `En-tête CSV invalide (${details}). Le template comporte exactement 42 colonnes.`;
+    return `En-tête CSV invalide (${details}). Le template comporte exactement ${CSV_COLUMNS.length} colonnes.`;
   }
   return null;
 }
@@ -300,7 +322,7 @@ function posteFilterSql(filters: Record<string, string[]>, startIndex: number) {
 
 /* ─────────────────────────────────────────────────────────────────────
    GET /api/postes/import/template
-   Retourne un fichier CSV vide avec les 42 colonnes en en-tête.
+   Retourne un fichier CSV vide avec les 66 colonnes en en-tête.
 ───────────────────────────────────────────────────────────────────── */
 router.get(
   '/import/template',
@@ -619,16 +641,38 @@ router.post(
           }
         }
 
-        // Contacts gestionnaires (gere_poste — ON CONFLICT au cas où un contact est référencé deux fois)
-        const contactCols: string[] = ['cm_principal', 'cm_secondaire', 'chz', 'contact_mission', 'contact_partenaire'];
-        for (const col of contactCols) {
-          const key = row[col]?.trim();
-          if (key && refs.contacts[key]) {
-            await client.query(
-              'INSERT INTO gere_poste (id_poste, id_contact) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-              [idPoste, refs.contacts[key]],
-            );
-          }
+        // Le CRM est également maître des cinq contacts liés au poste. Un même
+        // crm_key conserve toujours le même id_contact, même sur plusieurs postes.
+        const contactGroups: Array<{ prefix: string; role: PosteContactRole; withDetails: boolean }> = [
+          { prefix: 'cm1', role: 'CM1', withDetails: false },
+          { prefix: 'cm2', role: 'CM2', withDetails: false },
+          { prefix: 'cz', role: 'CHZ', withDetails: false },
+          { prefix: 'mis', role: 'MIS', withDetails: true },
+          { prefix: 'par', role: 'PAR', withDetails: true },
+        ];
+        for (const group of contactGroups) {
+          const crmKey = row[`${group.prefix}_crmkey`]?.trim();
+          if (!crmKey) continue;
+          const address1 = group.withDetails ? row[`${group.prefix}_adresse1`]?.trim() : '';
+          const countryKey = group.withDetails ? row[`${group.prefix}_pays`]?.trim() : '';
+          const contact = await upsertPosteContact(client, {
+            crmKey,
+            nom: row[`${group.prefix}_nom`].trim(),
+            prenom: row[`${group.prefix}_prenom`].trim(),
+            role: group.role,
+            telephone: group.withDetails ? row[`${group.prefix}_telephone`]?.trim() || null : null,
+            email: group.withDetails ? row[`${group.prefix}_email`]?.trim() || null : null,
+            adresse: address1
+              ? {
+                  adresse1: address1,
+                  adresse2: row[`${group.prefix}_adresse2`]?.trim() || null,
+                  codePostal: row[`${group.prefix}_code_postal`]?.trim() || null,
+                  ville: row[`${group.prefix}_ville`]?.trim() || null,
+                  idPays: refs.pays[countryKey],
+                }
+              : null,
+          });
+          await linkPosteContact(client, idPoste, contact.idContact);
         }
       }
 
