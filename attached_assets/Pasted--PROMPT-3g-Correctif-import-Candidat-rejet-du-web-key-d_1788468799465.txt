@@ -1,0 +1,50 @@
+# PROMPT 3g — Correctif import Candidat : rejet du web_key déjà connu (A45)
+# Référence : Correctif_DCC_20260826.md, issue A45
+#             prompt3.txt §2/§2bis (révisées 03/09/2026)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ POTENTIELLEMENT DÉJÀ ACTIF EN PRODUCTION AUJOURD'HUI — l'import candidat original a été
+# livré avec un comportement dangereux (écrase le dossier existant sur réimport). Priorité haute.
+# Test en direct devant la DCC prévu le 04/09/2026 — teste réellement avant de livrer.
+# ============================================================================
+
+## Contexte — bug de conception, pas juste une amélioration
+
+L'import candidat actuel fait, sur `web_key` déjà existant, un `UPDATE non comparatif` (écrase
+tous les champs). C'est le même principe que l'import Poste, **mais ça n'a pas de sens pour le
+candidat** : contrairement au poste (piloté par le CRM à vie, aucune édition manuelle dans
+Passerelle), le candidat devient géré par le **Recruteur** dès son import (état civil, dossier
+de candidature, vœux — tout éditable via les boutons "Éditer"). Le site web n'est **qu'un
+formulaire de création** : dès qu'un candidat est importé, il ne doit plus jamais être renvoyé.
+Le comportement actuel écraserait silencieusement tout le travail du Recruteur si le site web
+réenvoyait un jour un candidat déjà importé (bug côté site web, ré-upload accidentel d'un vieux
+fichier par un recruteur, etc.).
+
+## Correctif — un seul changement de comportement
+
+**`POST /api/candidats/import/verifier`** : ajoute une vérification supplémentaire pour chaque
+ligne — si `ref_candidat` (colonne 1) correspond à un `candidat.web_key` **déjà existant** en
+base, marque la ligne en erreur : `"Candidat déjà importé : ref_candidat=XXX — un candidat déjà
+en base ne doit jamais être réenvoyé, toute correction se fait depuis l'écran Recruteur."`
+
+**`POST /api/candidats/import/executer`** : supprime entièrement la branche `UPDATE` sur
+`web_key` existant — elle ne doit plus jamais être atteinte (bloquée en amont par `verifier`),
+mais retire le code mort au lieu de le laisser trainer. Seule la branche `INSERT` (candidat
+inconnu) subsiste.
+
+**Aucun autre changement** : le reste du flux d'import (création `contact`/`adresse`/`candidat`/
+`fiche_de_voeux`, création du compte `user_`, email d'invitation, transaction tout-ou-rien)
+reste strictement identique.
+
+## Point de vigilance — priorité à ce test avant de livrer
+
+1. Importe un candidat avec un `web_key` **inconnu** → vérifie qu'il est créé normalement,
+   comme avant (comportement inchangé).
+2. Prends un candidat **déjà existant** en base (n'importe lequel) et modifie manuellement un de
+   ses champs via l'écran Recruteur (ex. le téléphone) — note la valeur modifiée.
+3. Construis un fichier avec 1 seule ligne, `ref_candidat` = celui de ce candidat, avec des
+   valeurs **différentes** de celles en base (notamment sur le champ modifié à l'étape 2).
+4. Vérifie que l'étape "Vérifier" renvoie bien cette ligne en erreur, message explicite.
+5. Confirme qu'aucune écriture n'a eu lieu : le champ modifié à l'étape 2 est **toujours** la
+   valeur que le Recruteur avait saisie, pas celle du fichier CSV.
+
+Rapporte le résultat détaillé de ces 5 points, pas juste "corrigé".

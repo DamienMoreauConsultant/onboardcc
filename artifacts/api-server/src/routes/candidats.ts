@@ -131,9 +131,36 @@ function validate(row: Record<string,string>, line: number, r: Refs) {
   return { ligne: line, statut: errors.length ? 'erreur' as const : 'ok' as const, message: errors.length ? errors.join(' | ') : '✓' };
 }
 function parsed(req: any) { return Papa.parse<Record<string,string>>(req.file.buffer.toString('utf8'), { header: true, skipEmptyLines: true, transformHeader: h => h.trim() }); }
-function validateAll(rows: Record<string,string>[], r: Refs) {
+async function existingCandidateWebKeys(rows: Record<string,string>[]) {
+  const webKeys = [...new Set(rows.map(row => row.ref_candidat?.trim()).filter(Boolean))];
+  if (!webKeys.length) return new Set<string>();
+  const existing = await pool.query<{ web_key: string }>(
+    'SELECT web_key FROM candidat WHERE web_key = ANY($1::text[])',
+    [webKeys],
+  );
+  return new Set(existing.rows.map(row => row.web_key));
+}
+
+function validateAll(rows: Record<string,string>[], r: Refs, existingWebKeys: Set<string>) {
   const web = new Set<string>(), emails = new Set<string>();
-  return rows.map((row,i) => { const result=validate(row,i+2,r); for(const [field,seen] of [['ref_candidat',web],['email',emails]] as const) { const value=(row[field]??'').trim().toLowerCase(); if(value && seen.has(value)) { result.statut='erreur'; result.message=result.message==='✓'?`Doublon dans le CSV : ${field}=${value}`:`${result.message} | Doublon dans le CSV : ${field}=${value}`; } seen.add(value); } return result; });
+  return rows.map((row,i) => {
+    const result=validate(row,i+2,r);
+    const webKey = row.ref_candidat?.trim();
+    if (webKey && existingWebKeys.has(webKey)) {
+      const message = `Candidat déjà importé : ref_candidat=${webKey} — un candidat déjà en base ne doit jamais être réenvoyé, toute correction se fait depuis l'écran Recruteur.`;
+      result.statut = 'erreur';
+      result.message = result.message === '✓' ? message : `${result.message} | ${message}`;
+    }
+    for(const [field,seen] of [['ref_candidat',web],['email',emails]] as const) {
+      const value=(row[field]??'').trim().toLowerCase();
+      if(value && seen.has(value)) {
+        result.statut='erreur';
+        result.message=result.message==='✓'?`Doublon dans le CSV : ${field}=${value}`:`${result.message} | Doublon dans le CSV : ${field}=${value}`;
+      }
+      seen.add(value);
+    }
+    return result;
+  });
 }
 function self(req: any, id: string | string[]) { return req.user!.role !== 'CAN' || String(req.user!.id_candidat) === String(id); }
 const DATE_FORM_FIELDS = new Set(['date_naissance', 'perso_date_mariage', 'projet_date_depart_souhaitee', 'date_depart_souhaite', 'date_revue']);
@@ -200,7 +227,7 @@ async function transition(client: any, id: string, state: string, actor: string,
 router.get('/import/template', requireRole(['REC','ADMIN']), (_req,res) => { res.type('text/csv').attachment('template_candidats_dcc.csv').send(`${CSV_COLUMNS.join(',')}\n`); });
 router.post('/import/verifier', requireRole(['REC','ADMIN']), upload.single('file'), async (req,res) => {
   if (!req.file) return void res.status(400).json({ error: 'Aucun fichier reçu.' });
-  try { const p = parsed(req); const h = headers(p.meta.fields); if (h) return void res.status(400).json({error:h}); if (p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`}); const r=await refs(); res.json({ lignes:validateAll(p.data,r) }); } catch (e) { console.error(e); res.status(500).json({error:'Erreur interne du serveur.'}); }
+  try { const p = parsed(req); const h = headers(p.meta.fields); if (h) return void res.status(400).json({error:h}); if (p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`}); const [r, existingWebKeys]=await Promise.all([refs(),existingCandidateWebKeys(p.data)]); res.json({ lignes:validateAll(p.data,r,existingWebKeys) }); } catch (e) { console.error(e); res.status(500).json({error:'Erreur interne du serveur.'}); }
 });
 
 /**
@@ -214,29 +241,22 @@ router.post('/import/executer', requireRole(['REC','ADMIN']), upload.single('fil
   try {
     const p=parsed(req), h=headers(p.meta.fields); if(h) return void res.status(400).json({error:h});
     if(p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`});
-    const r=await refs(), bad=validateAll(p.data,r).filter(x=>x.statut==='erreur');
+    const [r, existingWebKeys]=await Promise.all([refs(),existingCandidateWebKeys(p.data)]);
+    const bad=validateAll(p.data,r,existingWebKeys).filter(x=>x.statut==='erreur');
     if(bad.length) return void res.status(422).json({error:'Des erreurs de validation ont été détectées — import annulé.',lignes_en_erreur:bad});
     await client.query('BEGIN'); const ids:number[]=[]; const invitations: CandidateInvitation[]=[];
     for(const row of p.data) {
       const birth=parseFrenchDate(row.date_naissance).iso, marriage=parseFrenchDate(row.date_mariage).iso, available=parseFrenchDate(row.date_disponibilite).iso;
-      const existing=await client.query('SELECT c.id_candidat,c.id_contact,co.id_adresse FROM candidat c JOIN contact co ON co.id_contact=c.id_contact WHERE c.web_key=$1 FOR UPDATE',[row.ref_candidat.trim()]);
-      let idContact:number, idCandidate:number, idAddress:number;
-      if(existing.rows.length) {
-        ({id_candidat:idCandidate,id_contact:idContact,id_adresse:idAddress}=existing.rows[0]);
-        if (idAddress) {
-          await client.query('UPDATE adresse SET adresse1=$1,adresse2=$2,code_postal=$3,ville=$4,id_pays=$5 WHERE id_adresse=$6',[text(row.adresse1),text(row.adresse2),text(row.code_postal),text(row.ville),r.pays[row.pays.trim()],idAddress]);
-        } else {
-          const address = await client.query('INSERT INTO adresse(adresse1,adresse2,code_postal,ville,id_pays) VALUES($1,$2,$3,$4,$5) RETURNING id_adresse',[text(row.adresse1),text(row.adresse2),text(row.code_postal),text(row.ville),r.pays[row.pays.trim()]]);
-          idAddress = address.rows[0].id_adresse;
-          await client.query('UPDATE contact SET id_adresse=$1 WHERE id_contact=$2',[idAddress,idContact]);
-        }
-      }
-      else { const a=await client.query('INSERT INTO adresse(adresse1,adresse2,code_postal,ville,id_pays) VALUES($1,$2,$3,$4,$5) RETURNING id_adresse',[text(row.adresse1),text(row.adresse2),text(row.code_postal),text(row.ville),r.pays[row.pays.trim()]]); idAddress=a.rows[0].id_adresse; const c=await client.query(`INSERT INTO contact(crm_key,role,genre,nom_contact,nom_naissance,prenom_contact,tel_contact,email_contact,date_naissance,lieu_naissance,nationalite,id_adresse) VALUES($1,'CAN',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id_contact`,[row.ref_candidat.trim(),text(row.genre),text(row.nom),text(row.nom_naissance),text(row.prenom),text(row.telephone),text(row.email),birth,text(row.lieu_naissance),text(row.nationalite),idAddress]); idContact=c.rows[0].id_contact; idCandidate=0; }
-      await client.query('UPDATE contact SET genre=$1,nom_contact=$2,nom_naissance=$3,prenom_contact=$4,tel_contact=$5,email_contact=$6,date_naissance=$7,lieu_naissance=$8,nationalite=$9 WHERE id_contact=$10',[text(row.genre),text(row.nom),text(row.nom_naissance),text(row.prenom),text(row.telephone),text(row.email),birth,text(row.lieu_naissance),text(row.nationalite),idContact]);
+      const a=await client.query('INSERT INTO adresse(adresse1,adresse2,code_postal,ville,id_pays) VALUES($1,$2,$3,$4,$5) RETURNING id_adresse',[text(row.adresse1),text(row.adresse2),text(row.code_postal),text(row.ville),r.pays[row.pays.trim()]]);
+      const idAddress:number=a.rows[0].id_adresse;
+      const c=await client.query(`INSERT INTO contact(crm_key,role,genre,nom_contact,nom_naissance,prenom_contact,tel_contact,email_contact,date_naissance,lieu_naissance,nationalite,id_adresse) VALUES($1,'CAN',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id_contact`,[row.ref_candidat.trim(),text(row.genre),text(row.nom),text(row.nom_naissance),text(row.prenom),text(row.telephone),text(row.email),birth,text(row.lieu_naissance),text(row.nationalite),idAddress]);
+      const idContact:number=c.rows[0].id_contact;
       const candidateValues=[row.ref_candidat.trim(),bool(row.depart_en_couple),text(row.nom_prenom_conjoint),text(row.etat_de_vie),marriage,bool(row.est_parent),bool(row.pars_avec_enfants),row.enfant_consolide || null,available,row.duree_souhaitee || null,text(row.references_offres),text(row.motivations),text(row.questionnements),text(row.avancement_demarche),text(row.experience_interculturelle),text(row.formation_dialogue_interculturel),text(row.experience_volontariat),text(row.raison_depart_dcc),text(row.attentes_dcc),bool(row.lien_autre_structure),text(row.lien_autre_structure_detail),text(row.statut_professionnel),text(row.administration_tutelle),bool(row.experience_engagement),text(row.experience_engagement_detail),text(row.info_complementaire),text(row.disponibilites_contact),text(row.sessions_choisir_preference),idContact];
-      const q=`INSERT INTO candidat(web_key,perso_depart_en_couple,perso_nom_prenom_conjoint,perso_etat_de_vie,perso_date_mariage,perso_est_parent,perso_pars_avec_enfants,perso_enfants_consolides,projet_date_depart_souhaitee,projet_duree_mission_souhaitee,projet_numero_offre_mission,projet_motivations,projet_questionnements,projet_avancement,projet_experience_interculturelle,projet_formation_dialogue_interculturel,projet_experience_de_volontariat,projet_raison_du_depart_avec_la_dcc,projet_attente_de_la_dcc,projet_lien_avec_une_autre_structure,projet_lien_avec_une_autre_structure_detail,profil_statut,profil_statut_administration_de_tutelle,profil_experience_engagement,profil_experience_engagement_detail,candidature_information_du_candidat,candidature_disponibilite_du_candidat,candidature_preference_session_choisir,id_contact,id_etat_candidat,date_revue) VALUES(${candidateValues.map((_,i)=>'$'+(i+1)).join(',')},'AP2',CURRENT_DATE+(SELECT delais_de_reponse FROM etat_candidat WHERE id_etat_candidat='AP2')) ON CONFLICT(web_key) DO UPDATE SET perso_depart_en_couple=EXCLUDED.perso_depart_en_couple,perso_nom_prenom_conjoint=EXCLUDED.perso_nom_prenom_conjoint,perso_etat_de_vie=EXCLUDED.perso_etat_de_vie,perso_date_mariage=EXCLUDED.perso_date_mariage,perso_est_parent=EXCLUDED.perso_est_parent,perso_pars_avec_enfants=EXCLUDED.perso_pars_avec_enfants,perso_enfants_consolides=EXCLUDED.perso_enfants_consolides,projet_date_depart_souhaitee=EXCLUDED.projet_date_depart_souhaitee,projet_duree_mission_souhaitee=EXCLUDED.projet_duree_mission_souhaitee,projet_numero_offre_mission=EXCLUDED.projet_numero_offre_mission,projet_motivations=EXCLUDED.projet_motivations,projet_questionnements=EXCLUDED.projet_questionnements,projet_avancement=EXCLUDED.projet_avancement,projet_experience_interculturelle=EXCLUDED.projet_experience_interculturelle,projet_formation_dialogue_interculturel=EXCLUDED.projet_formation_dialogue_interculturel,projet_experience_de_volontariat=EXCLUDED.projet_experience_de_volontariat,projet_raison_du_depart_avec_la_dcc=EXCLUDED.projet_raison_du_depart_avec_la_dcc,projet_attente_de_la_dcc=EXCLUDED.projet_attente_de_la_dcc,projet_lien_avec_une_autre_structure=EXCLUDED.projet_lien_avec_une_autre_structure,projet_lien_avec_une_autre_structure_detail=EXCLUDED.projet_lien_avec_une_autre_structure_detail,profil_statut=EXCLUDED.profil_statut,profil_statut_administration_de_tutelle=EXCLUDED.profil_statut_administration_de_tutelle,profil_experience_engagement=EXCLUDED.profil_experience_engagement,candidature_information_du_candidat=EXCLUDED.candidature_information_du_candidat,candidature_disponibilite_du_candidat=EXCLUDED.candidature_disponibilite_du_candidat,candidature_preference_session_choisir=EXCLUDED.candidature_preference_session_choisir RETURNING id_candidat`;
-      const isNew=!existing.rows.length; const cr=await client.query(q,candidateValues); idCandidate=cr.rows[0].id_candidat; await client.query('UPDATE candidat SET profil_experience_engagement_detail=$1 WHERE id_candidat=$2',[text(row.experience_engagement_detail),idCandidate]); ids.push(idCandidate);
-      if(isNew) await client.query(`INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES('Import CRM','Import initial','AP2',$1)`,[idCandidate]);
+      const q=`INSERT INTO candidat(web_key,perso_depart_en_couple,perso_nom_prenom_conjoint,perso_etat_de_vie,perso_date_mariage,perso_est_parent,perso_pars_avec_enfants,perso_enfants_consolides,projet_date_depart_souhaitee,projet_duree_mission_souhaitee,projet_numero_offre_mission,projet_motivations,projet_questionnements,projet_avancement,projet_experience_interculturelle,projet_formation_dialogue_interculturel,projet_experience_de_volontariat,projet_raison_du_depart_avec_la_dcc,projet_attente_de_la_dcc,projet_lien_avec_une_autre_structure,projet_lien_avec_une_autre_structure_detail,profil_statut,profil_statut_administration_de_tutelle,profil_experience_engagement,profil_experience_engagement_detail,candidature_information_du_candidat,candidature_disponibilite_du_candidat,candidature_preference_session_choisir,id_contact,id_etat_candidat,date_revue) VALUES(${candidateValues.map((_,i)=>'$'+(i+1)).join(',')},'AP2',CURRENT_DATE+(SELECT delais_de_reponse FROM etat_candidat WHERE id_etat_candidat='AP2')) RETURNING id_candidat`;
+      const cr=await client.query(q,candidateValues);
+      const idCandidate:number=cr.rows[0].id_candidat;
+      await client.query('UPDATE candidat SET profil_experience_engagement_detail=$1 WHERE id_candidat=$2',[text(row.experience_engagement_detail),idCandidate]); ids.push(idCandidate);
+      await client.query(`INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES('Import CRM','Import initial','AP2',$1)`,[idCandidate]);
       const f=await client.query(`INSERT INTO fiche_de_voeux(id_candidat,part_seul,date_depart_souhaite) VALUES($1,$2,$3) ON CONFLICT(id_candidat) DO UPDATE SET part_seul=EXCLUDED.part_seul,date_depart_souhaite=EXCLUDED.date_depart_souhaite,date_modification=CURRENT_DATE RETURNING id_fiche_de_voeux`,[idCandidate,!bool(row.depart_en_couple),available]); const idF=f.rows[0].id_fiche_de_voeux;
       for (const table of ['veut_partir_pour','a_etudie_dans','a_travaille_dans','parle','connait_la_dcc_par']) {
         await client.query(
