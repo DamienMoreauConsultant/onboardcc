@@ -5,3 +5,4 @@
 - [Couverture des destinations](voeux-destination-coverage.md) — chaque sauvegarde de vœux doit sérialiser toutes les régions actives avec un degré P1–P6 ou Non.
 - [Contrat des référentiels CRM](referentiels-crm-contract.md) — les imports échangent des `crm_key`, la base stocke les FK et l’interface affiche les désignations.
 - [Frontière import Poste et scoring](poste-import-scoring-boundary.md) — l’import écrase les données CRM, mais ne décide jamais quels postes doivent être recalculés.
+- [Rafraîchissement après mutation](mutation-refresh.md) — relire le détail serveur en arrière-plan, effacer les erreurs obsolètes et préserver les brouillons ouverts.

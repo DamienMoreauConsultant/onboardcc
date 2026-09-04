@@ -105,6 +105,17 @@ export default function PosteDetail({ mode }: Props) {
   const [commentaire, setCommentaire] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
+  const [opportunityRefreshKey, setOpportunityRefreshKey] = useState(0);
+
+  const refreshPoste = async () => {
+    if (!poste) return;
+    try {
+      setPoste(await postesApi.detail(poste.id_poste));
+      setError('');
+    } catch (err: any) {
+      setError(err?.response?.data?.error ?? 'Poste introuvable.');
+    }
+  };
 
   useEffect(() => {
     if (!params?.id) return;
@@ -132,7 +143,8 @@ export default function PosteDetail({ mode }: Props) {
     try {
       if (action === 'fermer') await postesApi.close(poste.id_poste, commentaire, files);
       else await postesApi.reopen(poste.id_poste, commentaire, files);
-      setPoste(await postesApi.detail(poste.id_poste));
+      await refreshPoste();
+      setOpportunityRefreshKey((current) => current + 1);
       setAction(null);
       setCommentaire('');
       setFiles([]);
@@ -290,7 +302,12 @@ export default function PosteDetail({ mode }: Props) {
         </TabsContent>
 
         <TabsContent value="opportunites">
-          <OpportunityList mode={mode} postId={poste.id_poste} />
+          <OpportunityList
+            mode={mode}
+            postId={poste.id_poste}
+            refreshKey={opportunityRefreshKey}
+            onChanged={refreshPoste}
+          />
         </TabsContent>
       </Tabs>
 

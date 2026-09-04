@@ -40,6 +40,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
   const [submitDefinitive, setSubmitDefinitive] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [reviewDate, setReviewDate] = useState('');
+  const detailRequest = useRef(0);
 
   const { data: refs } = useQuery({
     queryKey: ['voeux-references'],
@@ -50,21 +51,26 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     queryFn: candidatsApi.attachmentConfiguration,
   });
 
-  const reload = async () => {
+  const reload = useCallback(async (showLoading = false) => {
     if (!id) return;
-    setLoading(true);
+    const request = ++detailRequest.current;
+    if (showLoading) setLoading(true);
     try {
-      setDetail(await candidatsApi.detail(Number(id)));
+      const nextDetail = await candidatsApi.detail(Number(id));
+      if (request !== detailRequest.current) return;
+      setDetail(nextDetail);
+      setError('');
     } catch (e: any) {
+      if (request !== detailRequest.current) return;
       setError(e.response?.data?.error ?? 'Candidat introuvable.');
     } finally {
-      setLoading(false);
+      if (showLoading && request === detailRequest.current) setLoading(false);
     }
-  };
+  }, [id]);
 
   useEffect(() => {
-    void reload();
-  }, [id]);
+    void reload(true);
+  }, [reload]);
 
   // Dans l'espace candidat, chaque onglet possède une URL stable afin que
   // l'État civil (et donc la section Famille) soit directement accessible.
@@ -125,8 +131,11 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     setBusy(true);
     try {
       await candidatsApi.save(detail.id_candidat, section, values);
-      setEditing(null);
-      await reload();
+      if (editing === section) {
+        setEditing(null);
+        setDirty(false);
+      }
+      await reload(false);
     } catch (e: any) {
       setError(e.response?.data?.error ?? 'Enregistrement impossible.');
     } finally {
@@ -146,7 +155,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
       setComment('');
       setAttachmentDescription('');
       setAttachmentUrls(['','']);
-      await reload();
+      await reload(false);
     } catch (e: any) {
       setError(e.response?.data?.error ?? 'Action impossible.');
     } finally {
@@ -160,7 +169,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     try {
       await candidatsApi.submitVoeux(detail.id_candidat, submitDefinitive);
       setSubmitDefinitive(null);
-      await reload();
+      await reload(false);
     } catch (e: any) {
       setError(e.response?.data?.error ?? 'Soumission impossible.');
     } finally {
@@ -218,7 +227,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     setBusy(true);
     try {
       await candidatsApi.reviseReviewDate(detail.id_candidat, reviewDate || null);
-      await reload();
+      await reload(false);
     } catch (e: any) {
       setError(e.response?.data?.error ?? 'Date de revue impossible à enregistrer.');
     } finally {
@@ -318,7 +327,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
         {mode === 'recruteur' && (
           <>
             <TabsContent value="opportunites" className="focus-visible:outline-none">
-              <OpportunityList mode="recruteur" candidateId={detail.id_candidat} />
+          <OpportunityList mode="recruteur" candidateId={detail.id_candidat} onChanged={() => reload(false)} />
             </TabsContent>
             
             <TabsContent value="progression" className="focus-visible:outline-none">

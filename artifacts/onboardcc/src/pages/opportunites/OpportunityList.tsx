@@ -12,6 +12,8 @@ type Props = {
   mode: 'recruteur' | 'cm';
   postId?: number;
   candidateId?: number;
+  refreshKey?: number;
+  onChanged?: () => void | Promise<void>;
 };
 
 type AvailableAction = { action: OpportunityAction; label: string; destructive?: boolean };
@@ -60,7 +62,7 @@ function Score({ label, value, warning = false }: { label: string; value: Opport
   );
 }
 
-export function OpportunityList({ mode, postId, candidateId }: Props) {
+export function OpportunityList({ mode, postId, candidateId, refreshKey, onChanged }: Props) {
   const [items, setItems] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -80,7 +82,7 @@ export function OpportunityList({ mode, postId, candidateId }: Props) {
     }
   };
 
-  useEffect(() => { void load(); }, [postId, candidateId]);
+  useEffect(() => { void load(); }, [postId, candidateId, refreshKey]);
 
   const submit = async () => {
     if (!selected || !comment.trim()) return;
@@ -89,7 +91,7 @@ export function OpportunityList({ mode, postId, candidateId }: Props) {
       await opportunitesApi.transition(selected.item.id_opportunite, selected.action.action, comment.trim());
       setSelected(null);
       setComment('');
-      await load();
+      await Promise.all([load(), Promise.resolve(onChanged?.())]);
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Transition impossible.');
     } finally {

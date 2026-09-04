@@ -21,6 +21,8 @@ export default function OpportuniteDetail({ mode }: Props) {
 
   useEffect(() => {
     if (!params?.id) return;
+    setDetail(null);
+    setError('');
     void opportunitesApi.detail(Number(params.id))
       .then(setDetail)
       .catch((err: any) => setError(err?.response?.data?.error ?? 'Opportunité introuvable.'));
@@ -44,6 +46,7 @@ export default function OpportuniteDetail({ mode }: Props) {
     try {
       await opportunitesApi.transition(detail.id_opportunite, action, comment.trim());
       setDetail(await opportunitesApi.detail(detail.id_opportunite));
+      setError('');
       setAction(null);
       setComment('');
     } catch (err: any) {

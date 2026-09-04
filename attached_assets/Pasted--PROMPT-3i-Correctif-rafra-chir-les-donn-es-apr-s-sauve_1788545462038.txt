@@ -1,0 +1,58 @@
+# PROMPT 3i — Correctif : rafraîchir les données après sauvegarde/transition d'état (A47)
+# Référence : Correctif_DCC_20260826.md, issue A47
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ Priorité haute vu la démo du 04/09/2026, mais scope volontairement resserré ce soir sur le
+# flux le plus critique (Vœux) — voir "Portée" ci-dessous.
+# ============================================================================
+
+## Contexte — bug reproduit en test manuel
+
+Après avoir soumis sa fiche de vœux, un candidat voit toujours à l'écran :
+- l'ancien message d'erreur "Champs obligatoires manquants : Centres d'intérêt" (alors que le
+  champ a été rempli et la soumission a manifestement réussi, vu le point suivant) ;
+- l'ancien badge d'état ("2ème appel téléphonique") au lieu du nouvel état réel ;
+- en dessous, le message "Votre fiche de vœux est en lecture seule à cette étape" apparaît bien
+  correctement — preuve que la soumission a réussi côté backend, mais que l'écran affiche un
+  mélange de données fraîches et de données obsolètes (pas de rafraîchissement cohérent).
+
+**Cause probable** : après un appel de sauvegarde/soumission réussi, le frontend ne recharge pas
+les données concernées depuis l'API — il continue d'afficher l'état local (React state) tel
+qu'il était avant l'action, avec parfois un ou deux champs mis à jour ponctuellement mais pas
+l'ensemble de l'écran (badge d'état, bandeau d'erreur...).
+
+## Correctif demandé
+
+**Ne fais pas un rechargement de page complet (`window.location.reload()` ou équivalent)** —
+mauvaise expérience (perte de scroll, de menus ouverts, etc.). À la place : après toute action
+qui sauvegarde ou fait transitionner l'état d'un **poste**, d'un **candidat**, ou d'une
+**opportunité** (sauvegarde d'un onglet en édition, soumission de vœux provisoire/définitive,
+transition d'opportunité — proposer/approuver/mettre en lien/décision/refus, changement d'état
+candidat...), **re-déclenche l'appel API de lecture** qui a initialement peuplé l'écran (le même
+`GET` que celui utilisé au chargement de la page), et remplace l'état local du composant par la
+réponse fraîche — pas de rechargement navigateur, juste une re-synchronisation des données
+affichées avec ce qui est réellement en base.
+
+## Portée de ce correctif ce soir
+
+**Vérifie et teste réellement le flux Vœux en priorité** (candidat et recruteur) — c'est celui
+qui vient d'être trouvé cassé et le plus visible en démo demain :
+1. Soumettre les vœux provisoires (candidat) → l'écran doit immédiatement afficher le nouveau
+   badge d'état et le bandeau d'erreur doit disparaître si la soumission a réussi.
+2. Idem pour la soumission définitive.
+3. Idem pour un enregistrement d'onglet en édition (ex. État civil) côté Recruteur — le badge
+   d'état et les données affichées doivent refléter ce qui vient d'être enregistré, sans besoin
+   de naviguer ailleurs et revenir.
+
+**Applique le même principe partout où tu identifies le même pattern** (sauvegarde d'un onglet
+poste, transitions d'opportunité...) — mais je ne te demande pas de retester exhaustivement
+chaque écran un par un ce soir, faute de temps avant la démo. Rapporte clairement dans ta
+réponse : (a) ce que tu as testé réellement avec un résultat vérifié, et (b) ce que tu as
+corrigé par cohérence de code sans repasser un test complet dessus — pour qu'on sache où
+retester en priorité dans les prochains jours.
+
+## Point de vigilance
+
+Le rafraîchissement ne doit pas réinitialiser un formulaire en cours d'édition ailleurs sur la
+page (ex. si un autre onglet a des modifications non enregistrées) — limite le re-fetch aux
+données affichées en lecture (badge, bandeau, sections non en cours d'édition), pas à un
+formulaire que l'utilisateur est justement en train de remplir.
