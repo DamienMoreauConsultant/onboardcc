@@ -1,0 +1,47 @@
+# PROMPT 3j — Amélioration : bouton Actualiser réduit + recherche libre sur les listes (A47)
+# Référence : Correctif_DCC_20260826.md, issue A47
+# Écrans concernés : `/recruteur/candidats` ET `/recruteur/postes` (même traitement sur les 2)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ Amélioration de confort, PAS bloquante pour la démo du 04/09/2026 — contrairement aux
+# correctifs précédents envoyés ce soir, celui-ci peut attendre si le temps manque.
+# ============================================================================
+
+## 1. Bouton "Actualiser" — réduit en picto
+
+Remplace le bouton "Actualiser" actuel (grand bouton avec texte, même gabarit que "Importer des
+candidats"/"Importer des postes") par un **petit bouton picto seul** (même icône de
+rafraîchissement, sans texte), positionné immédiatement à droite du bouton "Importer...".
+Comportement inchangé (relance le chargement de la liste), seul l'habillage visuel change.
+
+## 2. Zone de recherche libre
+
+Ajoute, **sous** la ligne des boutons Importer/Actualiser, une zone de recherche :
+- Un champ texte mono-ligne (placeholder du type "Rechercher...").
+- Une icône loupe, cliquable, qui déclenche la recherche (déclenche aussi sur touche Entrée dans
+  le champ — pas besoin de cliquer précisément sur la loupe).
+
+**Comportement de la recherche** :
+- Réduit la liste affichée aux lignes dont **au moins une colonne visible à l'écran** contient la
+  chaîne saisie, **partiellement**, insensible à la casse.
+- Couvre **toutes** les colonnes affichées, y compris celles qui ont déjà un filtre dédié
+  (Domaine, Région, Durée, Langue, État côté candidats ; colonnes équivalentes côté postes) — pas
+  seulement les colonnes texte libre (Nom, Prénom...). Cherche sur les **libellés affichés**
+  (jamais sur un `crm_key` technique, cohérent avec la règle déjà en place ailleurs dans l'app).
+- Pour une cellule à **valeurs multiples** (ex. plusieurs régions pour un même candidat,
+  affichées séparées par une virgule) : la ligne remonte dès qu'**une seule** des valeurs de la
+  cellule contient la chaîne recherchée.
+- La recherche se **combine** avec les filtres de colonne déjà actifs (ET logique) — une ligne
+  doit satisfaire à la fois les filtres actifs et la recherche pour rester affichée, pas l'un ou
+  l'autre.
+- Champ vide = aucun filtrage par recherche (comportement actuel inchangé).
+
+## Points de vigilance
+
+- Applique ce correctif identiquement sur les 2 écrans (`/recruteur/candidats` et
+  `/recruteur/postes`) — même comportement, mêmes composants réutilisés si possible.
+- Vérifie que la recherche reste rapide même avec le jeu de données de test actuel (pas de
+  requête API à chaque frappe si le filtrage peut se faire côté client sur les données déjà
+  chargées — à toi de juger selon comment la liste est déjà peuplée aujourd'hui).
+- Teste réellement : saisis un nom de candidat existant → seule sa ligne reste ; saisis le nom
+  d'une région existante (ex. "Afrique") → tous les candidats ayant cette région dans leurs vœux
+  remontent, même sans avoir utilisé le filtre Région.

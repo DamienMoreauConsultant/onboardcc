@@ -290,9 +290,12 @@ router.get('/', requireRole(RECRUITERS), async (req, res) => {
     const legacyStates = typeof req.query.etats === 'string' ? req.query.etats.split(',').map(x=>x.trim()).filter(Boolean) : [];
     const states = filters.etat?.length ? filters.etat : legacyStates;
     const generatedFilters = candidateFilterSql(filters, 2);
-    const offsetIndex = 2 + generatedFilters.params.length;
+    const search = typeof req.query.recherche === 'string' ? req.query.recherche.trim() : '';
+    const searchIndex = 2 + generatedFilters.params.length;
+    const offsetIndex = searchIndex + 1;
     const result = await pool.query(`
-      SELECT
+      WITH visible_candidates AS (
+        SELECT
         c.id_candidat,
         c.trigram_candidat,
         co.nom_contact,
@@ -308,15 +311,30 @@ router.get('/', requireRole(RECRUITERS), async (req, res) => {
         (SELECT COUNT(*)::int FROM opportunite o JOIN fiche_de_voeux f ON f.id_fiche_de_voeux=o.id_fiche_de_voeux WHERE f.id_candidat=c.id_candidat AND o.id_etat_opportunite IN (2,4)) AS opportunites_a_qualifier,
         (SELECT COUNT(*)::int FROM opportunite o JOIN fiche_de_voeux f ON f.id_fiche_de_voeux=o.id_fiche_de_voeux WHERE f.id_candidat=c.id_candidat AND o.id_etat_opportunite=5) AS opportunites_approuvees,
         (SELECT COUNT(*)::int FROM opportunite o JOIN fiche_de_voeux f ON f.id_fiche_de_voeux=o.id_fiche_de_voeux WHERE f.id_candidat=c.id_candidat AND o.id_etat_opportunite IN (6,7,8,9)) AS opportunites_affectation
-      FROM candidat c
-      JOIN contact co ON co.id_contact = c.id_contact
-      JOIN etat_candidat ec ON ec.id_etat_candidat = c.id_etat_candidat
-      LEFT JOIN fiche_de_voeux f ON f.id_candidat = c.id_candidat
-      WHERE ((cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('AFF','NEL','NCA'))
-         OR ec.designation=ANY($1::text[]))${generatedFilters.sql}
-      ORDER BY co.nom_contact, co.prenom_contact LIMIT 20 OFFSET $${offsetIndex}`, [states, ...generatedFilters.params, (page - 1) * 20]);
-    const total = await pool.query(`SELECT COUNT(*)::int total FROM candidat c JOIN etat_candidat ec ON ec.id_etat_candidat=c.id_etat_candidat WHERE ((cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('AFF','NEL','NCA')) OR ec.designation=ANY($1::text[]))${generatedFilters.sql}`,[states, ...generatedFilters.params]);
-    res.json({ candidats: result.rows, page, page_size:20, total:total.rows[0].total });
+        FROM candidat c
+        JOIN contact co ON co.id_contact = c.id_contact
+        JOIN etat_candidat ec ON ec.id_etat_candidat = c.id_etat_candidat
+        LEFT JOIN fiche_de_voeux f ON f.id_candidat = c.id_candidat
+        WHERE ((cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('AFF','NEL','NCA'))
+           OR ec.designation=ANY($1::text[]))${generatedFilters.sql}
+      ),
+      matching_candidates AS (
+        SELECT *
+        FROM visible_candidates
+        WHERE $${searchIndex}::text = '' OR concat_ws(' ',
+          nom_contact, prenom_contact, domaines, regions, duree, langues, etat_designation,
+          to_char(date_revue, 'DD/MM/YYYY'),
+          opportunites_a_qualifier::text, opportunites_approuvees::text, opportunites_affectation::text,
+          CASE WHEN flag_candidat_deja_mis_en_lien THEN 'Oui' ELSE 'Non' END
+        ) ILIKE '%' || $${searchIndex} || '%'
+      )
+      SELECT *, COUNT(*) OVER()::int AS total_count
+      FROM matching_candidates
+      ORDER BY nom_contact, prenom_contact
+      LIMIT 20 OFFSET $${offsetIndex}`, [states, ...generatedFilters.params, search, (page - 1) * 20]);
+    const total = result.rows[0]?.total_count ?? 0;
+    const candidats = result.rows.map(({ total_count: _totalCount, ...row }) => row);
+    res.json({ candidats, page, page_size:20, total });
   } catch (err) {
     console.error('Erreur GET candidats :', err);
     res.status(500).json({ error: 'Erreur interne du serveur.' });

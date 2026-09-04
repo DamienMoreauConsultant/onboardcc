@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { BriefcaseBusiness, ChevronRight, Loader2, RefreshCw } from 'lucide-react';
 import { postesApi, type PosteRow } from '@/api/postes';
 import { ColumnFilter } from '@/components/data-table/ColumnFilter';
 import { KpiHeader } from '@/components/data-table/KpiHeader';
+import { ListSearch } from '@/components/data-table/ListSearch';
 import { ScrollableTable, stickyTableHeaderClass } from '@/components/data-table/ScrollableTable';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -23,6 +24,8 @@ export default function PostesList({ mode }: Props) {
   const [rows, setRows] = useState<PosteRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,6 +53,20 @@ export default function PostesList({ mode }: Props) {
     <ColumnFilter columnKey={key} endpoint="/postes/filtres" label={label} activeValues={filters[key] ?? []} onApply={(values) => applyFilter(key, values)} />
   );
   const detailBase = mode === 'cm' ? '/cm' : '/recruteur';
+  const displayedRows = useMemo(() => {
+    const query = search.toLocaleLowerCase('fr-FR');
+    if (!query) return rows;
+    return rows.filter((row) => [
+      row.pays_designation,
+      row.statut_volontaire,
+      row.fonction,
+      row.etat_designation,
+      row.opp_a_qualifier,
+      row.opp_approuvee,
+      row.opp_en_affectation,
+      row.flag_poste_deja_mis_en_lien ? 'Oui' : 'Non',
+    ].some((value) => String(value ?? '').toLocaleLowerCase('fr-FR').includes(query)));
+  }, [rows, search]);
 
   return (
     <div className="space-y-5 p-6 md:p-8">
@@ -66,9 +83,12 @@ export default function PostesList({ mode }: Props) {
         </div>
         <div className="flex gap-2">
           {mode === 'recruteur' && <Link href="/recruteur/postes/import"><Button>Importer des postes</Button></Link>}
-          <Button variant="outline" onClick={() => void load()} disabled={loading}><RefreshCw className="mr-2 h-4 w-4" />Actualiser</Button>
+          <Button size="icon" variant="outline" onClick={() => void load()} disabled={loading} aria-label="Actualiser la liste" title="Actualiser">
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
       </div>
+      <ListSearch value={searchInput} onChange={setSearchInput} onSubmit={() => setSearch(searchInput.trim())} loading={loading} />
 
       {error && <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>}
       <Card>
@@ -92,7 +112,7 @@ export default function PostesList({ mode }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => (
+                  {displayedRows.map((row) => (
                     <tr key={row.id_poste} className="border-t transition-colors hover:bg-muted/30">
                       <td className="px-4 py-4 font-mono font-semibold text-primary"><Link href={`${detailBase}/postes/${row.id_poste}`}>{row.crm_key}</Link></td>
                       <td className="px-4 py-4">{row.pays_designation}</td>
@@ -106,7 +126,7 @@ export default function PostesList({ mode }: Props) {
                       <td className="px-4 py-4"><Link href={`${detailBase}/postes/${row.id_poste}`} aria-label={`Ouvrir le poste ${row.crm_key}`}><ChevronRight className="h-4 w-4 text-muted-foreground" /></Link></td>
                     </tr>
                   ))}
-                  {!rows.length && <tr><td colSpan={10} className="p-16 text-center text-muted-foreground">Aucun poste ne correspond aux filtres.</td></tr>}
+                  {!displayedRows.length && <tr><td colSpan={10} className="p-16 text-center text-muted-foreground">Aucun poste ne correspond aux filtres ou à la recherche.</td></tr>}
                 </tbody>
               </table>
             </ScrollableTable>

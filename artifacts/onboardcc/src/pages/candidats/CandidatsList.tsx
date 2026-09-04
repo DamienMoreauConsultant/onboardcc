@@ -5,6 +5,7 @@ import { candidatsApi, type CandidatRow } from '@/api/candidats';
 import { formatDateFR } from '@/lib/date';
 import { ColumnFilter } from '@/components/data-table/ColumnFilter';
 import { KpiHeader } from '@/components/data-table/KpiHeader';
+import { ListSearch } from '@/components/data-table/ListSearch';
 import { ScrollableTable, stickyTableHeaderClass } from '@/components/data-table/ScrollableTable';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,11 +26,13 @@ export default function CandidatsList() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await candidatsApi.list(page, filters);
+      const result = await candidatsApi.list(page, filters, search);
       setRows(result.items);
       setTotal(result.total);
       setError('');
@@ -38,7 +41,7 @@ export default function CandidatsList() {
     } finally {
       setLoading(false);
     }
-  }, [filters, page]);
+  }, [filters, page, search]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -52,6 +55,10 @@ export default function CandidatsList() {
     });
   };
   const pages = Math.max(1, Math.ceil(total / 20));
+  const applySearch = () => {
+    setPage(1);
+    setSearch(searchInput.trim());
+  };
   const filterFor = (key: string, label: string) => (
     <ColumnFilter columnKey={key} endpoint="/candidats/filtres" label={label} activeValues={filters[key] ?? []} onApply={(values) => applyFilter(key, values)} />
   );
@@ -69,9 +76,12 @@ export default function CandidatsList() {
         </div>
         <div className="flex gap-2">
           <Link href="/recruteur/candidats/import"><Button>Importer des candidats</Button></Link>
-          <Button variant="outline" onClick={() => void load()} disabled={loading}><RefreshCw className="mr-2 h-4 w-4" />Actualiser</Button>
+          <Button size="icon" variant="outline" onClick={() => void load()} disabled={loading} aria-label="Actualiser la liste" title="Actualiser">
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
       </div>
+      <ListSearch value={searchInput} onChange={setSearchInput} onSubmit={applySearch} loading={loading} />
 
       {error && <p className="rounded bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       <Card>
@@ -118,7 +128,7 @@ export default function CandidatsList() {
                         <td className="px-3 py-3"><Link href={`/recruteur/candidats/${row.id_candidat}`} aria-label={`Ouvrir le dossier de ${row.prenom_contact} ${row.nom_contact}`}><ChevronRight className="h-4 w-4" /></Link></td>
                       </tr>
                     ))}
-                    {!rows.length && <tr><td colSpan={13} className="p-16 text-center text-muted-foreground">Aucun candidat ne correspond aux filtres.</td></tr>}
+                    {!rows.length && <tr><td colSpan={13} className="p-16 text-center text-muted-foreground">Aucun candidat ne correspond aux filtres ou à la recherche.</td></tr>}
                   </tbody>
                 </table>
               </ScrollableTable>

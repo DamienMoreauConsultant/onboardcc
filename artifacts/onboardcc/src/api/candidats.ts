@@ -26,8 +26,8 @@ export type VoeuxReferences = {
 };
 
 export const candidatsApi = {
-  list: async (page = 1, filters: Record<string, string[]> = {}) => {
-    const { data } = await api.get<CandidatRow[] | CandidatsApiPage>('/candidats', { params: { page, filtres: JSON.stringify(filters) } });
+  list: async (page = 1, filters: Record<string, string[]> = {}, search = '') => {
+    const { data } = await api.get<CandidatRow[] | CandidatsApiPage>('/candidats', { params: { page, filtres: JSON.stringify(filters), recherche: search } });
     return Array.isArray(data)
       ? { items: data, total: data.length, page, pageSize: 20 }
       : { items: data.candidats, total: data.total, page: data.page, pageSize: data.page_size };
