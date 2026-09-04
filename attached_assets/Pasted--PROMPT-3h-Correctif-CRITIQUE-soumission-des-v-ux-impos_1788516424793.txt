@@ -1,0 +1,63 @@
+# PROMPT 3h — Correctif CRITIQUE : soumission des vœux impossible (A46)
+# Référence : Correctif_DCC_20260826.md, issue A46
+#             prompt3d1_correctif_dcc_backend.txt §4 (révisée 03/09/2026)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ BLOQUANT POUR LA DÉMO DU 04/09/2026 — ce bug empêche un candidat de soumettre sa fiche de
+# vœux, le parcours le plus central de toute l'application. Priorité maximale, teste réellement.
+# ============================================================================
+
+## Contexte — bug reproduit en test manuel
+
+Damien a testé la soumission des vœux provisoires d'un candidat (Bernard Camille) et obtient :
+`"Champs obligatoires manquants : Centres d'intérêt, Catégorie ecclésiale, Détail de la
+catégorie ecclésiale."`
+
+**Ces 3 champs ne sont jamais éditables par le candidat** — ils appartiennent au bloc "Avis DCC"
+(RECRUTEUR SEUL), entièrement masqué sur `/candidat/voeux` (spec d'origine,
+`prompt3d2_correctif_dcc_visuel.txt` §3, bloc A2). Un candidat ne peut donc **jamais** soumettre
+ses vœux tant que ces champs sont dans la liste des champs obligatoires — c'est un bug critique,
+pas une règle métier voulue. Le même problème existe très probablement aussi pour `part_seul`
+(même bloc Avis DCC), même s'il n'apparaît pas dans ce message précis (probablement déjà
+renseigné par hasard sur ce candidat de test — ne pas se fier à ce seul exemple).
+
+## Diagnostic à faire en premier — ne pas corriger à l'aveugle
+
+1. Trouve dans le code la fonction qui construit la liste des "champs obligatoires" vérifiée par
+   `soumettre_voeux_provisoire()`/`soumettre_voeux_definitif()`.
+2. Vérifie précisément quels champs y figurent aujourd'hui, et confirme lesquels parmi
+   `categorie_ecclesiale`, `categorie_ecclesiale_detail`, `part_seul`, `centres_interet` sont
+   inclus.
+3. Pour `centres_interet` en particulier : vérifie si ce champ est réellement RECRUTEUR SEUL
+   (comme les 3 autres) ou s'il est censé être éditable par le candidat mais qu'un bug d'accès
+   distinct l'empêche d'être rempli. Rapporte ce que tu trouves — la correction n'est pas la
+   même dans les deux cas (retirer le champ de la validation vs corriger son accès en édition).
+
+## Correctif attendu
+
+Retire `categorie_ecclesiale`, `categorie_ecclesiale_detail`, et `part_seul` de la liste des
+champs obligatoires vérifiés par `soumettre_voeux_provisoire()` et `soumettre_voeux_definitif()`
+— dans les deux cas d'appel (candidat directement, et recruteur via "Soumettre pour le
+candidat", §5 du même correctif d'origine — même fonction réutilisée, un seul endroit à
+corriger). Pour `centres_interet`, applique la correction issue du diagnostic ci-dessus (retrait
+de la validation, ou correction de l'accès en édition — au choix le plus cohérent avec ce que tu
+trouves).
+
+**Ne retire aucun autre champ de la validation** — tous les autres champs obligatoires
+(région/destinations pour chaque région active, environnement, logement, durée, langue, zone
+orange, conditions spartiates, hôpital proche, disponibilité fonctionnaire, nouvelle
+langue/poste, date de départ) doivent rester exactement comme avant.
+
+## Test réel avant de livrer — priorité absolue vu l'enjeu de demain
+
+1. Prends un candidat de test dont **tous** les champs candidat-éditables des vœux sont remplis,
+   mais dont les champs Avis DCC (`categorie_ecclesiale`, `part_seul`...) sont **vides**.
+2. Soumets ses vœux provisoires en tant que **candidat** (pas recruteur) → doit réussir (200),
+   pas d'erreur 400 sur ces champs.
+3. Refais le même test sur la soumission **définitive**.
+4. Vérifie qu'un champ réellement obligatoire côté candidat (ex. une région sans degré renseigné)
+   bloque toujours correctement la soumission avec le message explicite — pour confirmer que la
+   validation n'a pas été affaiblie au-delà de ce qui était demandé.
+5. Vérifie aussi le bouton recruteur "Soumettre pour le candidat" (A35) avec les mêmes champs
+   Avis DCC vides — doit réussir aussi.
+
+Rapporte le résultat détaillé de ces 5 points.

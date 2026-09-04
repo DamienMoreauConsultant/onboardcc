@@ -654,7 +654,6 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
     }
     if((definitive && fiche.date_voeux_definitifs)||(!definitive && fiche.flag_fiche_de_voeux_soumise)) throw new Error('PRE');
     const scalarLabels: Record<string,string> = {
-      part_seul:'Part seul',
       zone_orange:'Zone orange',
       conditions_spartiates:'Conditions spartiates',
       hopital_proche:'Hôpital proche',
@@ -664,8 +663,6 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
       nouvelle_langue:'Nouvelle langue',
       competences_a_developper:'Compétences à développer',
       centres_interret:'Centres d’intérêt',
-      categorie_ecclesiale:'Catégorie ecclésiale',
-      categorie_ecclesiale_detail:'Détail de la catégorie ecclésiale',
     };
     const missing = Object.entries(scalarLabels)
       .filter(([field]) => fiche[field] === null || fiche[field] === undefined || (typeof fiche[field] === 'string' && !fiche[field].trim()))
