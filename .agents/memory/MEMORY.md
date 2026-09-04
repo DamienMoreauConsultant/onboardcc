@@ -7,3 +7,4 @@
 - [Frontière import Poste et scoring](poste-import-scoring-boundary.md) — l’import écrase les données CRM, mais ne décide jamais quels postes doivent être recalculés.
 - [Rafraîchissement après mutation](mutation-refresh.md) — relire le détail serveur en arrière-plan, effacer les erreurs obsolètes et préserver les brouillons ouverts.
 - [Polarité de la note Alerte](warning-score-polarity.md) — l’Alerte mesure le danger : 0 OK, 5 Attention, 10 Danger ; l’agrégat conserve le risque maximal.
+- [Commentaires d’opportunité V1](opportunite-comments-v1.md) — les retours candidat et validation sont déduits de l’historique candidat, sans rattachement à une opportunité précise.

@@ -15,17 +15,58 @@ const BASE_SELECT = `
     o.flag_opportunite_proposee_a_cm,o.flag_opportunite_retenue,
     o.flag_opportunite_non_retenu,o.flag_opportunite_obsolete,
     eo.designation AS etat_designation,
-    cand.id_candidat,co.nom_contact,co.prenom_contact,
+    cand.id_candidat,co.nom_contact,co.prenom_contact,co.date_naissance,
+    ec.designation AS etat_candidat_designation,fdv.date_depart_possible,
     fp.crm_key AS poste_crm_key,fp.ong,fp.fonction,
-    p.designation AS pays_designation,r.designation AS region_designation
+    ep.designation AS etat_poste_designation,
+    p.designation AS pays_designation,r.designation AS region_designation,
+    dom.designation AS domaine_designation,
+    (SELECT string_agg(DISTINCT cp.designation, ', ' ORDER BY cp.designation)
+     FROM recherche rech JOIN competences cp ON cp.id_competences=rech.id_competences
+     WHERE rech.id_poste=o.id_poste) AS competences_poste,
+    (SELECT string_agg(DISTINCT lp.designation, ', ' ORDER BY lp.designation)
+     FROM langue_poste lpost JOIN langue lp ON lp.id_langue=lpost.id_langue
+     WHERE lpost.id_poste=o.id_poste) AS langues_poste,
+    (SELECT string_agg(DISTINCT dc.designation, ', ' ORDER BY dc.designation)
+     FROM (
+       SELECT a.id_domaine FROM a_etudie_dans a WHERE a.id_fiche_de_voeux=o.id_fiche_de_voeux
+       UNION
+       SELECT a.id_domaine FROM a_travaille_dans a WHERE a.id_fiche_de_voeux=o.id_fiche_de_voeux
+     ) source_domaine
+     JOIN domaine dc ON dc.id_domaine=source_domaine.id_domaine) AS domaines_candidat,
+    (SELECT string_agg(DISTINCT cc.designation, ', ' ORDER BY cc.designation)
+     FROM a_la_competence_de acomp JOIN competences cc ON cc.id_competences=acomp.id_competences
+     WHERE acomp.id_fiche_de_voeux=o.id_fiche_de_voeux) AS competences_candidat,
+    (SELECT string_agg(DISTINCT lc.designation, ', ' ORDER BY lc.designation)
+     FROM parle pc JOIN langue lc ON lc.id_langue=pc.id_langue
+     WHERE pc.id_fiche_de_voeux=o.id_fiche_de_voeux) AS langues_candidat,
+    (SELECT COUNT(*)::int FROM opportunite oc
+     WHERE oc.id_poste=o.id_poste
+       AND NOT COALESCE(oc.flag_opportunite_obsolete,false)
+       AND NOT COALESCE(oc.flag_opportunite_non_retenu,false)
+       AND COALESCE(oc.note_mission,0)>=5) AS nb_candidats,
+    (SELECT COUNT(*)::int FROM opportunite op
+     WHERE op.id_fiche_de_voeux=o.id_fiche_de_voeux
+       AND NOT COALESCE(op.flag_opportunite_obsolete,false)
+       AND NOT COALESCE(op.flag_opportunite_non_retenu,false)
+       AND COALESCE(op.note_mission,0)>=5) AS nb_postes,
+    (SELECT e.note_ecrite FROM etape e
+     WHERE e.id_candidat=cand.id_candidat AND e.id_etat_candidat='ACC'
+     ORDER BY e.date_evenement DESC,e.id_historique DESC LIMIT 1) AS commentaire_candidat,
+    (SELECT e.note_ecrite FROM etape e
+     WHERE e.id_candidat=cand.id_candidat AND e.id_etat_candidat='AFF'
+     ORDER BY e.date_evenement DESC,e.id_historique DESC LIMIT 1) AS commentaire_validation_recruteur
   FROM opportunite o
   JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite
   JOIN fiche_de_voeux fdv ON fdv.id_fiche_de_voeux=o.id_fiche_de_voeux
   JOIN candidat cand ON cand.id_candidat=fdv.id_candidat
   JOIN contact co ON co.id_contact=cand.id_contact
+  JOIN etat_candidat ec ON ec.id_etat_candidat=cand.id_etat_candidat
   JOIN fiche_de_poste fp ON fp.id_poste=o.id_poste
+  JOIN etat_poste ep ON ep.id_etat_poste=fp.id_etat_poste
   JOIN pays p ON p.id_pays=fp.id_pays
   JOIN region r ON r.id_region=p.id_region
+  JOIN domaine dom ON dom.id_domaine=fp.id_domaine
 `;
 
 function roleScope(req: Request, params: unknown[]) {
@@ -70,8 +111,12 @@ router.get('/', requireRole(ALL_ROLES), async (req, res) => {
     const result = await pool.query(
       `${BASE_SELECT}
        WHERE ${filters.join(' AND ')} ${scope}
-       ORDER BY o.flag_opportunite_obsolete, o.note_warning ASC,
-                (COALESCE(o.note_contexte,0)+COALESCE(o.note_mission,0)) DESC,
+       ORDER BY CASE
+                  WHEN eo.designation='Accepté' THEN 0
+                  WHEN eo.designation IN ('Mise en lien','Accord de principe') THEN 1
+                  ELSE 2
+                END,
+                COALESCE(o.note_mission,0) DESC,
                 o.id_opportunite DESC
        LIMIT 250`,
       params,
@@ -80,6 +125,40 @@ router.get('/', requireRole(ALL_ROLES), async (req, res) => {
   } catch (err) {
     console.error('Erreur GET opportunites :', err);
     res.status(500).json({ error: 'Erreur interne du serveur.' });
+  }
+});
+
+const FILTER_COLUMNS: Record<string, string> = {
+  etat_poste: 'etat_poste_designation',
+  etat_poste_designation: 'etat_poste_designation',
+  domaine: 'domaine_designation',
+  domaine_designation: 'domaine_designation',
+  competences_poste: 'competences_poste',
+  langue_poste: 'langues_poste',
+  langues_poste: 'langues_poste',
+  etat_candidat: 'etat_candidat_designation',
+  etat_candidat_designation: 'etat_candidat_designation',
+  domaines_candidat: 'domaines_candidat',
+  competences_candidat: 'competences_candidat',
+  langues_candidat: 'langues_candidat',
+};
+
+router.get('/filtres/:colonne', requireRole(STAFF_ROLES), async (req, res) => {
+  const column = FILTER_COLUMNS[String(req.params.colonne)];
+  if (!column) return void res.status(400).json({error:'Filtre inconnu.'});
+  try {
+    const params: unknown[] = [];
+    const scope = roleScope(req, params);
+    const result = await pool.query(
+      `SELECT DISTINCT ${column} AS value FROM (${BASE_SELECT} WHERE 1=1 ${scope}) liste
+       WHERE ${column} IS NOT NULL AND ${column}<>''
+       ORDER BY value`,
+      params,
+    );
+    res.json({values:result.rows.map((row)=>row.value)});
+  } catch (err) {
+    console.error('Erreur GET filtres opportunités :', err);
+    res.status(500).json({error:'Erreur interne du serveur.'});
   }
 });
 
@@ -92,9 +171,10 @@ router.get('/:id', requireRole(ALL_ROLES), async (req, res) => {
     const [opportunity, details] = await Promise.all([
       pool.query(`${BASE_SELECT} WHERE o.id_opportunite=$1`, [id]),
       pool.query(
-        `SELECT id_criteres_detailles,date_evaluation,critere,valeur_poste,valeur_candidat,note_obtenue
+        `SELECT DISTINCT ON (critere)
+           id_criteres_detailles,date_evaluation,critere,valeur_poste,valeur_candidat,note_obtenue
          FROM criteres_detailles WHERE id_opportunite=$1
-         ORDER BY date_evaluation DESC,id_criteres_detailles DESC`,
+         ORDER BY critere,date_evaluation DESC,id_criteres_detailles DESC`,
         [id],
       ),
     ]);
@@ -143,6 +223,37 @@ router.post('/:id/recalculer', requireRole(['REC', 'CHZ', 'ADMIN']), async (req,
   } catch (err) {
     console.error('Erreur recalcul opportunité :', err);
     res.status(500).json({ error: 'Recalcul impossible.' });
+  }
+});
+
+router.post('/recalculer-liste', requireRole(['REC', 'CHZ', 'ADMIN']), async (req, res) => {
+  const idPoste = Number(req.body?.id_poste);
+  const idCandidat = Number(req.body?.id_candidat);
+  if (!Number.isInteger(idPoste) && !Number.isInteger(idCandidat)) {
+    return void res.status(400).json({error:'Un poste ou un candidat doit être indiqué.'});
+  }
+  try {
+    const params: unknown[] = [];
+    const filters: string[] = [];
+    if (Number.isInteger(idPoste)) {
+      params.push(idPoste);
+      filters.push(`o.id_poste=$${params.length}`);
+    }
+    if (Number.isInteger(idCandidat)) {
+      params.push(idCandidat);
+      filters.push(`cand.id_candidat=$${params.length}`);
+    }
+    const scope = roleScope(req, params);
+    const rows = await pool.query(
+      `${BASE_SELECT} WHERE ${filters.join(' AND ')} ${scope} ORDER BY o.id_opportunite`,
+      params,
+    );
+    const recalcules = [];
+    for (const row of rows.rows) recalcules.push(await Opportunite.evaluer(row.id_opportunite));
+    res.json({recalcules:recalcules.length,opportunites:recalcules});
+  } catch (err) {
+    console.error('Erreur recalcul global des opportunités :', err);
+    res.status(500).json({error:'Recalcul global impossible.'});
   }
 });
 

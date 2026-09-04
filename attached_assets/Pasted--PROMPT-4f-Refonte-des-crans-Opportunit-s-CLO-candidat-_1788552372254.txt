@@ -1,0 +1,161 @@
+# PROMPT 4f — Refonte des écrans Opportunités : CLO (candidat), PLO (poste), OD (détail)
+# Référence : Correctif_DCC_20260904.md, issues P4_01, P4_02, P4_03, P4_06,
+#             P4_01-PLO, P4_02-PLO, P4_03-PLO — maquette Figma validée par Damien le 04/09/2026
+#             (voir prompt4b_figma_ecrans_opportunites.txt, à jour des 3 corrections ci-dessous)
+#             prompt4.txt §6/§7/§8 (spec d'origine, remplacée par ce prompt)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ Recommandé après `prompt4c_correctif_dcc_algo_scoring.txt` (note_contexte à 6 critères, note
+# Alerte MAX) — pas un blocage dur (l'écran affiche ce que `criteres_detailles` contient déjà),
+# mais plus cohérent de recalculer les données avant de les présenter différemment.
+# ⚠️ Suppose `prompt3j_correctif_dcc_recherche_listes.txt` (A47) déjà déployé — CLO/PLO réutilisent
+# le même composant de recherche + filtres par colonne que `/recruteur/candidats`/`/recruteur/postes`.
+# ============================================================================
+
+Remplace l'affichage actuel en cartes des onglets "Opportunités" (côté Poste et côté Candidat) par
+un tableau, et refond l'écran de détail d'une opportunité — conformément à la maquette Figma
+validée par Damien le 04/09/2026, corrigée sur 3 points par rapport à la 1ère version (voir §1 et
+§2 ci-dessous).
+
+---
+
+## 1. Écran CLO — onglet "Opportunités" du candidat
+
+Route : `/recruteur/candidats/:id` (et `/cm/candidats/:id`), onglet "Opportunités".
+
+**Remplace l'affichage en cartes actuel par un tableau**, une ligne = une opportunité.
+
+**Au-dessus du tableau** :
+- Bouton "Recalculer" — recalcule **toutes** les opportunités listées d'un coup (appelle `score()`
+  pour chacune, pas de transition d'état automatique — même principe que le recalcul déclenché par
+  un import poste, `prompt4.txt` §4bis).
+- Barre de recherche (réutilise le composant de `prompt3j`/A47 : loupe + champ texte, validation
+  Entrée ou clic loupe, recherche sur toutes les colonnes visibles) + toggle "Tout afficher" à sa
+  gauche (affiche/masque les opportunités obsolètes/rejetées/`note_mission < 5`).
+- Filtres par colonne (réutilise le même composant de filtre que les écrans existants) sur :
+  **État du poste**, **Domaine**, **Compétences**, **Langue requise**.
+
+**Colonnes, dans cet ordre exact** :
+`ID poste` (crm_key) · `Titre` · `Pays` · `Domaine` · `Compétences` · `Langue` · `ONG` · `État
+opportunité` (badge coloré) · **`Note mission`** · **`Note contexte`** · **`Alerte`** (picto 3
+couleurs : vert=OK, jaune=Attention, rouge=Danger) · **`Nb candidats`** · action (icône flèche vers
+le détail, pas de mot "Détail").
+
+⚠️ **Ordre impératif sur les 4 dernières colonnes** : Note Mission, puis Note Contexte, puis
+Alerte, puis Nb candidats en dernier — corrigé le 04/09/2026 par rapport à la 1ère version de la
+maquette (qui avait Contexte avant Mission).
+
+`Nb candidats` = `COUNT` des opportunités de **ce poste** où `flag_opportunite_obsolete = false`
+ET `flag_opportunite_non_retenu = false` ET `note_mission >= 5` (seuil confirmé `>=5`, pas `>5`).
+
+**Mise en avant** (règle déjà spécifiée, `prompt4.txt` §6, validée DCC 10/07/2026) :
+1. Une opportunité "Accepté" → elle seule affichée (les autres obsolètes par R5).
+2. Sinon, "Mise en lien"/"Accord de principe" → ligne(s) en haut, surbrillance, séparateur visuel
+   avant le reste du tableau.
+3. Sinon → tableau normal, tri par `note_mission` décroissante.
+- Masquées par défaut (toggle "Tout afficher" pour les révéler) : `flag_opportunite_obsolete=true`
+  OU `flag_opportunite_non_retenu=true` OU `note_mission < 5`.
+
+Clic sur une ligne (ou son action) → navigue vers l'écran OD (§3).
+
+---
+
+## 2. Écran PLO — onglet "Opportunités" du poste
+
+Route : `/recruteur/postes/:id` (et `/cm/postes/:id`), onglet "Opportunités"/"Liste des
+opportunités".
+
+Même structure que CLO (tableau, bouton Recalculer global, recherche+toggle réutilisés, même règle
+de mise en avant), colonnes orientées **candidat** :
+
+**Filtres par colonne** sur : **État du candidat**, **Domaine**, **Compétences**, **Langues**.
+
+**Colonnes, dans cet ordre exact** :
+`Nom` · `Prénom` · `Domaine` · `Compétences` · `Langue` · `État opportunité` (badge) ·
+**`Note mission`** · **`Note contexte`** · **`Alerte`** (picto) · **`Nb postes`** · action (icône
+flèche vers le détail).
+
+`Nb postes` = réciproque exacte de `Nb candidats` : `COUNT` des opportunités de **ce candidat** où
+`flag_opportunite_obsolete = false` ET `flag_opportunite_non_retenu = false` ET `note_mission >= 5`.
+
+Même règle de mise en avant et de masquage par défaut que CLO (§1).
+
+Clic sur une ligne → navigue vers l'écran OD (§3).
+
+---
+
+## 3. Écran OD — détail d'une opportunité
+
+Route : `/recruteur/opportunites/:id` (et `/cm/opportunites/:id`) — écran **unique**, quelle que
+soit l'origine de navigation (CLO ou PLO).
+
+**En-tête** (remplace la flèche de retour actuelle) — 2 blocs cliquables côte à côte, validés par
+Damien ("l'idée de mettre les boutons d'action dans OD me semble excellente") :
+- Bloc **Poste** : `ID poste` (crm_key) · `Titre` · `Pays` · `Compétences demandées` · `Langue
+  requise` · `ONG`. Clic → navigue vers l'écran PLO du poste.
+- Bloc **Candidat** : `Nom` `Prénom` · `Date de naissance` · `État candidat` (badge) · `Date de
+  départ au plus tôt calculée` (`fiche_de_voeux.date_depart_possible`). Clic → navigue vers l'écran
+  CLO du candidat.
+- Badge d'état de l'opportunité visible en permanence.
+- Boutons d'action (`[Proposer CM]`, `[Approuver]` (CM uniquement), `[Mettre en lien]`, `[Rejeter]`
+  selon état, voir `prompt4.txt` §2) positionnés dans cet en-tête, comme sur la maquette validée.
+
+**Section "Commentaires de suivi"** — 4 cellules sur une ligne avec petites flèches "→" entre
+chaque cellule :
+1. `RECRUTEUR`
+2. `CHARGÉ DE MISSION`
+3. `CANDIDAT` — commentaire du candidat à l'acceptation (`accordDefinitif()`)
+4. `RECRUTEUR — VALIDATION` — commentaire du recruteur à la décision DCC/affectation
+   (`decisionDCC()`)
+
+**Source de donnée** (confirmée 04/09/2026, pas de nouvelle colonne sur `opportunite`) : cellules 3
+et 4 lisent `etape.note_ecrite` — la ligne `etape` la plus récente pour `id_candidat` du dossier,
+filtrée sur `id_etat_candidat = 'Accepté'` (cellule 3) ou `id_etat_candidat = 'Affecté'` (cellule
+4). Cellule vide ("—") si aucune ligne `etape` correspondante. ⚠️ Limitation connue et acceptée
+pour la V1 : `etape` n'est pas rattachée à un `id_opportunite` précis — en cas de réactivation R9
+suivie d'un second cycle complet pour le même candidat, "la ligne la plus récente à cet état" peut
+ne pas correspondre exactement à l'opportunité affichée. Ne pas corriger ce point ici (accepté par
+Damien comme limitation V1) ; le signaler dans le rapport de complétion si observé en test.
+
+**3 sections de scoring, dans cet ordre** (aucune ambiguïté restante — logique confirmée dans
+`prompt4c_correctif_dcc_algo_scoring.txt`) :
+1. **Note Mission** — note à gauche, tableau à droite (colonnes `Critère` / `Poste` / `Candidat` /
+   `Note`), 1 ligne (Compétences), avec le détail des compétences demandées vs couvertes.
+2. **Note Contexte** — note (moyenne) à gauche, tableau des **6 critères** à droite (Région, Date
+   de départ, Environnement, Logement/Couple, Durée, Langue) avec leur note individuelle. Texte
+   d'intro : "La note contexte est la moyenne des critères ci-dessous".
+3. **Alerte** — picto (vert/jaune/rouge) à gauche, tableau des 3 critères à droite (Zone orange,
+   Hôpital proche, Conditions spartiates) avec leur note individuelle (chacune dans {0, 5, 10}).
+
+Chaque section reprend le principe déjà en place : colonne "Poste" (valeur côté poste), colonne
+"Candidat" (valeur/préférence côté candidat), colonne "Note".
+
+---
+
+## Points de vigilance
+
+- Réutilise le composant de recherche/filtre déjà déployé (`prompt3j`, A47) — ne pas en recréer un
+  nouveau pour CLO/PLO.
+- `Nb candidats`/`Nb postes` : un simple `COUNT`, recalculé à l'affichage (pas une colonne stockée
+  en base) — évite tout risque de désynchronisation.
+- Le tri par `note_mission` décroissante (règle de mise en avant, §1/§2) s'applique **au sein de
+  chaque groupe** (Accepté / Mise en lien-Accord de principe / reste) — pas un tri global qui
+  mélangerait les groupes.
+- Vérifier que le clic sur les blocs Poste/Candidat de l'en-tête OD (§3) fonctionne correctement
+  quelle que soit l'origine de navigation (CLO ou PLO) — pas de dépendance à un historique de
+  navigateur, une vraie route cliquable dans les deux sens.
+
+## Test réel avant de livrer
+
+1. CLO : ouvrir l'onglet Opportunités d'un candidat ayant plusieurs opportunités à des états
+   différents (dont au moins une "Mise en lien" ou "Accord de principe") → vérifier la mise en
+   avant, l'ordre des colonnes (Mission avant Contexte), le filtre État du poste, et que le toggle
+   "Tout afficher" révèle bien les lignes masquées.
+2. PLO : même test côté poste, vérifier `Nb postes` sur au moins un candidat ayant plusieurs
+   opportunités visibles.
+3. OD : ouvrir un détail d'opportunité depuis CLO, cliquer sur le bloc Poste de l'en-tête → doit
+   arriver sur PLO du bon poste. Revenir, ouvrir la même opportunité depuis PLO cette fois, cliquer
+   sur le bloc Candidat → doit arriver sur CLO du bon candidat.
+4. OD : vérifier les 3 sections de scoring affichent bien Mission (1 critère), Contexte (6
+   critères), Alerte (3 critères, picto cohérent avec la note).
+5. OD : vérifier les cellules Candidat/Recruteur-Validation sur une opportunité "Affecté" existante
+   (si le jeu de données en contient une) — sinon simuler le cycle complet sur un dossier de test.

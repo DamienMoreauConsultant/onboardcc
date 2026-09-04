@@ -17,11 +17,11 @@ import { SectionCard } from './components/SectionCard';
 import { OpportunityList } from '@/pages/opportunites/OpportunityList';
 
 type Section = 'etat-civil' | 'projet' | 'voeux';
-type Props = { mode: 'recruteur' | 'candidat'; initialSection?: Section };
+type Props = { mode: 'recruteur' | 'cm' | 'candidat'; initialSection?: Section };
 
 export default function CandidatDetail({ mode, initialSection }: Props) {
   const { user } = useAuth();
-  const [, params] = useRoute('/recruteur/candidats/:id');
+  const [, params] = useRoute(mode === 'cm' ? '/cm/candidats/:id' : '/recruteur/candidats/:id');
   const [, navigate] = useLocation();
   const id = mode === 'candidat' ? user?.id_candidat : Number(params?.id);
 
@@ -271,7 +271,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
           <TabsTrigger value="etat-civil">État civil</TabsTrigger>
           <TabsTrigger value="projet">Dossier de candidature</TabsTrigger>
           <TabsTrigger value="voeux">Vœux</TabsTrigger>
-          {mode === 'recruteur' && (
+          {mode !== 'candidat' && (
             <>
               <TabsTrigger value="opportunites">Opportunités</TabsTrigger>
               <TabsTrigger value="progression">Progression et documents</TabsTrigger>
@@ -324,10 +324,10 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
           />
         </TabsContent>
 
-        {mode === 'recruteur' && (
+        {mode !== 'candidat' && (
           <>
             <TabsContent value="opportunites" className="focus-visible:outline-none">
-          <OpportunityList mode="recruteur" candidateId={detail.id_candidat} onChanged={() => reload(false)} />
+            <OpportunityList mode={mode} candidateId={detail.id_candidat} onChanged={() => reload(false)} />
             </TabsContent>
             
             <TabsContent value="progression" className="focus-visible:outline-none">

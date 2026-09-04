@@ -1,0 +1,62 @@
+# PROMPT 4e — Correctif : retrait de la restriction de visibilité CHZ sur les postes
+# Référence : Correctif_DCC_20260904.md, issue P4_12
+#             prompt2b_correctif_dcc_poste_backend.txt §4 (Correctif DCC A23, DÉJÀ DÉPLOYÉ le
+#             31/08/2026) — ce correctif annule et remplace ce §4 précis, rien d'autre.
+# Stack : Node.js + Express (backend) — voir prompt1. Code commenté partout.
+# ⚠️ IMPORTANT : ce point ne se limite pas à une mise à jour de documentation (prompt6, pas encore
+# envoyé) — un filtre restreignant réellement la visibilité de CHZ est déjà EN PRODUCTION sur
+# Replit depuis prompt2b (31/08/2026). Ce correctif doit être envoyé pour corriger le comportement
+# réellement déployé, pas seulement un document de préparation.
+# ============================================================================
+
+## Contexte — revirement du 04/09/2026
+
+`prompt2b_correctif_dcc_poste_backend.txt` §4 (Correctif DCC A23, tranché 31/08/2026) avait ajouté
+une restriction : un utilisateur `role_applicatif = 'RECRUTEUR'` et `role_contact = 'CHZ'` ne
+voyait, sur `/recruteur/postes` (liste) et `/recruteur/postes/:id` (détail), que les postes où il
+apparaît dans `gere_poste` — comme un CM, malgré des droits d'action de Recruteur complet.
+
+**Damien tranche l'inverse le 04/09/2026** (Correctif_DCC_20260904.md, P4_12) : un CHZ doit être
+**exactement équivalent à un REC** en tous points, y compris la visibilité — aucune restriction de
+scope sur les postes. Le rôle contact `CHZ` (vs `REC`) reste seulement une donnée informative,
+utile pour `gere_poste` (rattachement métier affiché sur la fiche poste), mais ne doit **plus
+jamais** conditionner l'accès aux données.
+
+## Correctif demandé
+
+Sur `GET /api/postes` (liste) et `GET /api/postes/:id` (détail) : **retire complètement** le filtre
+conditionnel posé par `prompt2b_correctif_dcc_poste_backend.txt` §4 :
+
+```sql
+-- À SUPPRIMER (comportement du 31/08/2026, annulé le 04/09/2026) :
+WHERE (:role_contact != 'CHZ'
+       OR id_poste IN (SELECT id_poste FROM gere_poste WHERE id_contact = :id_contact))
+```
+
+Un utilisateur `role_applicatif = 'RECRUTEUR'` (que son `role_contact` soit `REC` ou `CHZ`) doit
+désormais voir **tous les postes**, sans aucune condition supplémentaire liée à `gere_poste` — même
+comportement que `REC` aujourd'hui.
+
+**Ne touche à rien d'autre** :
+- `/cm/postes` (route dédiée aux `role_applicatif = 'CM'`, c'est-à-dire CM1/CM2 uniquement — un CHZ
+  n'a pas ce rôle applicatif et ne passe jamais par cette route) : **inchangé**, reste filtré sur
+  `gere_poste` comme aujourd'hui (`prompt2.txt` §4) — cette restriction concerne les CM, pas les
+  CHZ, et n'est pas remise en cause par ce correctif.
+- Droits d'action CHZ (déjà équivalents à REC) : inchangés.
+- `/recruteur/candidats` : déjà non concerné par cette restriction (confirmé dans prompt2b §4 —
+  "un CZ voit tous les candidats comme un Recruteur classique"), rien à faire ici.
+
+## Test réel avant de livrer
+
+1. Se connecter avec le compte CHZ existant (`pierre.martin`, `crm_key='CHZ_PIERRE'`).
+2. Lister les postes via `/recruteur/postes` → doit désormais retourner **tous** les postes, pas
+   seulement ceux où `CHZ_PIERRE` apparaît dans `gere_poste`.
+3. Ouvrir le détail d'un poste où `CHZ_PIERRE` n'apparaît PAS dans `gere_poste` → doit maintenant
+   réussir (200), plus de 403/404 sur ce cas précis (comportement inverse du test qui validait A23
+   le 31/08/2026 — le nouveau test doit donc réussir là où l'ancien testait un refus attendu).
+4. Vérifier qu'un compte `REC` classique n'est pas affecté (comportement inchangé, déjà sans
+   restriction).
+5. Vérifier qu'un compte CM (`role_applicatif='CM'`, ex. CM1/CM2) reste bien restreint aux postes de
+   `gere_poste` sur `/cm/postes` — confirme qu'on n'a pas touché à cette route par erreur.
+
+Rapporte le résultat des 5 points.

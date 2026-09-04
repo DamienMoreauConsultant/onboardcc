@@ -10,7 +10,7 @@ import { formatDateFR } from '@/lib/date';
 
 type Props = {
   detail: CandidatDetail;
-  mode: 'recruteur' | 'candidat';
+  mode: 'recruteur' | 'cm' | 'candidat';
   busy: boolean;
   reviewDate: string;
   setReviewDate: (date: string) => void;
@@ -56,7 +56,7 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
       <CardContent className="space-y-3 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <Link href={mode === 'recruteur' ? '/recruteur/candidats' : '/candidat'} aria-label="Retour" className="rounded-full p-1 text-muted-foreground hover:bg-background hover:text-primary">
+            <Link href={mode === 'recruteur' ? '/recruteur/candidats' : mode === 'cm' ? '/cm/postes' : '/candidat'} aria-label="Retour" className="rounded-full p-1 text-muted-foreground hover:bg-background hover:text-primary">
               <ArrowLeft className="h-4 w-4" />
             </Link>
             <h1 className="truncate font-display text-2xl font-bold text-foreground">{detail.nom_contact} {detail.prenom_contact}</h1>
@@ -73,7 +73,7 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
                   <Button size="sm" variant="outline" onClick={() => onSubmit(false)} disabled={busy}><Send className="mr-2 h-4 w-4" />Soumettre la fiche</Button>
                 )}
               </>
-            ) : (
+            ) : mode === 'candidat' ? (
               <>
                 {candidateCanEdit && <Button size="sm" onClick={onEditVoeux} disabled={!refs}>Éditer vœux</Button>}
                 {status === '2ème appel téléphonique' && !provisionalLocked && (
@@ -93,7 +93,7 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
                   </div>
                 )}
               </>
-            )}
+            ) : null}
           </div>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-4 pl-7">

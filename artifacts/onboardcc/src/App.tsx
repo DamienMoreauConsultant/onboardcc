@@ -76,6 +76,9 @@ function Router() {
       <Route path="/cm/opportunites/:id">
         <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}><AppLayout><OpportuniteDetail mode="cm" /></AppLayout></RoleGuard>
       </Route>
+      <Route path="/cm/candidats/:id">
+        <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}><AppLayout><CandidatDetail mode="cm" /></AppLayout></RoleGuard>
+      </Route>
       <Route path="/cm/postes">
         <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}>
           <AppLayout><PostesList mode="cm" /></AppLayout>

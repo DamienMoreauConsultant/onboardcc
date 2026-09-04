@@ -31,9 +31,24 @@ export type Opportunity = {
   fonction: string | null;
   pays_designation: string;
   region_designation: string;
+  date_naissance: string | null;
+  date_depart_possible: string | null;
+  etat_poste_designation: string;
+  etat_candidat_designation: string;
+  domaine_designation: string;
+  competences_poste: string | null;
+  langues_poste: string | null;
+  domaines_candidat: string | null;
+  competences_candidat: string | null;
+  langues_candidat: string | null;
+  nb_candidats: number;
+  nb_postes: number;
+  commentaire_candidat?: string | null;
+  commentaire_validation_recruteur?: string | null;
   appreciation_recruteur?: string | null;
   commentaire_charge_mission?: string | null;
   flag_opportunite_obsolete: boolean;
+  flag_opportunite_non_retenu: boolean;
 };
 
 export type OpportunityDetail = Opportunity & {
@@ -68,4 +83,6 @@ export const opportunitesApi = {
     (await api.post(`/opportunites/${id}/${action}`, { commentaire })).data,
   recalculate: async (id: number) =>
     (await api.post(`/opportunites/${id}/recalculer`)).data,
+  recalculateList: async (filters: { id_poste?: number; id_candidat?: number }) =>
+    (await api.post<{recalcules:number}>(`/opportunites/recalculer-liste`, filters)).data,
 };
