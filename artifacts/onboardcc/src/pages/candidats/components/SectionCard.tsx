@@ -10,6 +10,7 @@ import { ReferenceMultiSelect } from './ReferenceMultiSelect';
 import { BooleanControl } from './BooleanControl';
 import { CompetencesProposees } from './CompetencesProposees';
 import { formatDateFR } from '@/lib/date';
+import { FieldHelp } from './FieldHelp';
 
 type Section = 'etat-civil' | 'projet' | 'voeux';
 type Field = [string, string];
@@ -63,10 +64,10 @@ const projetSections: { title: string; fields: Field[] }[] = [
   },
 ];
 
-const booleans = ['profil_experience_engagement', 'projet_lien_avec_une_autre_structure', 'zone_orange', 'conditions_spartiates', 'hopital_proche', 'fonctionnaire_dispo_demandee', 'nouveau_poste', 'nouvelle_langue', 'part_seul'];
+const booleans = ['profil_experience_engagement', 'projet_lien_avec_une_autre_structure', 'zone_orange', 'conditions_spartiates', 'hopital_proche', 'nouveau_poste', 'nouvelle_langue', 'part_seul'];
 const iconBooleanFields = [
   'profil_experience_engagement', 'projet_lien_avec_une_autre_structure',
-  'fonctionnaire_dispo_demandee', 'nouvelle_langue', 'nouveau_poste',
+  'nouvelle_langue', 'nouveau_poste',
   'zone_orange', 'conditions_spartiates', 'hopital_proche', 'part_seul',
 ];
 const structured = ['domaines_formation', 'domaines_experience'];
@@ -103,7 +104,7 @@ function readValue(value: unknown, key: string, refs?: VoeuxReferences): string 
     if (key === 'durees') return value.map((item) => lookup(refs.durees, item.id ?? item.id_duree)).filter(Boolean).join(', ') || '—';
     if (key === 'environnements') return value.map((item) => lookup(refs.environnements, item.id ?? item.id_environnement)).filter(Boolean).join(', ') || '—';
     if (key === 'hebergements') return value.map((item) => lookup(refs.hebergements, item.id ?? item.id_hebergement)).filter(Boolean).join(', ') || '—';
-    if (key === 'regions') return value.map((item) => `${lookup(refs.regions, item.id_region) ?? ''} (${item.degre || 'Non'})`).filter(Boolean).join(', ') || '—';
+    if (key === 'regions') return value.map((item) => `${lookup(refs.regions, item.id_region) ?? ''} (${item.degre || '—'})`).filter(Boolean).join(', ') || '—';
   }
   return value.map((item) => typeof item === 'object' && item !== null ? (item.designation ?? item.periode ?? item.type_stage ?? item.crm_key ?? '—') : String(item)).join(', ') || '—';
 }
@@ -131,8 +132,8 @@ function parseChildren(raw: unknown): Array<Record<string, unknown>> {
   }
 }
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return <div className="mb-3 flex items-center gap-3"><h3 className="text-sm font-bold tracking-wide text-primary">{children}</h3><div className="h-px flex-1 bg-border" /></div>;
+function SectionHeading({ children, help }: { children: React.ReactNode; help?: React.ReactNode }) {
+  return <div className="mb-3 flex items-center gap-3"><h3 className="flex items-center gap-1.5 text-sm font-bold tracking-wide text-primary">{children}{help}</h3><div className="h-px flex-1 bg-border" /></div>;
 }
 
 type Props = {
@@ -209,6 +210,17 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
 
   const renderEditor = (key: string, label: string, forcedReadOnly = false) => {
     const allowed = editable && canEdit && !forcedReadOnly;
+    if (key === 'fonctionnaire_dispo_demandee') {
+      if (!allowed) return <dd className="text-sm">{readValue(values[key], key, refs)}</dd>;
+      return (
+        <Select value={values[key] || undefined} onValueChange={(value) => setValue(key, value)}>
+          <SelectTrigger className="bg-background"><SelectValue placeholder="Non renseigné" /></SelectTrigger>
+          <SelectContent>
+            {['OUI', 'NON', 'NON APPLICABLE'].map((choice) => <SelectItem key={choice} value={choice}>{choice}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      );
+    }
     if (iconBooleanFields.includes(key)) {
       return <BooleanControl value={nullableBool(values[key])} onChange={(value) => setValue(key, value)} disabled={!allowed} />;
     }
@@ -228,7 +240,10 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
 
   const fieldBlock = (key: string, label: string, forcedReadOnly = false, className = '') => (
     <div className={`rounded-lg bg-muted/40 p-3 ${className}`} key={key}>
-      <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dt className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+        {candidateMode && section === 'voeux' && <FieldHelp text={refs?.aides[key]} label={label} />}
+      </dt>
       {renderEditor(key, label, forcedReadOnly)}
     </div>
   );
@@ -236,7 +251,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
   const regionValues = useMemo(() => (refs?.regions ?? []).map((region) => {
     const current = (values.regions ?? []).find((item: any) => (item.id ?? item.id_region) === region.id);
     const oldDegree = current?.degre;
-    const degre = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'Non'].includes(oldDegree) ? oldDegree : oldDegree === 'veut aller' ? 'P1' : 'Non';
+    const degre = ['OUI', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'Non'].includes(oldDegree) ? oldDegree : oldDegree === 'veut aller' ? 'P1' : null;
     return { id_region: region.id, degre };
   }), [refs?.regions, values.regions]);
 
@@ -289,17 +304,20 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
                 </div>
                 <div className="space-y-3">
                   <div className="rounded-lg bg-muted/40 p-3">
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Destinations</dt>
+                    <dt className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Destinations
+                      {candidateMode && <FieldHelp text={refs?.aides.regions} label="Destinations" />}
+                    </dt>
                     <div className="mt-2 space-y-2">
                       {regionValues.map((region) => (
                         <div key={region.id_region} className="flex items-center justify-between gap-2 text-sm">
                           <span>{refs?.regions.find((item) => item.id === region.id_region)?.label}</span>
                           {editable && canEdit ? (
-                            <Select value={region.degre} onValueChange={(value) => updateRegion(region.id_region, value)}>
-                              <SelectTrigger className="h-8 w-24 bg-background"><SelectValue /></SelectTrigger>
-                              <SelectContent>{['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'Non'].map((degree) => <SelectItem key={degree} value={degree}>{degree}</SelectItem>)}</SelectContent>
+                            <Select value={region.degre ?? undefined} onValueChange={(value) => updateRegion(region.id_region, value)}>
+                              <SelectTrigger className="h-8 w-24 bg-background"><SelectValue placeholder="—" /></SelectTrigger>
+                              <SelectContent>{['OUI', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'Non'].map((degree) => <SelectItem key={degree} value={degree}>{degree}</SelectItem>)}</SelectContent>
                             </Select>
-                          ) : <span className={`font-medium ${region.degre === 'Non' ? 'text-destructive' : 'text-emerald-700'}`}>{region.degre}</span>}
+                          ) : <span className={`font-medium ${region.degre === 'Non' ? 'text-destructive' : region.degre ? 'text-emerald-700' : 'text-muted-foreground'}`}>{region.degre ?? '—'}</span>}
                         </div>
                       ))}
                     </div>
@@ -310,7 +328,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
           </div>
 
           <section className="space-y-3">
-            <SectionHeading>Compétences proposées</SectionHeading>
+            <SectionHeading help={candidateMode ? <FieldHelp text={refs?.aides.competences} label="Compétences proposées" /> : undefined}>Compétences proposées</SectionHeading>
             {refs ? <CompetencesProposees value={values.competences ?? []} refs={refs} editable={editable && canEdit} onChange={(value) => setValue('competences', value)} /> : <p className="text-sm text-muted-foreground">Chargement des référentiels…</p>}
             {fieldBlock('competences_a_developper', 'Compétences à développer')}
           </section>

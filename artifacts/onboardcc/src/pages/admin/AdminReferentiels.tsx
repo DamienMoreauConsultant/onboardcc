@@ -41,6 +41,7 @@ const TABLES = [
   { id: 'type_billet_avion', name: 'type de billet d’avion' },
   { id: 'etat_opportunite', name: 'état d\'opportunité' },
   { id: 'etat_candidat', name: 'état candidat' },
+  { id: 'aide_contextuelle', name: 'aides contextuelles' },
 ];
 
 export default function AdminReferentiels() {

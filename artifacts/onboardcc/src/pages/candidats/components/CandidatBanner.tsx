@@ -76,8 +76,22 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
             ) : (
               <>
                 {candidateCanEdit && <Button size="sm" onClick={onEditVoeux} disabled={!refs}>Éditer vœux</Button>}
-                {status === '2ème appel téléphonique' && !provisionalLocked && <Button size="sm" variant="outline" onClick={() => onSubmit(false)} disabled={busy}><Send className="mr-2 h-4 w-4" />Soumettre vœux provisoires</Button>}
-                {status === 'Session choisir' && !definitiveLocked && <Button size="sm" variant="outline" onClick={() => onSubmit(true)} disabled={busy}><Send className="mr-2 h-4 w-4" />Soumettre vœux définitifs</Button>}
+                {status === '2ème appel téléphonique' && !provisionalLocked && (
+                  <div className="flex max-w-xl flex-col items-end gap-2">
+                    <p className="text-right text-xs font-medium text-destructive">
+                      Merci de bien vouloir ne pas soumettre cette fiche de vœux avant votre second appel visio / téléphone avec votre référent. Vous échangerez avec lui sur vos choix et serez invitez à soumettre en fin de réunion ou juste après.
+                    </p>
+                    <Button size="sm" variant="outline" onClick={() => onSubmit(false)} disabled={busy}><Send className="mr-2 h-4 w-4" />Soumettre vœux provisoires</Button>
+                  </div>
+                )}
+                {status === 'Session choisir' && !definitiveLocked && (
+                  <div className="flex max-w-xl flex-col items-end gap-2">
+                    <p className="text-right text-xs font-medium text-destructive">
+                      Merci de bien vouloir ne pas soumettre cette fiche de vœux avant votre session choisir. Lors de votre entretien individuel avec votre formateur, vous serez invitez à soumettre vos vœux définitifs.
+                    </p>
+                    <Button size="sm" variant="outline" onClick={() => onSubmit(true)} disabled={busy}><Send className="mr-2 h-4 w-4" />Soumettre vœux définitifs</Button>
+                  </div>
+                )}
               </>
             )}
           </div>

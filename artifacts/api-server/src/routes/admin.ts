@@ -47,6 +47,7 @@ const TABLES_CONFIG: Record<string, {
   etat_opportunite:  { pk: 'id_etat_opportunite',label: 'États d\'opportunité', editableFields: ['designation','active'] },
   niveau_langue:     { pk: 'id_niveau_langue',  label: 'Niveaux de langue',editableFields: ['crm_key','designation','ordre','active'] },
   stages:            { pk: 'id_stages',         label: 'Sessions Choisir',editableFields: ['type_stage','date_debut','date_fin','active','voeux_definitif_ouvert'] },
+  aide_contextuelle: { pk: 'id_aide_contextuelle', label: 'Aides contextuelles', editableFields: ['cle_champ','texte','active'] },
   // etat_candidat : LECTURE + modification limitée seulement (pas d'ajout ni de suppression)
   etat_candidat:     {
     pk: 'id_etat_candidat',

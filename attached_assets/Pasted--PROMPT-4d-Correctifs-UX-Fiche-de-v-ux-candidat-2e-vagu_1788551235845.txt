@@ -1,0 +1,131 @@
+# PROMPT 4d — Correctifs UX Fiche de vœux candidat (2e vague)
+# Référence : Correctif_DCC_20260904.md, issues P4_07, P4_08, P4_09, P4_10, P4_11 — tous confirmés
+#             par Damien le 04/09/2026, prêts à envoyer (réserve mineure sur le libellé exact de la
+#             3e valeur de P4_08, voir §2)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+## 1. Mentions d'avertissement avant soumission (P4_07, PRÊT)
+
+Sur l'écran `/candidat/voeux` (espace candidat) :
+
+**Avant le bouton de soumission provisoire**, afficher en rouge, texte informatif (pas bloquant,
+juste un avertissement) :
+> Merci de bien vouloir ne pas soumettre cette fiche de vœux avant votre second appel visio /
+> téléphone avec votre référent. Vous échangerez avec lui sur vos choix et serez invitez à
+> soumettre en fin de réunion ou juste après.
+
+**Avant le bouton de soumission définitive**, afficher en rouge, texte informatif :
+> Merci de bien vouloir ne pas soumettre cette fiche de vœux avant votre session choisir. Lors de
+> votre entretien individuel avec votre formateur, vous serez invitez à soumettre vos vœux
+> définitifs.
+
+Ces mentions n'empêchent en rien la soumission (le candidat garde la main) — purement informatif.
+
+---
+
+## 2. Disponibilité fonctionnaire : booléen → varchar(50) (P4_08, PRÊT sous 1 réserve mineure)
+
+**Confirmé par Damien le 04/09/2026** : le contrat d'import candidat n'a pas besoin d'une nouvelle
+colonne — il doit seulement documenter, pour ce champ existant (non importé), les 3 valeurs
+attendues par Passerelle : `OUI`, `NON`, `NON APPLICABLE`.
+
+⚠️ **Réserve mineure** : la demande initiale (P4_08) donnait `Non Concerné` comme 3e valeur ; la
+confirmation du 04/09/2026 dit `NON APPLICABLE`. Je retiens `NON APPLICABLE` (formulation la plus
+récente) dans ce correctif — à signaler si ce n'est pas le libellé définitif voulu.
+
+**Mapping des données existantes** (non explicitement tranché par Damien, hypothèse par défaut
+retenue faute d'indication contraire — à corriger si besoin) : `true → OUI`, `false → NON`,
+`NULL → NULL` (reste "non renseigné", distinct de "NON APPLICABLE" qui est une vraie 3e réponse
+métier, pas un synonyme d'absence de réponse).
+
+**Correctif** :
+
+```sql
+-- Migration SQL, PostgreSQL — conserve les valeurs existantes
+ALTER TABLE fiche_de_voeux
+  ALTER COLUMN fonctionnaire_dispo_demandee TYPE VARCHAR(50)
+  USING (CASE
+    WHEN fonctionnaire_dispo_demandee = true  THEN 'OUI'
+    WHEN fonctionnaire_dispo_demandee = false THEN 'NON'
+    ELSE NULL
+  END);
+```
+
+**Écran** (vue et modification, `/candidat/voeux` et `/recruteur/candidats/:id` onglet Vœux) :
+remplacer le toggle booléen par un sélecteur à 3 valeurs : `OUI`, `NON`, `NON APPLICABLE`. Pas de
+valeur par défaut pré-sélectionnée (cohérent avec P4_10 sur le même principe de champ non
+pré-rempli).
+
+**Écran vue (lecture seule)** : remplacer le picto booléen actuel par le libellé texte (`OUI` /
+`NON` / `NON APPLICABLE` / `—` si NULL) ou un picto à 3 états si un composant existe déjà pour ça
+dans l'app (à choix de l'implémentation, tant que les 3 valeurs restent visuellement distinctes).
+
+**Contrat d'interface candidat** (`contrat_interface_import_candidats.md`) : confirmé 04/09/2026 —
+pas de nouvelle colonne importée, seulement documenter le nouveau type et les 3 valeurs possibles
+(`OUI`/`NON`/`NON APPLICABLE`) — champ non importé (candidat/recruteur-éditable uniquement),
+cohérent avec le reste des champs "volontairement absents à l'import" déjà listés dans
+`prompt3.txt` §2.
+
+**Test réel avant de livrer** : vérifier la migration sur les fiches de vœux de test existantes
+(valeurs `true`/`false` bien reprises en `OUI`/`NON`, `NULL` reste `NULL`), vérifier que le
+sélecteur des 3 valeurs fonctionne en vue et en édition, et que la vue candidat (`/candidat/voeux`)
+affiche correctement le libellé texte.
+
+---
+
+## 3. Tooltips d'aide sur la fiche de vœux (P4_09, PRÊT)
+
+Sur `/candidat/voeux` (vue ET édition) : à droite de chaque label de champ, ajouter une icône "i"
+cerclée. Au survol (desktop) / tap (mobile), affiche une bulle d'aide (tooltip).
+
+**Contenu** : texte placeholder par champ, format `blabla_01`, `blabla_02`, `blabla_03`... (un
+identifiant unique par champ, incrémental) — le texte réel sera fourni par la DCC ultérieurement.
+
+**Stockage recommandé** : une table dédiée (ex. `aide_contextuelle(cle_champ, texte)`), éditable
+depuis l'écran Admin référentiels déjà existant (générique, cohérent avec ENF-12 — la DCC doit
+pouvoir changer ces textes sans support technique). Si un mécanisme plus simple existe déjà dans le
+code pour ce genre de texte statique, l'utiliser à la place — mais il doit rester éditable sans
+redéploiement de code.
+
+---
+
+## 4. Référentiel Destination — ajout de la valeur "OUI" (P4_10, PRÊT sous réserve de vérif schéma)
+
+⚠️ **Vérifier d'abord sur le schéma Replit réel** (pas seulement le fichier source
+`prompt_0_sql.sql`) que `veut_aller_a.degre` est toujours un simple `VARCHAR(20)` sans contrainte
+`CHECK` ni table de référentiel séparée — si une contrainte a été ajoutée depuis, l'adapter en
+conséquence et le signaler dans le rapport de complétion.
+
+**Si confirmé libre (cas attendu)** : pas de script SQL d'insertion nécessaire. Modifications :
+1. Écran `/candidat/voeux`, zone B3 (Destinations) : ajouter l'option `OUI` en plus de `P1`...`P6`
+   et `Non` pour chaque région.
+2. Algorithme de scoring (`scoringRegion`, prompt4.txt §5) : `OUI` se comporte exactement comme
+   `P1`/`P2` → note 10.
+3. **Valeur par défaut à l'écran** : actuellement `NON` est pré-sélectionné par défaut pour chaque
+   région — à corriger : par défaut, **aucune valeur sélectionnée** (`NULL`/état neutre explicite),
+   cohérent avec le principe déjà appliqué aux champs booléens Oui/Non de l'onglet Vœux (A15,
+   "3e état visuel neutre explicite tant qu'aucun choix n'a été fait").
+
+**Test réel avant de livrer** : vérifier que `OUI` est bien sélectionnable, qu'une opportunité
+recalculée avec `degre='OUI'` obtient bien note_region=10, et qu'un formulaire vierge n'affiche plus
+"Non" pré-coché sur aucune région.
+
+---
+
+## 5. Centres d'intérêt — retrait de la validation obligatoire (P4_11, PRÊT)
+
+Dans `soumettre_voeux_provisoire()` et `soumettre_voeux_definitif()` (même fonction réutilisée pour
+le bouton recruteur "Soumettre pour le candidat", cf. A35) : retirer `centres_interret` de la liste
+des champs obligatoires vérifiés côté backend (actuellement gardé obligatoire depuis A45/prompt3h —
+décision explicitement inversée par Damien le 04/09/2026, voir Correctif_DCC_20260904.md, issue
+P4_11).
+
+**Ne retire aucun autre champ** de la validation — tous les autres champs obligatoires (région pour
+chaque région active, environnement, logement, durée, langue, zone orange, conditions spartiates,
+hôpital proche, disponibilité fonctionnaire, nouvelle langue/poste, date de départ) restent
+inchangés.
+
+**Test réel avant de livrer** : soumettre une fiche de vœux provisoire avec tous les champs
+correctement remplis SAUF centres d'intérêt (vide) → doit réussir (200). Refaire le test sur la
+soumission définitive.

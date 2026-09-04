@@ -23,6 +23,7 @@ export type VoeuxReferences = {
   niveauxLangue: ReferenceOption[];
   regions: ReferenceOption[];
   domaines: ReferenceOption[];
+  aides: Record<string, string>;
 };
 
 export const candidatsApi = {

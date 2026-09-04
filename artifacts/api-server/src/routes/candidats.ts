@@ -362,7 +362,7 @@ router.get('/filtres/:colonne', requireRole(RECRUITERS), async (req,res) => {
  */
 router.get('/referentiels/voeux', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN']), async (_req,res) => {
   try {
-    const [durees, environnements, hebergements, competences, langues, niveauxLangue, regions, domaines] = await Promise.all([
+    const [durees, environnements, hebergements, competences, langues, niveauxLangue, regions, domaines, aides] = await Promise.all([
       pool.query("SELECT id_duree id, periode label FROM duree WHERE COALESCE(active,true) ORDER BY periode"),
       pool.query("SELECT id_environnement id, designation label FROM environnement WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_hebergement id, designation label FROM hebergement WHERE COALESCE(active,true) ORDER BY designation"),
@@ -371,6 +371,7 @@ router.get('/referentiels/voeux', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMI
       pool.query("SELECT id_niveau_langue id, designation label FROM niveau_langue WHERE COALESCE(active,true) ORDER BY ordre"),
       pool.query("SELECT id_region id, designation label FROM region WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_domaine id, designation label FROM domaine WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT cle_champ, texte FROM aide_contextuelle WHERE active ORDER BY id_aide_contextuelle"),
     ]);
     res.json({
       durees: durees.rows,
@@ -381,6 +382,7 @@ router.get('/referentiels/voeux', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMI
       niveauxLangue: niveauxLangue.rows,
       regions: regions.rows,
       domaines: domaines.rows,
+      aides: Object.fromEntries(aides.rows.map((item) => [item.cle_champ, item.texte])),
     });
   } catch (e) {
     console.error('Erreur GET référentiels vœux :', e);
@@ -554,6 +556,10 @@ router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) 
     const relationFields=['environnements','regions','hebergements','competences','durees','langues'].filter(field=>Array.isArray(req.body[field]));
     const recruiterNotes: string[]=candidate ? [] : ['engagements','annonces_recherchees'].filter(field=>field in req.body);
     if(!keys.length && !relationFields.length && !recruiterNotes.length) throw new Error('EMPTY');
+    if(
+      keys.includes('fonctionnaire_dispo_demandee')
+      && ![null, 'OUI', 'NON', 'NON APPLICABLE'].includes(req.body.fonctionnaire_dispo_demandee)
+    ) throw new Error('FUNCTIONNAIRE');
     if(keys.length)await client.query(`UPDATE fiche_de_voeux SET ${keys.map((k,i)=>`${k}=$${i+1}`).join(',')},date_modification=CURRENT_DATE,modifie_par=$${keys.length+1} WHERE id_fiche_de_voeux=$${keys.length+2}`,[...keys.map(k=>formValue(k, req.body[k])),`${req.user!.prenom} ${req.user!.nom}`,f.id_fiche_de_voeux]);
     if(recruiterNotes.length) await client.query(
       `UPDATE candidat SET ${recruiterNotes.map((field,index)=>`${field}=$${index+1}`).join(',')} WHERE id_candidat=$${recruiterNotes.length+1}`,
@@ -579,8 +585,7 @@ router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) 
         const exists=await client.query('SELECT 1 FROM region WHERE id_region=$1 AND COALESCE(active,true)',[id]);
         if(!exists.rows.length)throw new Error('REF:regions');
         const rawDegree=typeof item==='object' && item ? (item as Record<string,unknown>).degre : null;
-        const degree=typeof rawDegree==='string' && ['P1','P2','P3','P4','P5','P6','Non'].includes(rawDegree) ? rawDegree : null;
-        if(!degree) throw new Error('REF:degré de destination');
+        const degree=typeof rawDegree==='string' && ['OUI','P1','P2','P3','P4','P5','P6','Non'].includes(rawDegree) ? rawDegree : null;
         await client.query('INSERT INTO veut_aller_a(id_fiche_de_voeux,id_region,degre) VALUES($1,$2,$3)',[f.id_fiche_de_voeux,id,degree]);
       }
     }
@@ -645,6 +650,8 @@ router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) 
           ?'Aucun champ de vœux modifiable dans la requête.'
           :message.startsWith('REF:')
             ?`Référence inconnue dans ${message.slice(4)}.`
+            :message==='FUNCTIONNAIRE'
+              ?'La disponibilité fonctionnaire doit valoir OUI, NON ou NON APPLICABLE.'
             :'Mise à jour impossible.',
     });
   }finally{client.release();}
@@ -680,7 +687,6 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
       nouveau_poste:'Nouveau poste',
       nouvelle_langue:'Nouvelle langue',
       competences_a_developper:'Compétences à développer',
-      centres_interret:'Centres d’intérêt',
     };
     const missing = Object.entries(scalarLabels)
       .filter(([field]) => fiche[field] === null || fiche[field] === undefined || (typeof fiche[field] === 'string' && !fiche[field].trim()))
@@ -703,7 +709,7 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
        FROM veut_aller_a va
        JOIN region r ON r.id_region=va.id_region AND COALESCE(r.active,true)
        WHERE va.id_fiche_de_voeux=$1
-         AND va.degre IN ('P1','P2','P3','P4','P5','P6','Non')`,
+         AND va.degre IN ('OUI','P1','P2','P3','P4','P5','P6','Non')`,
       [fiche.id_fiche_de_voeux],
     );
     if(destinationCoverage.rows[0].completed_regions!==destinationCoverage.rows[0].active_regions) missing.push('Destinations');
