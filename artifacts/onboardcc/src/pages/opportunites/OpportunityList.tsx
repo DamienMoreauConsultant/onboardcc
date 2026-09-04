@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'wouter';
-import { AlertTriangle, ArrowRight, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowRight, Loader2, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { opportunitesApi, type Opportunity, type OpportunityAction } from '@/api/opportunites';
+import { WarningScore } from './WarningScore';
 
 type Props = {
   mode: 'recruteur' | 'cm';
@@ -55,9 +56,9 @@ function availableActions(opportunity: Opportunity, mode: Props['mode']): Availa
 
 function Score({ label, value, warning = false }: { label: string; value: Opportunity['note_contexte']; warning?: boolean }) {
   return (
-    <div className={`rounded-md border px-3 py-2 ${warning && Number(value) > 0 ? 'border-amber-300 bg-amber-50' : 'bg-muted/30'}`}>
+    <div className="rounded-md border bg-muted/30 px-3 py-2">
       <span className="block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-      <strong className="text-lg">{value ?? '—'}</strong>
+      {warning ? <WarningScore value={value} className="mt-1" /> : <strong className="text-lg">{value ?? '—'}</strong>}
     </div>
   );
 }
@@ -132,7 +133,6 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey, onChang
                     <Badge variant={item.etat_designation.includes('Rejet') || item.etat_designation.includes('Refus') ? 'destructive' : 'outline'}>
                       {item.etat_designation}
                     </Badge>
-                    {Number(item.note_warning) > 0 && <AlertTriangle className="h-4 w-4 text-amber-600" aria-label="Avertissement" />}
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {postId ? `${item.poste_crm_key} · ${item.fonction || 'Poste'}` : `${item.ong || 'Partenaire'} · ${item.pays_designation}`}

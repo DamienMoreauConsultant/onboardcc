@@ -37,6 +37,7 @@ const SCORE_KEYS = [
   'MATCH_SCORE_SKILLS_SOME',
   'MATCH_SCORE_SKILLS_DOMAIN',
   'MATCH_SCORE_WARNING_OK',
+  'MATCH_SCORE_WARNING_ATTENTION',
   'MATCH_SCORE_WARNING_KO',
   'MATCH_SCORE_DATE_EXACT',
   'MATCH_SCORE_DATE_ONE_MONTH',
@@ -48,13 +49,21 @@ const SCORE_KEYS = [
 type ScoreKey = (typeof SCORE_KEYS)[number];
 
 function scoreConfig(): Record<ScoreKey, number> {
-  return Object.fromEntries(SCORE_KEYS.map((key) => {
+  const config = Object.fromEntries(SCORE_KEYS.map((key) => {
     const raw = process.env[key];
     if (raw === undefined || raw.trim() === '' || !Number.isFinite(Number(raw))) {
       throw new Error(`Configuration de scoring absente ou invalide : ${key}`);
     }
     return [key, Number(raw)];
   })) as Record<ScoreKey, number>;
+  if (
+    config.MATCH_SCORE_WARNING_OK !== 0
+    || config.MATCH_SCORE_WARNING_ATTENTION !== 5
+    || config.MATCH_SCORE_WARNING_KO !== 10
+  ) {
+    throw new Error('Configuration Alerte invalide : OK=0, ATTENTION=5 et KO=10 sont requis.');
+  }
+  return config;
 }
 
 function short(value: unknown): string | null {
@@ -237,19 +246,25 @@ async function scoreOpportunity(client: DbClient, idOpportunity: number): Promis
         : 0;
   add('Compétences', postSkills.map((item) => item.designation), relations.candidateSkills.rows.map((item) => item.designation), skillsScore, 'mission');
 
-  const warnings: Array<[string, boolean]> = [
-    ['Zone orange', !row.flag_zone_orange || row.zone_orange],
-    ['Conditions spartiates', !row.flag_condition_spartiates || row.conditions_spartiates],
-    ['Hôpital proche', row.flag_hopital_proche || !row.hopital_proche],
-  ];
-  for (const [label, compatible] of warnings) {
-    add(label, compatible ? 'Compatible' : 'Incompatible', 'Préférence candidat', compatible ? cfg.MATCH_SCORE_WARNING_OK : cfg.MATCH_SCORE_WARNING_KO, 'warning');
-  }
+  const zoneOrangeScore = !row.flag_zone_orange
+    ? cfg.MATCH_SCORE_WARNING_OK
+    : row.zone_orange ? cfg.MATCH_SCORE_WARNING_ATTENTION : cfg.MATCH_SCORE_WARNING_KO;
+  add('Zone orange', row.flag_zone_orange ? 'Oui' : 'Non', row.zone_orange ? 'Accepte' : 'Refuse', zoneOrangeScore, 'warning');
 
-  const contextNotes = [details.find((item) => item.critere === 'Région')!.note, environmentScore, housingScore, durationScore, languageScore];
+  const spartiateScore = !row.flag_condition_spartiates
+    ? cfg.MATCH_SCORE_WARNING_OK
+    : row.conditions_spartiates ? cfg.MATCH_SCORE_WARNING_ATTENTION : cfg.MATCH_SCORE_WARNING_KO;
+  add('Conditions spartiates', row.flag_condition_spartiates ? 'Oui' : 'Non', row.conditions_spartiates ? 'Accepte' : 'Refuse', spartiateScore, 'warning');
+
+  const hospitalScore = !row.hopital_proche
+    ? cfg.MATCH_SCORE_WARNING_OK
+    : row.flag_hopital_proche ? cfg.MATCH_SCORE_WARNING_ATTENTION : cfg.MATCH_SCORE_WARNING_KO;
+  add('Hôpital proche', row.flag_hopital_proche ? 'Disponible' : 'Indisponible', row.hopital_proche ? 'Nécessaire' : 'Non nécessaire', hospitalScore, 'warning');
+
+  const contextNotes = [details.find((item) => item.critere === 'Région')!.note, departureScore, environmentScore, housingScore, durationScore, languageScore];
   const noteContexte = contextNotes.reduce((sum, note) => sum + note, 0) / contextNotes.length;
   const noteMission = skillsScore;
-  const noteWarning = Math.min(...details.filter((detail) => detail.composante === 'warning').map((detail) => detail.note));
+  const noteWarning = Math.max(...details.filter((detail) => detail.composante === 'warning').map((detail) => detail.note));
 
   await client.query(
     `UPDATE opportunite

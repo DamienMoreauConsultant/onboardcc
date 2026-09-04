@@ -1,0 +1,109 @@
+# PROMPT 4c — Correctif algorithme de scoring : note Contexte (Date de départ) + note Alerte
+# Référence : Correctif_DCC_20260904.md, issues P4_05 et P4_04 (les 2 confirmées par Damien le
+#             04/09/2026 — prêt à envoyer intégralement)
+#             prompt4.txt §5 (algorithme de scoring)
+# Stack : Node.js + Express (backend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+## 1. Bug — `note_contexte` n'intègre pas la Date de départ (P4_05, PRÊT)
+
+**Diagnostic** : `services/matching.js`, fonction `score()` — `noteDateDepart` est bien calculée
+(`scoringDateDepart(voeux, poste)`) mais n'est jamais utilisée dans le calcul de `noteContexte` :
+
+```js
+// AVANT (bug) :
+const noteContexte = moyenne([noteRegion, noteEnvironnement, noteLogement, noteDuree, noteLangue]);
+```
+
+**Correctif** :
+
+```js
+// APRÈS :
+const noteContexte = moyenne([noteRegion, noteDateDepart, noteEnvironnement, noteLogement, noteDuree, noteLangue]);
+```
+
+`noteContexte` passe donc d'une moyenne sur 5 critères à une moyenne sur **6 critères** (Région,
+Date de départ, Environnement, Logement/Couple, Durée, Langue). `noteDateDepart` continue d'être
+tracée individuellement dans `criteres_detailles` comme aujourd'hui — seul le calcul de l'agrégat
+change.
+
+**Impact** : toute opportunité déjà scorée voit potentiellement sa `note_contexte` changer. Prévoir
+un recalcul en masse de toutes les opportunités non terminales existantes après déploiement de ce
+correctif (même mécanisme que le recalcul déclenché par un import poste, prompt4.txt §4bis — ici
+déclenché une fois manuellement pour tout le jeu de données actuel, pas par un import).
+
+**Test réel avant de livrer** :
+1. Prendre une opportunité existante dont la date de départ possible du candidat diffère nettement
+   de la date d'arrivée souhaitée du poste (diff ≥ 2 mois) — noter sa `note_contexte` AVANT le
+   correctif.
+2. Déployer le correctif, déclencher le recalcul en masse.
+3. Vérifier que `note_contexte` a changé pour cette opportunité, et que la nouvelle valeur
+   correspond bien à la moyenne des 6 critères (recalculer à la main pour vérifier).
+4. Vérifier qu'une opportunité dont la date de départ correspondait déjà parfaitement (diff = 0,
+   `noteDateDepart` = 10) ne voit sa note_contexte que légèrement changer (dilution sur 6 critères
+   au lieu de 5), pas de comportement aberrant.
+
+---
+
+## 2. Note Alerte : MAX au lieu de MIN + polarité inversée (P4_04, PRÊT — confirmé 04/09/2026)
+
+**Principe général confirmé par Damien** : `note_warning` doit représenter un **niveau de danger**
+(10 = danger, 0 = aucun problème), pas un niveau de compatibilité comme les autres critères.
+Chaque sous-critère élémentaire est réécrit avec cette polarité, et l'agrégation passe de
+`Math.min` à `Math.max` (on garde le pire risque, pas le mieux).
+
+⚠️ **Attention, les 3 critères ne suivent PAS tous le même sens de déclencheur** — bien lire
+chaque fonction séparément, ne pas généraliser un seul pattern aux 3 :
+- **Zone orange** et **Conditions spartiates** : le déclencheur de risque est une **propriété du
+  poste** (poste en zone orange / poste avec conditions spartiates), nuancé ensuite par
+  l'acceptation du candidat.
+- **Hôpital proche** : le déclencheur de risque est à l'inverse un **besoin du candidat** (le
+  candidat a besoin d'un hôpital proche), nuancé ensuite par la disponibilité réelle côté poste.
+
+```js
+// Zone orange — confirmé :
+function scoringZoneOrange(voeux, poste) {
+  if (!poste.flag_zone_orange) return 0;              // poste hors zone orange → OK
+  return voeux.zone_orange ? 5 : 10;                   // en zone orange : candidat accepte → Attention (5)
+                                                        //                   candidat refuse  → Danger (10)
+}
+
+// Conditions spartiates — confirmé (même structure que Zone orange, déclencheur = poste) :
+function scoringConditionSpartiate(voeux, poste) {
+  if (!poste.flag_condition_spartiate) return 0;        // pas de conditions spartiates → OK
+  return voeux.conditions_spartiates ? 5 : 10;           // conditions présentes : candidat accepte → Attention (5)
+                                                          //                        candidat refuse  → Danger (10)
+}
+
+// Hôpital proche — confirmé (structure INVERSÉE : déclencheur = besoin du candidat, pas le poste) :
+function scoringHopitalProche(voeux, poste) {
+  if (!voeux.hopital_proche) return 0;                  // candidat n'a pas besoin d'hôpital proche → OK
+  return poste.flag_hopital_proche ? 5 : 10;             // candidat en a besoin : poste en a un    → Attention (5)
+                                                          //                        poste n'en a pas → Danger (10)
+}
+```
+
+**Agrégation** :
+```js
+// AVANT :
+const noteWarning = Math.min(noteZoneOrange, noteHopital, noteSpartiate);
+// APRÈS :
+const noteWarning = Math.max(noteZoneOrange, noteHopital, noteSpartiate);
+```
+
+**Affichage** : remplacer la valeur numérique de la note Alerte par un picto 3 couleurs — vert
+(0 = OK), jaune (5 = Attention), rouge (10 = Danger). Comme `noteWarning` ne peut jamais prendre
+qu'exactement ces 3 valeurs, aucune valeur intermédiaire à gérer dans le composant d'affichage.
+
+**Recalcul en masse requis ici aussi** (même mécanisme qu'au §1) — une opportunité déjà scorée peut
+changer de note_warning suite à ce correctif.
+
+**Test réel avant de livrer** :
+1. Une opportunité où `poste.flag_zone_orange=true` et `voeux.zone_orange=false` (candidat refuse)
+   → `note_warning` doit valoir 10 après recalcul.
+2. Une opportunité où `voeux.hopital_proche=true` et `poste.flag_hopital_proche=true` (besoin
+   satisfait) → `note_warning` doit valoir **5**, pas 0 (piège à éviter : ce cas est "satisfait"
+   mais reste un point d'attention par construction).
+3. Une opportunité où aucun des 3 déclencheurs n'est actif (poste hors zone orange, sans
+   conditions spartiates, candidat sans besoin d'hôpital) → `note_warning` doit valoir 0.
+4. Vérifier le picto affiché correspond bien aux 3 couleurs attendues sur ces 3 cas.

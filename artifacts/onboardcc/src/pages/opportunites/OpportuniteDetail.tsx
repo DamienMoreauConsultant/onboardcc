@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from '@/components/ui/textarea';
 import { opportunitesApi, type OpportunityAction, type OpportunityDetail } from '@/api/opportunites';
 import { formatDateFR } from '@/lib/date';
+import { WarningScore } from './WarningScore';
 
 type Props = { mode: 'recruteur' | 'cm' | 'candidat' };
 
@@ -78,7 +79,9 @@ export default function OpportuniteDetail({ mode }: Props) {
             {[['Contexte', detail.note_contexte], ['Mission', detail.note_mission], ['Alertes', detail.note_warning]].map(([label, value]) => (
               <div key={String(label)} className="rounded-lg border bg-muted/20 p-4">
                 <p className="text-xs font-semibold uppercase text-muted-foreground">{label}</p>
-                <p className="mt-1 text-2xl font-bold">{value ?? '—'}</p>
+                {label === 'Alertes'
+                  ? <WarningScore value={value} className="mt-2 h-8 w-8" />
+                  : <p className="mt-1 text-2xl font-bold">{value ?? '—'}</p>}
               </div>
             ))}
           </div>
