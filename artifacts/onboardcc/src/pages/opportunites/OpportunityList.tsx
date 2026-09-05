@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { ArrowRight, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowRight, Loader2, RefreshCw, Target } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -82,8 +82,8 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
       const q = normalize(appliedSearch);
       result = result.filter(item => {
         const fieldsToSearch = isCandidateOriented
-          ? [item.poste_crm_key, item.fonction, item.pays_designation, item.domaine_designation, item.competences_poste, item.langues_poste, item.ong, item.etat_designation, item.note_mission, item.note_contexte, item.note_warning, item.nb_candidats]
-          : [item.nom_contact, item.prenom_contact, item.domaines_candidat, item.competences_candidat, item.langues_candidat, item.etat_designation, item.note_mission, item.note_contexte, item.note_warning, item.nb_postes];
+          ? [item.poste_crm_key, item.fonction, item.pays_designation, item.ong, item.etat_designation, item.note_mission, item.note_contexte, item.note_warning, item.nb_candidats]
+          : [item.nom_contact, item.prenom_contact, item.competences_candidat, item.langues_candidat, item.etat_designation, item.note_mission, item.note_contexte, item.note_warning, item.nb_postes];
 
         return fieldsToSearch.some(val => {
           if (typeof val === 'string' && normalize(val).includes(q)) return true;
@@ -166,57 +166,61 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
         )}
       </div>
 
+      <div className="flex flex-wrap items-center gap-2" data-testid="compact-filter-area">
+        <span className="text-sm font-medium text-muted-foreground mr-1">Filtres :</span>
+        {isCandidateOriented ? (
+          <>
+            <div className="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-sm">
+              <span className="font-medium">État poste</span>
+              <ColumnFilter columnKey="etat_poste_designation" endpoint="/opportunites/filtres" label="État poste" activeValues={filters['etat_poste_designation'] || []} onApply={(v) => applyFilter('etat_poste_designation', v)} />
+            </div>
+            <div className="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-sm">
+              <span className="font-medium">Domaine</span>
+              <ColumnFilter columnKey="domaine_designation" endpoint="/opportunites/filtres" label="Domaine" activeValues={filters['domaine_designation'] || []} onApply={(v) => applyFilter('domaine_designation', v)} />
+            </div>
+            <div className="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-sm">
+              <span className="font-medium">Compétences</span>
+              <ColumnFilter columnKey="competences_poste" endpoint="/opportunites/filtres" label="Compétences" activeValues={filters['competences_poste'] || []} onApply={(v) => applyFilter('competences_poste', v)} />
+            </div>
+            <div className="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-sm">
+              <span className="font-medium">Langues</span>
+              <ColumnFilter columnKey="langues_poste" endpoint="/opportunites/filtres" label="Langues" activeValues={filters['langues_poste'] || []} onApply={(v) => applyFilter('langues_poste', v)} />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-sm">
+              <span className="font-medium">État candidat</span>
+              <ColumnFilter columnKey="etat_candidat_designation" endpoint="/opportunites/filtres" label="État candidat" activeValues={filters['etat_candidat_designation'] || []} onApply={(v) => applyFilter('etat_candidat_designation', v)} />
+            </div>
+            <div className="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-sm">
+              <span className="font-medium">Domaine</span>
+              <ColumnFilter columnKey="domaines_candidat" endpoint="/opportunites/filtres" label="Domaine" activeValues={filters['domaines_candidat'] || []} onApply={(v) => applyFilter('domaines_candidat', v)} />
+            </div>
+            <div className="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-sm">
+              <span className="font-medium">Compétences</span>
+              <ColumnFilter columnKey="competences_candidat" endpoint="/opportunites/filtres" label="Compétences" activeValues={filters['competences_candidat'] || []} onApply={(v) => applyFilter('competences_candidat', v)} />
+            </div>
+            <div className="flex items-center gap-1 rounded-full border bg-background px-3 py-1 text-sm">
+              <span className="font-medium">Langues</span>
+              <ColumnFilter columnKey="langues_candidat" endpoint="/opportunites/filtres" label="Langues" activeValues={filters['langues_candidat'] || []} onApply={(v) => applyFilter('langues_candidat', v)} />
+            </div>
+          </>
+        )}
+      </div>
+
       <Card className="overflow-hidden">
         <Table className="min-w-[1000px] border-collapse" data-testid="opportunity-table">
           <TableHeader className="bg-muted/50">
             {isCandidateOriented ? (
               <TableRow>
                 <TableHead className="font-semibold text-foreground whitespace-nowrap">ID poste</TableHead>
-                <TableHead className="font-semibold text-foreground">Titre</TableHead>
+                <TableHead className="font-semibold text-foreground">Fonction</TableHead>
                 <TableHead className="font-semibold text-foreground">Pays</TableHead>
-                <TableHead className="font-semibold text-foreground whitespace-nowrap">
-                  Domaine
-                  <ColumnFilter
-                    columnKey="domaine_designation"
-                    endpoint="/opportunites/filtres"
-                    label="Domaine"
-                    activeValues={filters['domaine_designation'] || []}
-                    onApply={(v) => applyFilter('domaine_designation', v)}
-                  />
-                </TableHead>
-                <TableHead className="font-semibold text-foreground">
-                  Compétences
-                  <ColumnFilter
-                    columnKey="competences_poste"
-                    endpoint="/opportunites/filtres"
-                    label="Compétences"
-                    activeValues={filters['competences_poste'] || []}
-                    onApply={(v) => applyFilter('competences_poste', v)}
-                  />
-                </TableHead>
-                <TableHead className="font-semibold text-foreground">
-                  Langue
-                  <ColumnFilter
-                    columnKey="langues_poste"
-                    endpoint="/opportunites/filtres"
-                    label="Langue requise"
-                    activeValues={filters['langues_poste'] || []}
-                    onApply={(v) => applyFilter('langues_poste', v)}
-                  />
-                </TableHead>
                 <TableHead className="font-semibold text-foreground">ONG</TableHead>
-                <TableHead className="font-semibold text-foreground whitespace-nowrap">
-                  État opportunité
-                  <ColumnFilter
-                    columnKey="etat_poste_designation"
-                    endpoint="/opportunites/filtres"
-                    label="État poste"
-                    activeValues={filters['etat_poste_designation'] || []}
-                    onApply={(v) => applyFilter('etat_poste_designation', v)}
-                  />
-                </TableHead>
-                <TableHead className="font-semibold text-foreground whitespace-nowrap">Note mission</TableHead>
-                <TableHead className="font-semibold text-foreground whitespace-nowrap">Note contexte</TableHead>
+                <TableHead className="font-semibold text-foreground whitespace-nowrap">État</TableHead>
+                <TableHead className="font-semibold text-foreground whitespace-nowrap"><Target className="mr-1 inline-block h-4 w-4 text-primary" />Mission</TableHead>
+                <TableHead className="font-semibold text-foreground whitespace-nowrap"><Target className="mr-1 inline-block h-4 w-4 text-primary" />Contexte</TableHead>
                 <TableHead className="font-semibold text-foreground text-center">Alerte</TableHead>
                 <TableHead className="font-semibold text-foreground text-center whitespace-nowrap">Nb candidats</TableHead>
                 <TableHead className="w-10"></TableHead>
@@ -225,48 +229,11 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
               <TableRow>
                 <TableHead className="font-semibold text-foreground">Nom</TableHead>
                 <TableHead className="font-semibold text-foreground">Prénom</TableHead>
-                <TableHead className="font-semibold text-foreground whitespace-nowrap">
-                  Domaine
-                  <ColumnFilter
-                    columnKey="domaines_candidat"
-                    endpoint="/opportunites/filtres"
-                    label="Domaine"
-                    activeValues={filters['domaines_candidat'] || []}
-                    onApply={(v) => applyFilter('domaines_candidat', v)}
-                  />
-                </TableHead>
-                <TableHead className="font-semibold text-foreground">
-                  Compétences
-                  <ColumnFilter
-                    columnKey="competences_candidat"
-                    endpoint="/opportunites/filtres"
-                    label="Compétences"
-                    activeValues={filters['competences_candidat'] || []}
-                    onApply={(v) => applyFilter('competences_candidat', v)}
-                  />
-                </TableHead>
-                <TableHead className="font-semibold text-foreground">
-                  Langue
-                  <ColumnFilter
-                    columnKey="langues_candidat"
-                    endpoint="/opportunites/filtres"
-                    label="Langues"
-                    activeValues={filters['langues_candidat'] || []}
-                    onApply={(v) => applyFilter('langues_candidat', v)}
-                  />
-                </TableHead>
-                <TableHead className="font-semibold text-foreground whitespace-nowrap">
-                  État opportunité
-                  <ColumnFilter
-                    columnKey="etat_candidat_designation"
-                    endpoint="/opportunites/filtres"
-                    label="État candidat"
-                    activeValues={filters['etat_candidat_designation'] || []}
-                    onApply={(v) => applyFilter('etat_candidat_designation', v)}
-                  />
-                </TableHead>
-                <TableHead className="font-semibold text-foreground whitespace-nowrap">Note mission</TableHead>
-                <TableHead className="font-semibold text-foreground whitespace-nowrap">Note contexte</TableHead>
+                <TableHead className="font-semibold text-foreground">Compétences</TableHead>
+                <TableHead className="font-semibold text-foreground">Langue(s)</TableHead>
+                <TableHead className="font-semibold text-foreground whitespace-nowrap">État</TableHead>
+                <TableHead className="font-semibold text-foreground whitespace-nowrap"><Target className="mr-1 inline-block h-4 w-4 text-primary" />Mission</TableHead>
+                <TableHead className="font-semibold text-foreground whitespace-nowrap"><Target className="mr-1 inline-block h-4 w-4 text-primary" />Contexte</TableHead>
                 <TableHead className="font-semibold text-foreground text-center">Alerte</TableHead>
                 <TableHead className="font-semibold text-foreground text-center whitespace-nowrap">Nb postes</TableHead>
                 <TableHead className="w-10"></TableHead>
@@ -309,9 +276,6 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
                         <TableCell className="py-2.5 font-medium whitespace-nowrap">{item.poste_crm_key}</TableCell>
                         <TableCell className="py-2.5 max-w-[200px] truncate" title={item.fonction || ''}>{item.fonction || '—'}</TableCell>
                         <TableCell className="py-2.5 whitespace-nowrap">{item.pays_designation}</TableCell>
-                        <TableCell className="py-2.5 max-w-[150px] truncate" title={item.domaine_designation}>{item.domaine_designation || '—'}</TableCell>
-                        <TableCell className="py-2.5 max-w-[150px] truncate" title={item.competences_poste || ''}>{item.competences_poste || '—'}</TableCell>
-                        <TableCell className="py-2.5 whitespace-nowrap">{item.langues_poste || '—'}</TableCell>
                         <TableCell className="py-2.5 max-w-[150px] truncate" title={item.ong || ''}>{item.ong || '—'}</TableCell>
                         <TableCell className="py-2.5 whitespace-nowrap">
                           <Badge variant={item.etat_designation.includes('Rejet') || item.etat_designation.includes('Refus') ? 'destructive' : 'outline'}>
@@ -327,7 +291,6 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
                       <>
                         <TableCell className="py-2.5 font-medium whitespace-nowrap">{item.nom_contact}</TableCell>
                         <TableCell className="py-2.5 font-medium whitespace-nowrap">{item.prenom_contact}</TableCell>
-                        <TableCell className="py-2.5 max-w-[150px] truncate" title={item.domaines_candidat || ''}>{item.domaines_candidat || '—'}</TableCell>
                         <TableCell className="py-2.5 max-w-[200px] truncate" title={item.competences_candidat || ''}>{item.competences_candidat || '—'}</TableCell>
                         <TableCell className="py-2.5 whitespace-nowrap">{item.langues_candidat || '—'}</TableCell>
                         <TableCell className="py-2.5 whitespace-nowrap">
@@ -354,7 +317,7 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
           {!groups.length && !loading && (
             <TableBody>
               <TableRow>
-                <TableCell colSpan={isCandidateOriented ? 13 : 11} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={isCandidateOriented ? 10 : 10} className="h-32 text-center text-muted-foreground">
                   Aucune opportunité ne correspond à ces critères.
                 </TableCell>
               </TableRow>

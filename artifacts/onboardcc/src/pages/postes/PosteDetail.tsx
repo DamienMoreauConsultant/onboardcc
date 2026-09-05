@@ -105,6 +105,12 @@ export default function PosteDetail({ mode }: Props) {
   const [commentaire, setCommentaire] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const tab = searchParams.get('tab');
+    return tab === 'opportunites' ? 'opportunites' : 'informations';
+  });
+
   const [opportunityRefreshKey, setOpportunityRefreshKey] = useState(0);
 
   const refreshPoste = async () => {
@@ -187,7 +193,7 @@ export default function PosteDetail({ mode }: Props) {
             </Link>
             <h1 className="font-display text-2xl font-bold tracking-tight">{poste.crm_key}</h1>
             <Badge variant="outline" className="border-primary/30 bg-background/70">{poste.etat_designation}</Badge>
-            <Badge variant="secondary">{displayValue(poste.statut_volontaire)}</Badge>
+            <Badge variant="secondary">Statut : {displayValue(poste.statut_volontaire)}</Badge>
             {poste.candidat_preaffecte && (
               <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
                 <UserRound className="h-4 w-4 text-primary" aria-hidden="true" />
@@ -206,13 +212,13 @@ export default function PosteDetail({ mode }: Props) {
           <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-primary/10 pt-3 text-sm text-muted-foreground">
             <span className="inline-flex items-center gap-1.5 font-medium text-foreground"><BriefcaseBusiness className="h-4 w-4 text-primary" aria-hidden="true" />{displayValue(poste.fonction)}</span>
             <span className="inline-flex items-center gap-1.5"><MapPin className="h-4 w-4" aria-hidden="true" />{displayValue(poste.pays_designation)}</span>
-            <span>{displayValue(poste.domaine_designation)}</span>
+            <span>Domaine : {displayValue(poste.domaine_designation)}</span>
               <span className="inline-flex items-center gap-1.5"><CalendarDays className="h-4 w-4" aria-hidden="true" />{formatDateFR(poste.date_arrivee_souhaitee)}</span>
           </div>
         </div>
       </Card>
 
-      <Tabs defaultValue="informations" className="space-y-5">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-5">
         <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="informations">Informations générales</TabsTrigger>
           <TabsTrigger value="detail">Détail du poste</TabsTrigger>

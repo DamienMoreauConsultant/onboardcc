@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Link } from 'wouter';
-import { ArrowLeft, Check, Loader2, Send } from 'lucide-react';
+import { ArrowLeft, Check, Loader2, Send, CalendarDays } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -22,20 +22,53 @@ type Props = {
   refs?: VoeuxReferences;
 };
 
-const readStr = (value: unknown, key: string, refs?: VoeuxReferences) => {
-  if (!value || !Array.isArray(value)) return '—';
+const readStr = (value: unknown, key: string, refs?: VoeuxReferences, detail?: any) => {
+  if (!value && key !== 'domaines') return '—';
+  const values = Array.isArray(value) ? value : [];
+  if (key !== 'domaines' && values.length === 0) return '—';
   if (refs) {
+    if (key === 'domaines') {
+      const domIds = new Set<number>();
+      const addDomains = (arr: any) => {
+        if (Array.isArray(arr)) {
+          arr.forEach((item: any) => {
+            if (item.id !== undefined) domIds.add(item.id);
+            else if (item.id_domaine !== undefined) domIds.add(item.id_domaine);
+          });
+        }
+      };
+
+      if (detail) {
+        addDomains(detail.domaines_formation);
+        addDomains(detail.domaines_experience);
+        if (Array.isArray(detail.competences)) {
+          detail.competences.forEach((comp: any) => {
+            const compId = comp.id ?? comp.id_competences ?? comp.id_competence;
+            const refComp = refs.competences.find(c => c.id === compId);
+            const domainId = comp.id_domaine ?? refComp?.id_domaine;
+            if (domainId) {
+              domIds.add(domainId);
+            }
+          });
+        }
+      }
+
+      return Array.from(domIds)
+        .map(id => refs.domaines.find(ref => ref.id === id)?.label)
+        .filter(Boolean)
+        .join(', ') || '—';
+    }
     if (['domaines_formation', 'domaines_experience'].includes(key)) {
-      return value.map((item: any) => refs.domaines.find((ref) => ref.id === (item.id ?? item.id_domaine))?.label).filter(Boolean).join(', ') || '—';
+      return values.map((item: any) => refs.domaines.find((ref) => ref.id === (item.id ?? item.id_domaine))?.label).filter(Boolean).join(', ') || '—';
     }
     if (key === 'regions') {
-      return value.map((item: any) => refs.regions.find((ref) => ref.id === (item.id_region ?? item.region?.id_region))?.label).filter(Boolean).join(', ') || '—';
+      return values.map((item: any) => refs.regions.find((ref) => ref.id === (item.id_region ?? item.region?.id_region))?.label).filter(Boolean).join(', ') || '—';
     }
     if (key === 'durees') {
-      return value.map((item: any) => refs.durees.find((ref) => ref.id === (item.id ?? item.id_duree))?.label).filter(Boolean).join(', ') || '—';
+      return values.map((item: any) => refs.durees.find((ref) => ref.id === (item.id ?? item.id_duree))?.label).filter(Boolean).join(', ') || '—';
     }
   }
-  return value.map((item) => typeof item === 'object' && item !== null ? (item.designation ?? item.periode ?? item.type_stage ?? item.crm_key ?? '—') : String(item)).join(', ') || '—';
+  return values.map((item: any) => typeof item === 'object' && item !== null ? (item.designation ?? item.periode ?? item.type_stage ?? item.crm_key ?? '—') : String(item)).join(', ') || '—';
 };
 
 export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, onReviseReview, onSave, onAction, onEditVoeux, onSubmit, refs }: Props) {
@@ -97,8 +130,12 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
           </div>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-4 pl-7">
-          <p className="min-w-0 flex-1 text-sm font-medium text-muted-foreground">
-            {readStr(detail.domaines_formation, 'domaines_formation', refs)} · Disponible le {formatDateFR(detail.projet_date_depart_souhaitee ?? detail.date_depart_souhaite)} · {readStr(detail.durees, 'durees', refs)}
+          <p className="min-w-0 flex-1 flex flex-wrap items-center gap-1 text-sm font-medium text-muted-foreground">
+            <span>{readStr(null, 'domaines', refs, detail)}</span>
+            <span className="px-1 text-muted-foreground/50">·</span>
+            <span className="inline-flex items-center gap-1 text-foreground"><CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />{formatDateFR(detail.projet_date_depart_souhaitee ?? detail.date_depart_souhaite)}</span>
+            <span className="px-1 text-muted-foreground/50">·</span>
+            <span>{readStr(detail.durees, 'durees', refs)}</span>
           </p>
           {mode === 'recruteur' && (
             <div className="flex items-end gap-2">

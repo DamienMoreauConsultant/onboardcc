@@ -16,8 +16,9 @@ import { CandidatBanner } from './components/CandidatBanner';
 import { SectionCard } from './components/SectionCard';
 import { OpportunityList } from '@/pages/opportunites/OpportunityList';
 
-type Section = 'etat-civil' | 'projet' | 'voeux';
-type Props = { mode: 'recruteur' | 'cm' | 'candidat'; initialSection?: Section };
+type EditableSection = 'etat-civil' | 'projet' | 'voeux';
+type Section = EditableSection | 'opportunites' | 'progression';
+type Props = { mode: 'recruteur' | 'cm' | 'candidat'; initialSection?: EditableSection };
 
 export default function CandidatDetail({ mode, initialSection }: Props) {
   const { user } = useAuth();
@@ -28,9 +29,14 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [editing, setEditing] = useState<Section | null>(null);
+  const [editing, setEditing] = useState<EditableSection | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [activeTab, setActiveTab] = useState<Section>(initialSection ?? (mode === 'candidat' ? 'voeux' : 'etat-civil'));
+  const [activeTab, setActiveTab] = useState<Section>(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const tab = searchParams.get('tab');
+    if (tab === 'opportunites' && mode !== 'candidat') return 'opportunites';
+    return initialSection ?? (mode === 'candidat' ? 'voeux' : 'etat-civil');
+  });
   const [pendingNavigation, setPendingNavigation] = useState<{kind:'tab'|'route'|'history';value:string}|null>(null);
   const historyGuard = useRef({restoring:false,leaving:false});
   const [action, setAction] = useState<string | null>(null);
@@ -126,7 +132,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     };
   }, [dirty, editing]);
 
-  const save = async (section: Section, values: Record<string, unknown>) => {
+  const save = async (section: EditableSection, values: Record<string, unknown>) => {
     if (!detail) return;
     setBusy(true);
     try {
@@ -208,7 +214,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     }
   };
 
-  const onDirtyChange = useCallback((section: Section, changed: boolean) => {
+  const onDirtyChange = useCallback((section: EditableSection, changed: boolean) => {
     if(editing===section) setDirty(changed);
   },[editing]);
 

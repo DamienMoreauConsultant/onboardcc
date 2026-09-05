@@ -1,0 +1,171 @@
+# PROMPT 4g — Correctifs 2e vague écrans Opportunités (CVO, OD, CLO, PLO, PDE)
+# Référence : Correctif_DCC_20260904.md, issues P4_13 à P4_19
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ §5 (P4_17, P4_18) est un DIAGNOSTIC à faire en premier, pas un correctif à l'aveugle — rapporte
+# précisément ce que tu trouves avant de corriger, ces 2 points pourraient ne pas être des bugs.
+# ============================================================================
+
+## 1. Entête fiche candidat — domaines et picto calendrier (P4_13)
+
+Sur le bandeau candidat (`/recruteur/candidats/:id`, visible sur tous les onglets) :
+
+1. La ligne actuelle affiche les domaines de formation/expérience (ex. "Gestion de projet").
+   Complète cette liste avec les domaines couverts par les **compétences proposées** du candidat
+   (`a_la_competence_de` → domaine parent de chaque compétence via le référentiel Compétences) —
+   **dédoublonne** (ne garde que les domaines distincts) avant de concaténer à la liste existante,
+   même séparateur que l'existant.
+2. Remplace le texte "Disponible le " par une icône calendrier (picto), suivie directement de la
+   date — comportement identique, juste l'habillage visuel qui change (cohérent avec d'autres
+   simplifications déjà faites ailleurs dans l'app, ex. Destinations A19).
+
+---
+
+## 2. Navigation OD → onglet Opportunités (pas le 1er onglet) (P4_14)
+
+Les 2 blocs cliquables de l'en-tête OD (Poste et Candidat, ajoutés par `prompt4f` §3) doivent
+naviguer précisément vers l'**onglet Opportunités** de la fiche cible (PLO pour le bloc Poste, CLO
+pour le bloc Candidat) — pas vers le 1er onglet par défaut de la fiche (Informations générales /
+État civil). Objectif explicite de Damien : pouvoir rebondir d'une opportunité à l'autre pour un
+même poste/candidat sans avoir à re-sélectionner l'onglet à chaque fois.
+
+Test réel : depuis OD, clique sur le bloc Poste → doit arriver directement sur l'onglet
+"Opportunités" du poste (pas "Informations générales"). Idem pour le bloc Candidat → onglet
+"Opportunités" du candidat (pas "État civil").
+
+---
+
+## 3. Renommage/masquage des colonnes CLO et PLO (P4_15, P4_19)
+
+**CLO** (`/recruteur/candidats/:id`, onglet Opportunités) — colonnes finales, dans cet ordre :
+`ID poste` · `Fonction` (renommé depuis "Titre") · `Pays` · `ONG` · `État` (renommé depuis "État
+opportunité") · [picto]`Mission` · [picto]`Contexte` · `Alerte` · `Nb candidats` · action.
+Colonnes **retirées** : Domaine, Compétences, Langue.
+
+**PLO** (`/recruteur/postes/:id`, onglet Opportunités) — colonnes finales, dans cet ordre :
+`Nom` · `Prénom` · `Compétences` · `Langue(s)` (renommé depuis "Langue") · `État` (renommé depuis
+"État opportunité") · [picto]`Mission` · [picto]`Contexte` · `Alerte` · `Nb postes` · action.
+Colonne **retirée** : Domaine.
+
+**"[picto]" devant Mission/Contexte** : un petit pictogramme générique (type icône jauge/cible)
+accolé au mot dans l'en-tête de colonne (ex. "🎯 Mission"), en remplacement du mot "Note" — le mot
+"Note" disparaît, remplacé par ce pictogramme, mais "Mission"/"Contexte" restent affichés en toutes
+lettres. Les cellules du tableau restent des valeurs numériques (pas un picto par ligne) — seule la
+colonne Alerte reste un picto par cellule (déjà en place depuis `prompt4c`).
+
+⚠️ Retire aussi tout filtre par colonne qui référençait Domaine/Compétences/Langue sur les colonnes
+supprimées de CLO, et adapte en conséquence côté PLO (Domaine retiré). Les filtres eux-mêmes
+(État/Domaine/Compétences/Langue tels que définis dans `prompt4f`) restent utilisables même si la
+colonne correspondante n'est plus affichée en tableau (comportement déjà établi ailleurs dans
+l'app : un filtre peut porter sur une donnée non visible en colonne).
+
+---
+
+## 4. Tooltips d'aide sur le scoring OD (P4_16)
+
+Sur l'écran OD, ajoute une icône "i" cerclée (même composant que P4_09/`prompt4d`) :
+- À côté de chacun des 3 titres de section : **MISSION**, **CONTEXTE**, **ALERTE** — explique la
+  règle **globale** de cette note.
+- À côté de chacune des **9 lignes de critère individuel** dans les tableaux de détail — explique
+  le calcul **précis** de ce critère.
+
+**Mécanisme de stockage recommandé** : réutilise la table "Aides contextuelles" créée par
+`prompt4d` (P4_09) plutôt que d'en créer une seconde — ajoute simplement 12 nouvelles entrées
+(3 globales + 9 critères), éditables depuis le même écran Admin. Anticipe la prochaine remontée de
+Damien ("quand j'aurai les règles dans les bulles, je ferai d'autres remontées") en les rendant
+modifiables sans redéploiement, cohérent avec ENF-12.
+
+**Textes à charger tels quels** (langage non technique, à ajuster uniquement sur la forme si un
+texte dépasse l'espace disponible d'une bulle — jamais sur le fond) :
+
+**Section MISSION (globale)** :
+> Cette note évalue si les compétences du candidat correspondent aux compétences demandées par le
+> poste. Elle atteint son maximum si le candidat possède toutes les compétences demandées.
+
+**Critère Compétences** :
+> Note maximale si le candidat possède toutes les compétences demandées par le poste. Note un peu
+> plus basse s'il en possède au moins une. Note intermédiaire s'il a étudié ou travaillé dans le
+> même domaine sans avoir la compétence précise. Note nulle sinon.
+
+**Section CONTEXTE (globale)** :
+> Cette note est la moyenne de 6 critères qui mesurent si les conditions de vie et d'organisation
+> du poste correspondent aux souhaits du candidat : la région, la date de départ, le type
+> d'environnement, le logement, la durée de la mission et la langue. Plus la moyenne est élevée,
+> plus les conditions générales sont compatibles.
+
+**Critère Région** :
+> Compare la région du poste à la préférence exprimée par le candidat pour cette région (de "n'y
+> va pas" à "1er choix"). Plus la région est un choix prioritaire pour le candidat, plus la note
+> est élevée.
+
+**Critère Date de départ** :
+> Compare la date à laquelle le candidat peut partir à la date d'arrivée souhaitée par le poste.
+> Plus l'écart entre les deux dates est faible, plus la note est élevée ; elle est maximale si les
+> deux dates correspondent exactement.
+
+**Critère Environnement** :
+> Compare le milieu de vie du poste (urbain, rural...) aux milieux de vie acceptés par le candidat.
+> Note maximale en cas de correspondance exacte, note réduite si l'écart est faible, note nulle
+> sinon.
+
+**Critère Logement / couple** :
+> Vérifie si le logement proposé par le poste correspond à la situation du candidat. S'il part
+> seul, vérifie que le logement lui convient. S'il part en couple ou en famille, vérifie que le
+> poste permet également un poste ou un accueil pour la personne qui l'accompagne.
+
+**Critère Durée** :
+> Compare la durée de la mission proposée par le poste aux durées acceptées par le candidat. Note
+> maximale en cas de correspondance exacte, note réduite si l'écart est faible, note nulle sinon.
+
+**Critère Langue** :
+> Vérifie si le candidat parle la langue requise par le poste, et à quel niveau. Une note
+> intermédiaire est accordée si le candidat est prêt à apprendre une nouvelle langue.
+
+**Section ALERTE (globale)** :
+> Ce pictogramme signale un point de vigilance sur 3 critères sensibles : la zone à risque, la
+> proximité d'un hôpital et des conditions de vie sommaires. Vert : aucun point de vigilance.
+> Jaune : un point existe mais le candidat l'a accepté. Rouge : un point existe et n'est pas
+> couvert — à examiner avant de poursuivre.
+
+**Critère Zone orange** :
+> Signale si le poste est situé dans une zone jugée à risque, et si le candidat a accepté ou non
+> cette condition.
+
+**Critère Hôpital proche** :
+> Signale si le candidat a besoin d'être proche d'un hôpital pour des raisons de santé, et si le
+> poste répond ou non à ce besoin.
+
+**Critère Conditions spartiates** :
+> Signale si le poste implique des conditions de vie sommaires, et si le candidat a accepté ou non
+> cette condition.
+
+---
+
+## 5. Diagnostic — PDE : compétences manquantes et en-tête peu clair (P4_17, P4_18)
+
+⚠️ **Diagnostique avant de corriger, ces 2 points ne sont peut-être pas des bugs.**
+
+**P4_17** : Damien constate que des compétences sont affichées sur le poste dans OD et PLO, mais
+pas dans l'écran PDE (Détail du poste). Vérifie précisément :
+1. Quel champ/quelle requête alimente l'affichage "Compétences" côté OD/PLO (probablement la table
+   `recherche`, compétences demandées pour le matching).
+2. Quel champ alimente (ou devrait alimenter) l'onglet "Détail du poste" de PDE — `competences_detail`
+   (`prompt2c_correctif_dcc_poste_visuel.txt` §2, un champ texte libre distinct de `recherche`) est-il
+   affiché à l'écran ? Est-il vide en base sur les postes concernés, ou bien le composant ne le lit
+   simplement pas ?
+3. Conclus explicitement dans ton rapport : soit "bug d'affichage, `competences_detail` est
+   renseigné en base mais pas rendu à l'écran" (dans ce cas corrige l'affichage), soit "les 2
+   champs sont réellement distincts et non-affichés est le comportement normal si vide" (dans ce
+   cas ne corrige rien, explique juste la distinction dans ton rapport pour que Damien confirme
+   si c'est bien voulu).
+
+**P4_18** : Damien ne comprend pas ce que représentent "N/A" et "Santé" dans l'en-tête du poste
+(PDE), en haut à gauche — le picto affiché à côté n'est pas assez explicite. Identifie précisément :
+1. Quel champ produit "N/A" (hypothèse : `partenaire_ong`, convention posée par A27 — "N/A" affiché
+   quand l'ONG partenaire n'est pas renseignée).
+2. Quel champ produit "Santé" (hypothèse : le Domaine du poste, référentiel Domaines — "Santé" en
+   est une valeur possible, cf. A08).
+Une fois confirmé, ajoute un **libellé court ou un tooltip** à côté de chaque picto pour lever
+l'ambiguïté (ex. icône ONG suivie d'un tooltip "Partenaire : N/A" au survol, même mécanisme que les
+autres tooltips de ce prompt) — ne change pas la donnée affichée, seulement sa lisibilité.
+
+Rapporte dans les 2 cas ce que tu as trouvé avant/en plus de ce que tu as corrigé.

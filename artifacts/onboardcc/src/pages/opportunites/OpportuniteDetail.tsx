@@ -7,6 +7,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { opportunitesApi, type OpportunityAction, type OpportunityDetail, type OpportunityState } from '@/api/opportunites';
+import { candidatsApi } from '@/api/candidats';
+import { useQuery } from '@tanstack/react-query';
+import { FieldHelp } from '@/pages/candidats/components/FieldHelp';
 import { WarningScore } from './WarningScore';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateFR } from '@/lib/date';
@@ -55,6 +58,11 @@ export default function OpportuniteDetail({ mode }: Props) {
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const { data: refs } = useQuery({
+    queryKey: ['voeux-references'],
+    queryFn: candidatsApi.voeuxReferences,
+  });
+
   useEffect(() => {
     if (!params?.id) return;
     setDetail(null);
@@ -74,6 +82,23 @@ export default function OpportuniteDetail({ mode }: Props) {
       alerte: criteria.filter(c => ['Zone orange', 'Hôpital proche', 'Conditions spartiates'].includes(c.critere))
     };
   }, [detail]);
+
+  const getCriterionKey = (crit: string) => {
+    const map: Record<string, string> = {
+      'Compétences': 'score_competences',
+      'Région': 'score_region',
+      'Date de départ': 'score_date_depart',
+      'Environnement': 'score_environnement',
+      'Logement/Couple': 'score_logement_couple',
+      'Logement / couple': 'score_logement_couple',
+      'Durée': 'score_duree',
+      'Langue': 'score_langue',
+      'Zone orange': 'score_zone_orange',
+      'Hôpital proche': 'score_hopital_proche',
+      'Conditions spartiates': 'score_conditions_spartiates'
+    };
+    return map[crit];
+  };
 
   if (!detail && !error) return <div className="flex justify-center p-12"><Loader2 className="h-7 w-7 animate-spin text-primary" data-testid="loading-spinner" /></div>;
   if (!detail) return <p className="p-8 text-destructive" data-testid="error-message">{error}</p>;
@@ -117,7 +142,7 @@ export default function OpportuniteDetail({ mode }: Props) {
       return <div className="flex-1 p-6" data-testid="poste-detail-summary">{content}</div>;
     }
     return (
-      <Link href={`/${mode}/postes/${detail.id_poste}`} className="flex-1 p-6 hover:bg-muted/50 transition-colors group cursor-pointer block" data-testid="link-poste-detail">
+      <Link href={`/${mode}/postes/${detail.id_poste}?tab=opportunites`} className="flex-1 p-6 hover:bg-muted/50 transition-colors group cursor-pointer block" data-testid="link-poste-detail">
         {content}
       </Link>
     );
@@ -146,7 +171,7 @@ export default function OpportuniteDetail({ mode }: Props) {
       return <div className="flex-1 p-6" data-testid="candidat-detail-summary">{content}</div>;
     }
     return (
-      <Link href={`/${mode}/candidats/${detail.id_candidat}`} className="flex-1 p-6 hover:bg-muted/50 transition-colors group cursor-pointer block" data-testid="link-candidat-detail">
+      <Link href={`/${mode}/candidats/${detail.id_candidat}?tab=opportunites`} className="flex-1 p-6 hover:bg-muted/50 transition-colors group cursor-pointer block" data-testid="link-candidat-detail">
         {content}
       </Link>
     );
@@ -232,7 +257,12 @@ export default function OpportuniteDetail({ mode }: Props) {
         <Card data-testid="section-mission">
           <CardContent className="p-0 flex flex-col md:flex-row">
             <div className="p-6 bg-muted/20 border-b md:border-b-0 md:border-r flex flex-col items-center justify-center min-w-[200px]">
-              <p className="text-sm font-semibold uppercase text-muted-foreground mb-2">Mission</p>
+              <p className="text-sm font-semibold uppercase text-muted-foreground mb-2 flex items-center gap-1">
+                Mission
+                <span data-testid="help-mission">
+                  <FieldHelp text={refs?.aides?.['score_note_mission']} label="Aide Mission" />
+                </span>
+              </p>
               <p className="text-5xl font-bold font-display">{detail.note_mission ?? '—'}</p>
             </div>
             <div className="flex-1 p-0 overflow-x-auto">
@@ -248,7 +278,14 @@ export default function OpportuniteDetail({ mode }: Props) {
                 <TableBody>
                   {criteriaSections.mission.length > 0 ? criteriaSections.mission.map((crit) => (
                     <TableRow key={crit.id_criteres_detailles}>
-                      <TableCell className="font-medium">{crit.critere}</TableCell>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-1">
+                          {crit.critere}
+                          <div data-testid={`help-criterion-${getCriterionKey(crit.critere)}`}>
+                            <FieldHelp text={refs?.aides?.[getCriterionKey(crit.critere)]} label={`Aide ${crit.critere}`} />
+                          </div>
+                        </div>
+                      </TableCell>
                       <TableCell className="text-muted-foreground">{crit.valeur_poste || '—'}</TableCell>
                       <TableCell className="text-muted-foreground">{crit.valeur_candidat || '—'}</TableCell>
                       <TableCell className="text-right font-semibold">{crit.note_obtenue ?? '—'}</TableCell>
@@ -265,7 +302,12 @@ export default function OpportuniteDetail({ mode }: Props) {
         <Card data-testid="section-contexte">
           <CardContent className="p-0 flex flex-col md:flex-row">
             <div className="p-6 bg-muted/20 border-b md:border-b-0 md:border-r flex flex-col items-center justify-center min-w-[200px]">
-              <p className="text-sm font-semibold uppercase text-muted-foreground mb-2">Contexte</p>
+              <p className="text-sm font-semibold uppercase text-muted-foreground mb-2 flex items-center gap-1">
+                Contexte
+                <span data-testid="help-contexte">
+                  <FieldHelp text={refs?.aides?.['score_note_contexte']} label="Aide Contexte" />
+                </span>
+              </p>
               <p className="text-5xl font-bold font-display">{detail.note_contexte ?? '—'}</p>
             </div>
             <div className="flex-1 p-0 overflow-x-auto">
@@ -284,7 +326,14 @@ export default function OpportuniteDetail({ mode }: Props) {
                 <TableBody>
                   {criteriaSections.contexte.length > 0 ? criteriaSections.contexte.map((crit) => (
                     <TableRow key={crit.id_criteres_detailles}>
-                      <TableCell className="font-medium">{crit.critere}</TableCell>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-1">
+                          {crit.critere}
+                          <div data-testid={`help-criterion-${getCriterionKey(crit.critere)}`}>
+                            <FieldHelp text={refs?.aides?.[getCriterionKey(crit.critere)]} label={`Aide ${crit.critere}`} />
+                          </div>
+                        </div>
+                      </TableCell>
                       <TableCell className="text-muted-foreground">{crit.valeur_poste || '—'}</TableCell>
                       <TableCell className="text-muted-foreground">{crit.valeur_candidat || '—'}</TableCell>
                       <TableCell className="text-right font-semibold">{crit.note_obtenue ?? '—'}</TableCell>
@@ -301,7 +350,12 @@ export default function OpportuniteDetail({ mode }: Props) {
         <Card data-testid="section-alerte">
           <CardContent className="p-0 flex flex-col md:flex-row">
             <div className="p-6 bg-muted/20 border-b md:border-b-0 md:border-r flex flex-col items-center justify-center min-w-[200px]">
-              <p className="text-sm font-semibold uppercase text-muted-foreground mb-4">Alerte</p>
+              <p className="text-sm font-semibold uppercase text-muted-foreground mb-4 flex items-center gap-1">
+                Alerte
+                <span data-testid="help-alerte">
+                  <FieldHelp text={refs?.aides?.['score_note_alerte']} label="Aide Alerte" />
+                </span>
+              </p>
               <WarningScore value={detail.note_warning} className="h-16 w-16" />
             </div>
             <div className="flex-1 p-0 overflow-x-auto">
@@ -317,7 +371,14 @@ export default function OpportuniteDetail({ mode }: Props) {
                 <TableBody>
                   {criteriaSections.alerte.length > 0 ? criteriaSections.alerte.map((crit) => (
                     <TableRow key={crit.id_criteres_detailles}>
-                      <TableCell className="font-medium">{crit.critere}</TableCell>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-1">
+                          {crit.critere}
+                          <div data-testid={`help-criterion-${getCriterionKey(crit.critere)}`}>
+                            <FieldHelp text={refs?.aides?.[getCriterionKey(crit.critere)]} label={`Aide ${crit.critere}`} />
+                          </div>
+                        </div>
+                      </TableCell>
                       <TableCell className="text-muted-foreground">{crit.valeur_poste || '—'}</TableCell>
                       <TableCell className="text-muted-foreground">{crit.valeur_candidat || '—'}</TableCell>
                       <TableCell className="text-right font-semibold">{crit.note_obtenue ?? '—'}</TableCell>
