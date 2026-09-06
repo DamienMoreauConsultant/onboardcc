@@ -69,11 +69,21 @@ function Field({
   );
 }
 
-function ContactCard({ title, contact, roles }: { title: string; contact?: PosteContact; roles?: string }) {
+function ContactCard({
+  title,
+  contact,
+  roles,
+  nameOverride,
+}: {
+  title: string;
+  contact?: PosteContact;
+  roles?: string;
+  nameOverride?: string;
+}) {
   const address = contact
     ? [contact.adresse1, contact.adresse2, [contact.code_postal, contact.ville].filter(Boolean).join(' ')].filter(Boolean).join(', ')
     : null;
-  const name = contact ? [contact.prenom, contact.nom].filter(Boolean).join(' ') : null;
+  const name = nameOverride || (contact ? [contact.prenom, contact.nom].filter(Boolean).join(' ') : null);
 
   return (
     <div className="space-y-3">
@@ -84,11 +94,11 @@ function ContactCard({ title, contact, roles }: { title: string; contact?: Poste
         {title}
       </h3>
       {roles && <p className="text-xs text-muted-foreground">{roles}</p>}
-      <dl className="space-y-2.5 border-l border-border pl-4">
-        <Field label="Nom / prénom" value={name} />
-        <Field label="Adresse" value={address} icon={MapPin} />
-        <Field label="Téléphone" value={contact?.telephone} icon={Phone} />
-        <Field label="Email" value={contact?.email} icon={Mail} />
+      <dl className="space-y-2 border-l border-border pl-4 text-sm">
+        <dd className="flex items-center gap-2"><UserRound className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />{displayValue(name)}</dd>
+        <dd className="flex items-center gap-2"><MapPin className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />{displayValue(address)}</dd>
+        <dd className="flex items-center gap-2"><Phone className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />{displayValue(contact?.telephone)}</dd>
+        <dd className="flex items-center gap-2"><Mail className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />{displayValue(contact?.email)}</dd>
       </dl>
     </div>
   );
@@ -166,10 +176,21 @@ export default function PosteDetail({ mode }: Props) {
     [poste?.contacts_json],
   );
   const cmContacts = contacts.filter((contact) => ['CM1', 'CM2'].includes(contact.role));
+  const cmContact = cmContacts[0];
   const cmLabel = cmContacts.map((contact) => [contact.prenom, contact.nom].filter(Boolean).join(' ')).filter(Boolean).join(' · ');
   const contactForRole = (role: string) => contacts.find((contact) => contact.role === role);
   const chzContact = contactForRole('CHZ');
-  const chzLabel = chzContact ? [chzContact.prenom, chzContact.nom].filter(Boolean).join(' ') : null;
+  const groupedCompetences = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    const competences = Array.isArray(poste?.competences_json) ? poste.competences_json : [];
+    for (const competence of competences) {
+      const domain = competence.domaine || 'Domaine non renseigné';
+      const current = groups.get(domain) ?? [];
+      if (competence.designation && !current.includes(competence.designation)) current.push(competence.designation);
+      groups.set(domain, current);
+    }
+    return Array.from(groups, ([domaine, competences]) => ({ domaine, competences }));
+  }, [poste?.competences_json]);
   const canAct = mode === 'recruteur' && !!poste && closeable.includes(poste.etat_designation);
   const canReopen = mode === 'recruteur' && !!poste && reopenable.includes(poste.etat_designation);
   const listPath = `${mode === 'cm' ? '/cm' : '/recruteur'}/postes`;
@@ -231,22 +252,46 @@ export default function PosteDetail({ mode }: Props) {
               <CardTitle className="flex items-center gap-2 text-xl"><UsersRound className="h-5 w-5 text-primary" />Contacts</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-8 lg:grid-cols-3">
-                <div className="space-y-3">
-                  <h3 className="flex items-center gap-2 font-display text-lg font-semibold text-foreground">
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
-                      <UserRound className="h-4 w-4" aria-hidden="true" />
-                    </span>
-                    CM / CZ
-                  </h3>
-                  <dl className="space-y-5 border-l border-border pl-4">
-                    <Field label="CM" value={cmLabel} />
-                    <Field label="Chargé de zone" value={chzLabel} />
-                  </dl>
-                </div>
+              <div className="grid gap-6 lg:grid-cols-2">
+                <ContactCard title="Chargé de mission" contact={cmContact} nameOverride={cmLabel} />
+                <ContactCard title="Chargé de zone" contact={chzContact} />
+                <Separator className="lg:col-span-2" />
                 <ContactCard title="Contact partenaire" contact={contactForRole('PAR')} />
                 <ContactCard title="Contact mission" contact={contactForRole('MIS')} />
               </div>
+            </CardContent>
+          </Card>
+
+          <Separator />
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl"><BriefcaseBusiness className="h-5 w-5 text-primary" />Compétences requises</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {groupedCompetences.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Aucune compétence requise renseignée</p>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border-2 border-black">
+                  <table className="w-full min-w-[520px] border-collapse text-sm">
+                    <caption className="sr-only">Compétences requises regroupées par domaine</caption>
+                    <thead className="bg-muted/70 text-left text-xs font-semibold uppercase tracking-wide">
+                      <tr className="border-b-2 border-black">
+                        <th scope="col" className="w-[30%] border-r-2 border-black p-3">Domaine</th>
+                        <th scope="col" className="p-3">Compétences</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {groupedCompetences.map((group) => (
+                        <tr key={group.domaine} className="border-b-2 border-black last:border-b-0">
+                          <th scope="row" className="border-r-2 border-black bg-muted/30 p-3 text-left align-top font-semibold">{group.domaine}</th>
+                          <td className="p-3">{group.competences.join(' · ')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </CardContent>
           </Card>
 

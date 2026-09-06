@@ -1,0 +1,174 @@
+# PROMPT 4h — Correctifs écran Poste (PGI) et import postes (PLI)
+# Référence : Correctif_DCC_20260904.md, issues P4_18 (partie résiduelle), P4_20, P4_21, P4_22
+#             prompt2.txt (contrat d'import poste), prompt2c_correctif_dcc_poste_visuel.txt (entête)
+#             prompt4.txt §5 (algorithme de scoring)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ §4 (résidu P4_18) est un DIAGNOSTIC à faire avant de corriger.
+# ============================================================================
+
+## 1. Bandeau Contacts (PGI) — réduction de hauteur (P4_20)
+
+Sur `/recruteur/postes/:id`, onglet "Informations générales", section Contacts :
+
+1. Sur les 3 blocs contact concernés (voir point 2), supprime les légendes de champ affichées
+   au-dessus de chaque valeur ("ADRESSE", "TÉLÉPHONE", "EMAIL", "NOM / PRÉNOM") — affiche
+   directement l'icône suivie de la valeur sur une seule ligne (ex. icône localisation suivie de
+   l'adresse postale, icône téléphone suivie du numéro, etc.). Si la valeur est vide, garde le "—"
+   actuel à côté de l'icône plutôt que de masquer la ligne entière.
+2. Le bloc actuel combiné "CM / CZ" (avec 2 sous-lignes labellisées "CM" et "CHARGÉ DE ZONE") est
+   **scindé en 2 blocs distincts**, au même niveau visuel que "Contact partenaire"/"Contact
+   mission" :
+   - Bloc 1, titre "👤 Chargé de mission" : affiche le contact `CM1`/`CM2` rattaché via
+     `gere_poste` (comme aujourd'hui), "—" si absent.
+   - Ligne blanche de séparation.
+   - Bloc 2, titre "👤 Chargé de zone" : affiche le contact `CHZ` rattaché via `gere_poste`, "—" si
+     absent.
+   Ces 2 contacts sont déjà des entités distinctes en base (`contact.role = 'CM1'/'CM2'` vs
+   `'CHZ'`) — c'est une restructuration purement visuelle, aucune donnée ni logique de rattachement
+   à changer.
+
+---
+
+## 2. Nouvelle section "Compétences requises" (PGI) (P4_21, résout aussi P4_17)
+
+Sur `/recruteur/postes/:id`, onglet "Informations générales", insère une nouvelle section **entre
+la section Contacts et la section Conditions**, titrée "Compétences requises".
+
+**Contenu** : tableau à 2 colonnes, même mise en page que la section "Compétences à partager" déjà
+construite côté candidat (A20) :
+- Colonne gauche "Domaine" : un domaine par ligne (parent de chaque compétence demandée par le
+  poste, table `recherche` → compétence → domaine), **distincts** (pas de doublon de domaine).
+- Colonne droite "Compétences" : pour chaque domaine, la ou les compétences demandées de ce
+  domaine (concaténées, même séparateur que l'existant ailleurs dans l'app).
+
+Si le poste n'a aucune compétence demandée (table `recherche` vide pour ce poste), affiche la
+section avec un état vide explicite ("Aucune compétence requise renseignée") plutôt que de la
+masquer entièrement — utile pour repérer un poste mal importé (voir §3 ci-dessous, qui rend ce
+champ obligatoire).
+
+Ce point répond aussi à P4_17 : les compétences de matching (`recherche`) sont désormais
+**systématiquement visibles** sur la fiche poste, indépendamment du champ texte libre
+`competences_detail` (onglet "Détail du poste", PDE) qui reste inchangé, à titre d'information
+distincte (confirmé non-bug, voir P4_17).
+
+---
+
+## 3. Validation renforcée de l'import poste (P4_22)
+
+⚠️ **Audit de l'algorithme fait au préalable (`prompt4.txt` §5)** : tous les champs poste utilisés
+par le scoring sont couverts par les points ci-dessous — rien d'autre à ajouter.
+
+### 3.1 Contrat d'import — colonnes qui passent de Optional à Mandatory
+
+Dans `prompt2.txt` (contrat d'import poste) et dans le code de validation `/api/postes/import/verifier` :
+
+| Colonne CSV | Avant | Après |
+|---|---|---|
+| `environnement` (col 17) | Optional | **Mandatory** (au moins 1 valeur dans la liste `;`) |
+| `competences_recherchees` (col 16) | Optional | **Mandatory** (au moins 1 valeur dans la liste `;`) |
+| `zone_orange` (col 18) | Optional | **Mandatory** |
+| `conditions_spartiates` (col 19) | Optional | **Mandatory** |
+| `hopital_proche` (col 20) | Optional | **Mandatory** |
+| `deuxieme_poste_partenaire` (col 27) | Optional | **Mandatory** |
+| `deuxieme_poste_alentour` (col 28) | Optional | **Mandatory** |
+
+**Déjà conformes, à ne PAS modifier, juste vérifier que la validation est bien appliquée en
+pratique** (pas seulement documentée) :
+- `pays` (col 10) — déjà Mandatory.
+- `date_demarrage`/`date_arrivee_souhaitee` (col 2) — déjà Mandatory.
+- `duree_mission` (col 14) — déjà Mandatory **et** déjà `NOT NULL` en base (contrainte SQL
+  `prompt_0_sql.sql`). Vérifie que l'import donne un message d'erreur explicite ("Durée de mission
+  manquante") en cas d'absence, plutôt que de laisser remonter une erreur SQL brute au recruteur.
+- `hebergement` (col 11, résout le "Logement" demandé par Damien) — déjà Mandatory.
+
+**Reste volontairement Optional, aucun changement** :
+- `langue_requise` / `niveau_langue_requis` (col 12-13) — voir §3.3 ci-dessous, le traitement de
+  l'absence se fait dans l'algorithme, pas dans la validation d'import.
+
+### 3.2 Nuance booléens : vide ≠ NON, vide = NULL
+
+Pour les 5 colonnes booléennes concernées (`zone_orange`, `conditions_spartiates`,
+`hopital_proche`, `deuxieme_poste_partenaire`, `deuxieme_poste_alentour`) : **avant** ce correctif,
+vérifie comment une cellule vide est actuellement traitée à l'import. Si le code actuel convertit
+une cellule vide en `false` (NON) plutôt qu'en `NULL`, corrige ce mapping — une cellule vide doit
+donner `NULL` en base, jamais `false` par défaut. Une fois ces colonnes rendues **Mandatory** (§3.1),
+une valeur `NULL` en résultant (cellule vide) doit être **rejetée à la validation** avec un message
+explicite nommant la colonne et la ligne concernées — pas silencieusement acceptée comme `NULL` ni
+convertie en `false`.
+
+### 3.3 Correctif d'algorithme — Langue non requise (P4_22, précision de Claude)
+
+⚠️ Ce point n'est **pas** qu'une question d'import — l'algorithme actuel ne gère pas le cas "le
+poste ne demande aucune langue". Corrige `scoringLangue` (`services/matching.js`,
+`prompt4.txt` §5) :
+
+```js
+// AVANT :
+function scoringLangue(voeux, poste) {
+  // suppose implicitement qu'une ligne langue_poste existe toujours
+  if (candidatParleLangueRequise(voeux, poste)) {
+    return memeNiveau ? 10 : 7;
+  }
+  return voeux.nouvelle_langue ? 5 : 0;
+}
+
+// APRÈS :
+function scoringLangue(voeux, poste) {
+  if (!poste.langue_requise) return 10;  // aucune langue exigée par le poste → non-critère, score maximal
+  if (candidatParleLangueRequise(voeux, poste)) {
+    return memeNiveau ? 10 : 7;
+  }
+  return voeux.nouvelle_langue ? 5 : 0;
+}
+```
+
+Trace bien ce cas dans `criteres_detailles` (critère "Langue", valeur_poste = "Aucune langue
+requise", note = 10) — pas une ligne absente, pour que le détail du scoring OD reste cohérent (6
+critères toujours affichés dans la section Contexte, voir `prompt4b`).
+
+**Recalcul en masse requis** après ce correctif, comme pour les précédents changements d'algo
+(`prompt4c`) — une opportunité liée à un poste sans langue requise voit potentiellement sa
+`note_contexte` changer.
+
+### 3.4 Vérification des `crm_key` référencés à l'import
+
+Diagnostic demandé : pour la colonne `competences_recherchees` (liste de `crm_key` de
+compétences), vérifie si l'import **rejette déjà** une ligne référençant un `crm_key` de
+compétence inconnu du référentiel (avec un message explicite), ou si un tel cas est actuellement
+silencieusement ignoré/laissé de côté. Si ce n'est pas déjà le cas, ajoute cette validation — même
+principe que celui déjà appliqué à `pays` (`prompt2.txt`, message "Pays inconnu : crm_key=XXX —
+créez-le d'abord"). Rapporte ce que tu trouves avant de corriger si le comportement actuel diffère
+de ce qui est attendu.
+
+### Test réel avant de livrer
+
+1. Importer un poste avec `environnement` vide → doit être rejeté à la vérification avec un
+   message explicite.
+2. Importer un poste avec `zone_orange` vide → doit être rejeté (pas silencieusement mis à `false`).
+3. Importer un poste avec `competences_recherchees` référençant un `crm_key` inconnu → comportement
+   à rapporter (déjà rejeté ou à corriger selon le diagnostic du §3.4).
+4. Recalculer une opportunité existante liée à un poste sans `langue_requise` → `note_contexte`
+   doit refléter `noteLangue = 10`, vérifié par calcul manuel comme pour les précédents correctifs
+   d'algo.
+
+---
+
+## 4. ⚠️ DIAGNOSTIC — icône "N/A" résiduelle dans l'en-tête PDE/PGI (résidu P4_18)
+
+Sur l'en-tête poste (`/recruteur/postes/:id`), après l'ajout des libellés "Statut : …" et
+"Domaine : …" (correctif précédent), une icône affichant "N/A" reste visible sans libellé, à côté
+de "Statut : VSI" (voir capture Damien).
+
+**Hypothèse à vérifier** : il s'agit du champ `candidat_preaffecte` (colonne 7 de l'import,
+Mandatory, booléen) — la spec d'origine (`prompt2c_correctif_dcc_poste_visuel.txt` §1) prévoyait
+d'afficher ce picto **uniquement si `candidat_preaffecte = TRUE`** (avec le nom du candidat,
+colonne 8), **et rien du tout sinon** — pas "N/A".
+
+1. Confirme si l'icône affichant "N/A" correspond bien à `candidat_preaffecte`, ou à un autre champ
+   (ex. `partenaire_ong`, mon hypothèse initiale sur P4_18, qui pourrait finalement être ailleurs
+   dans l'en-tête).
+2. Si c'est bien `candidat_preaffecte` : corrige pour respecter la spec d'origine — **masquer
+   entièrement** l'icône quand `candidat_preaffecte = FALSE` (ne pas afficher "N/A").
+3. Rapporte ta conclusion avant d'appliquer le point 2 — si le champ identifié est différent de
+   `candidat_preaffecte`, ne corrige rien et reviens avec l'identification exacte, Damien tranchera
+   ensuite le libellé approprié.

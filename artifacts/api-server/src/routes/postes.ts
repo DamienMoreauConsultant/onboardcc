@@ -116,10 +116,13 @@ async function loadRefData(): Promise<RefData> {
   };
 }
 
-/** Interprète une valeur CSV comme booléen (TRUE/FALSE/OUI/NON/1/0). */
-function parseBool(val: string | undefined | null): boolean {
-  if (!val) return false;
-  return ['true', 'yes', 'oui', '1'].includes(val.toLowerCase().trim());
+/** Interprète une valeur CSV comme booléen sans confondre une cellule vide avec NON. */
+function parseBool(val: string | undefined | null): boolean | null {
+  const normalized = val?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (['true', 'yes', 'oui', '1'].includes(normalized)) return true;
+  if (['false', 'no', 'non', '0'].includes(normalized)) return false;
+  return null;
 }
 
 /** Interprète une valeur CSV comme entier nullable. */
@@ -151,10 +154,31 @@ function validateRow(
   const mandatoryFields = [
     'ref_poste', 'date_demarrage', 'statut_volontaire', 'partenaire_ong',
     'candidat_preaffecte', 'fonction', 'pays', 'hebergement', 'duree_mission', 'domaine',
+    'competences_recherchees', 'environnement', 'zone_orange', 'conditions_spartiates',
+    'hopital_proche', 'deuxieme_poste_partenaire', 'deuxieme_poste_alentour',
   ];
+  const mandatoryLabels: Record<string, string> = {
+    duree_mission: 'Durée de mission manquante',
+    competences_recherchees: 'Compétences recherchées manquantes',
+    environnement: 'Environnement manquant',
+    zone_orange: 'Zone orange manquante',
+    conditions_spartiates: 'Conditions spartiates manquantes',
+    hopital_proche: 'Hôpital proche manquant',
+    deuxieme_poste_partenaire: 'Deuxième poste partenaire manquant',
+    deuxieme_poste_alentour: 'Deuxième poste alentour manquant',
+  };
   for (const col of mandatoryFields) {
     if (!row[col]?.trim()) {
-      errors.push(`Champ obligatoire manquant : ${col}`);
+      errors.push(mandatoryLabels[col] ?? `Champ obligatoire manquant : ${col}`);
+    }
+  }
+
+  for (const col of [
+    'candidat_preaffecte', 'zone_orange', 'conditions_spartiates', 'hopital_proche',
+    'deuxieme_poste_partenaire', 'deuxieme_poste_alentour',
+  ]) {
+    if (row[col]?.trim() && parseBool(row[col]) === null) {
+      errors.push(`Booléen invalide : ${col}="${row[col].trim()}" — valeurs acceptées TRUE/FALSE, OUI/NON ou 1/0`);
     }
   }
 
@@ -479,7 +503,7 @@ router.post(
       const postesAffectes: number[] = [];
 
       for (const row of parsed.data) {
-        const isPreaffecte = parseBool(row.candidat_preaffecte);
+        const isPreaffecte = parseBool(row.candidat_preaffecte) === true;
         // La validation ci-dessus garantit que ces conversions sont valides.
         // On réutilise toutefois la même fonction au moment de l'écriture :
         // PostgreSQL ne reçoit ainsi jamais une date française brute.
@@ -794,8 +818,13 @@ router.get(
            l.designation    AS langue_designation,
            nl.designation   AS langue_niveau_requis,
            -- Compétences recherchées (tableau JSON)
-           (SELECT json_agg(json_build_object('crm_key', c.crm_key, 'designation', c.designation))
-            FROM recherche r JOIN competences c ON c.id_competences = r.id_competences
+           (SELECT json_agg(json_build_object(
+                     'crm_key', c.crm_key, 'designation', c.designation,
+                     'id_domaine', d_comp.id_domaine, 'domaine', d_comp.designation)
+                     ORDER BY d_comp.designation, c.designation)
+            FROM recherche r
+            JOIN competences c ON c.id_competences = r.id_competences
+            JOIN domaine d_comp ON d_comp.id_domaine = c.id_domaine
             WHERE r.id_poste = fp.id_poste)           AS competences_json,
            -- Environnements (tableau JSON)
            (SELECT json_agg(json_build_object('crm_key', e.crm_key, 'designation', e.designation))

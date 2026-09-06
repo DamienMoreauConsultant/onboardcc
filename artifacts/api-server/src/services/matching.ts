@@ -230,7 +230,7 @@ async function scoreOpportunity(client: DbClient, idOpportunity: number): Promis
         : 0;
     add('Langue', `${requiredLanguage.designation} (${requiredLanguage.niveau ?? '—'})`, spoken ? `${spoken.designation} (${spoken.niveau ?? '—'})` : row.nouvelle_langue ? 'Prêt à apprendre' : 'Non parlée', languageScore, 'contexte');
   } else {
-    add('Langue', 'Aucune exigence', '—', languageScore, 'contexte');
+    add('Langue', 'Aucune langue requise', '—', languageScore, 'contexte');
   }
 
   const candidateSkills = new Set(relations.candidateSkills.rows.map((item) => item.id_competences));
