@@ -35,7 +35,9 @@ export type Opportunity = {
   date_depart_possible: string | null;
   etat_poste_designation: string;
   etat_candidat_designation: string;
+  etat_candidat_code: string;
   domaine_designation: string;
+  domaines_poste: string | null;
   competences_poste: string | null;
   langues_poste: string | null;
   domaines_candidat: string | null;
@@ -52,6 +54,19 @@ export type Opportunity = {
 };
 
 export type OpportunityDetail = Opportunity & {
+  date_arrivee_souhaitee: string | null;
+  contexte_mission: string | null;
+  objectifs_mission: string | null;
+  taches: string | null;
+  competences_detail: string | null;
+  odd_lie: string | null;
+  dimension_ecclesial: string | null;
+  cm_contact_json: {
+    nom: string | null;
+    prenom: string | null;
+    telephone: string | null;
+    email: string | null;
+  } | null;
   criteres_detailles: Array<{
     id_criteres_detailles: number;
     date_evaluation: string;
@@ -75,7 +90,7 @@ export type OpportunityAction =
   | 'refuser-partenaire';
 
 export const opportunitesApi = {
-  list: async (filters: { id_poste?: number; id_candidat?: number }) =>
+  list: async (filters: { id_poste?: number; id_candidat?: number; approbation?: 'proposee-au-cm' | 'proposee-au-cm-historique' }) =>
     (await api.get<Opportunity[]>('/opportunites', { params: filters })).data,
   detail: async (id: number) =>
     (await api.get<OpportunityDetail>(`/opportunites/${id}`)).data,

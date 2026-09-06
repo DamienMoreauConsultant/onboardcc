@@ -13,6 +13,11 @@ export type PosteRow = {
   opp_en_affectation: number;
   flag_poste_deja_mis_en_lien: boolean;
 };
+export type CmDashboardKpis = {
+  postes_a_pourvoir: number;
+  opportunites_a_approuver: number;
+  toutes_opportunites_a_approuver: number;
+};
 export type PosteContact = {
   id_contact: number;
   crm_key: string;
@@ -36,10 +41,11 @@ export type PosteDetail = PosteRow & {
 export type ImportLine = { ligne: number; statut: 'ok' | 'erreur'; message: string };
 
 export const postesApi = {
-  list: async (filters: Record<string, string[]> = {}) => {
-    const { data } = await api.get<PosteRow[]>('/postes', { params: { filtres: JSON.stringify(filters) } });
+  list: async (filters: Record<string, string[]> = {}, opportunites?: string) => {
+    const { data } = await api.get<PosteRow[]>('/postes', { params: { filtres: JSON.stringify(filters), opportunites } });
     return data;
   },
+  cmDashboardKpis: async () => (await api.get<CmDashboardKpis>('/postes/kpis/cm')).data,
   states: async () => (await api.get<EtatPoste[]>('/postes/etats')).data,
   filterValues: async (column: string) => (await api.get<{ values: string[] }>(`/postes/filtres/${column}`)).data.values,
   detail: async (id: number) => (await api.get<PosteDetail>(`/postes/${id}`)).data,

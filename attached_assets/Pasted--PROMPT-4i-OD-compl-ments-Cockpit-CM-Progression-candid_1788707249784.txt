@@ -1,0 +1,166 @@
+# PROMPT 4i — OD (compléments), Cockpit CM, Progression candidat, Écran opportunité candidat
+# Référence : Correctif_DCC_20260904.md, issues P4_23, P4_24, P4_25, P4_26, P4_28, P4_29, P4_30
+#             (P4_27 annulé par Damien, ne pas implémenter)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ §2 (P4_24) contient un diagnostic à faire avant de supprimer quoi que ce soit.
+# ============================================================================
+
+## 1. Entête OD — domaines et format de date (P4_23)
+
+Sur l'écran OD (`/recruteur/opportunites/:id`, `/cm/opportunites/:id`) :
+
+**Bloc Poste** :
+- Remplace l'affichage actuel "Compétences : …" par **"Domaine(s) : …"** — liste des domaines
+  parents des compétences demandées par le poste (table `recherche` → `competences` →
+  `domaine`), **concaténés et distincts** (pas de doublon de domaine).
+- À droite du Pays, ajoute la **date d'arrivée attendue** du poste (`fiche_de_poste.date_arrivee_souhaitee`).
+
+**Bloc Candidat** :
+- Déplace le badge d'état du candidat (actuellement sur une ligne dédiée) en **haut à droite** du
+  bloc.
+- Sur la ligne libérée, affiche les **domaines d'étude, d'expérience et de compétences proposées**
+  du candidat — union de `a_etudie_dans`, `a_travaille_dans` (domaines directs) et des domaines
+  parents de `a_la_competence_de` (compétences → domaine), **concaténés et distincts**, même
+  principe que l'entête CVO (P4_13).
+
+**Format de date — tableau de détail du scoring Contexte** :
+Le critère "Date de départ" affiche actuellement la sortie brute de `Date.toString()` (ex.
+`Sun Apr 01 2029 00:00:00 GMT+0000 (Coordinated Universal Time)`) au lieu d'un format lisible.
+Corrige pour afficher `JJ/MM/AAAA` (ex. `01/04/2029`) — réutilise l'utilitaire `formatDateFR` déjà
+présent dans le code (déjà utilisé ailleurs, notamment sur l'en-tête OD lui-même) — applique-le sur
+**les 2 colonnes** (valeur Poste et valeur Candidat) de cette ligne.
+
+---
+
+## 2. ⚠️ DIAGNOSTIC — Cockpit CM, KPI non identifiés (P4_24)
+
+Sur l'écran d'accueil du CM (actuellement titré "Tableau de bord Missions", menu latéral
+"Missions"/"Mes postes") :
+
+1. **KPI "Postes à pourvoir"** : au clic, navigue vers la liste des postes filtrée sur
+   `etat_poste = 'À pourvoir'` **et** scopée aux postes gérés par ce CM (`gere_poste`) — même
+   principe que le scoping déjà en place sur `/cm/postes`.
+2. **KPI "Opportunités en cours" (32) et "Partenaires actifs" (145)** : identifie précisément quelle
+   requête/donnée alimente ces 2 chiffres aujourd'hui. Si aucune logique métier réelle n'est
+   derrière (ex. valeurs statiques codées en dur, reliquat d'un prototype antérieur non connecté à
+   l'API réelle), **supprime ces 2 KPI** plutôt que de les corriger ou de leur donner un sens après
+   coup — confirmé par Damien. Si au contraire ils sont bien connectés à une donnée réelle (par
+   exemple un vrai comptage d'opportunités actives, ou de partenaires ONG actifs), rapporte-le avant
+   de les supprimer — Damien tranchera alors s'il faut les garder avec un sens clarifié.
+
+Rapporte ta conclusion précisément avant de supprimer quoi que ce soit sur ce point.
+
+---
+
+## 3. KPI "Opportunités à approuver" (P4_25)
+
+Ajoute un KPI sur le cockpit CM : **"Opportunités à approuver"**.
+
+**Comportement** :
+1. Au clic, affiche la liste des **postes** sur lesquels ce CM a au moins une opportunité à l'état
+   "Proposé au CM" **et** qu'il gère (`gere_poste`).
+2. Au clic sur un poste de cette liste, navigue directement vers l'onglet "Liste des opportunités"
+   de ce poste (PLO), **filtré pour n'afficher que les opportunités à l'état "Proposé au CM" qui
+   ont été soumises à ce CM** (pas toutes les opportunités du poste).
+
+⚠️ Ne pas implémenter la variante à navigation directe (liste d'opportunités sans détour par les
+postes) — proposée puis annulée par Damien (voir P4_27, annulé).
+
+---
+
+## 4. KPI "Toutes mes opportunités à approuver" (P4_26)
+
+Ajoute un second KPI, distinct du précédent : **"Toutes mes opportunités à approuver"** — version
+historique de P4_25.
+
+**Comportement** :
+1. Au clic, affiche la liste des postes sur lesquels ce CM a au moins une opportunité **ayant un
+   jour été** à l'état "Proposé au CM" (y compris déjà traitées — approuvées, rejetées...) et qu'il
+   gère.
+2. Même navigation qu'en §3 : clic sur un poste → onglet Opportunités de ce poste, filtré sur les
+   opportunités qui lui ont été soumises un jour.
+
+**Diagnostic préalable nécessaire** : vérifie comment tracer qu'une opportunité "a un jour été"
+proposée au CM — si l'état actuel de l'opportunité ne suffit pas (puisqu'elle a pu avancer ou être
+rejetée depuis), utilise l'historique déjà disponible (ex. `criteres_detailles`/`etape` si un
+horodatage de la transition "Proposée au CM" y est tracé) ou, si aucune trace historique n'existe
+aujourd'hui, propose la solution la plus simple (ex. un flag `flag_opportunite_proposee_a_cm`,
+qui existe déjà sur `opportunite` d'après `prompt4.txt` §2 — vérifie s'il reste `true` une fois posé
+ou s'il est remis à `false` ailleurs, ce qui déterminerait s'il est directement réutilisable ici).
+
+---
+
+## 5. Tri de la progression candidat par ordre d'apparition (P4_28)
+
+Sur l'onglet "Progression et documents" (RSC), le tri actuel de la timeline `etape` se fait
+uniquement sur `date_evenement` (colonne `DATE`, sans heure) — ce qui peut inverser l'ordre réel de
+2 événements survenus le même jour (ex. "Mise en lien" affiché avant "Session choisir" alors que
+survenu après).
+
+**Correctif** : trie sur `id_historique` (clé primaire `SERIAL`, croissante dans l'ordre
+d'insertion en base) comme critère de tri — soit en remplacement de `date_evenement`, soit en tri
+secondaire après `date_evenement` (les deux donnent le même résultat puisque les insertions sont
+déjà chronologiques ; le plus simple à implémenter est acceptable). **Aucun changement de schéma
+nécessaire.**
+
+---
+
+## 6. Précondition manquante — bouton "Mettre en lien" (P4_29, bug confirmé)
+
+`mettre_en_lien(id_opportunite)` (`prompt4.txt` §2) n'a aujourd'hui aucune précondition sur l'état
+du candidat — ce qui a permis une mise en lien alors que le candidat était encore à l'état "Session
+choisir" (CHO), avant d'avoir atteint "ATA" (Attente affectation).
+
+**Correctif** : ajoute la précondition `candidat.etat = 'ATA'` à `mettre_en_lien()`. Le bouton
+"Mettre en lien" (écran OD) doit être **désactivé ou masqué** tant que cette condition n'est pas
+remplie, avec un message clair au recruteur ("Le candidat doit être à l'état Attente affectation
+avant de pouvoir être mis en lien sur cette opportunité.").
+
+**Test réel avant de livrer** : reproduire le scénario du bug — tenter une mise en lien sur un
+candidat encore en "Session choisir" → doit être bloqué côté écran ET côté API (défense en
+profondeur, comme pour les autres préconditions déjà en place). Vérifier ensuite qu'une mise en
+lien sur un candidat en "ATA" fonctionne toujours normalement (non-régression).
+
+---
+
+## 7. Écran opportunité côté Candidat (COP) — refonte (P4_30)
+
+Remplace/complète l'écran actuel (`prompt4.txt` §8, écran candidat) :
+
+**Confidentialité** : retire complètement de cet écran, côté candidat :
+- Les informations candidat affichées en haut à droite (redondant, c'est sa propre fiche).
+- Toutes les informations de scoring (notes Mission/Contexte/Alerte, détail des critères) — un
+  candidat ne doit jamais voir son propre score de matching.
+
+**À l'état "Mise en lien"** (avant accord de principe) : bandeau rouge informatif :
+> Vous avez été mis en lien avec un poste qui pourrait correspondre à votre projet. Merci de
+> contacter [Nom du Chargé de Mission] qui vous présentera la mission.
+
+**Popup "Accepter la mission" → Accord de principe** : ajoute une case à cocher **obligatoire**
+(le bouton de confirmation reste désactivé tant qu'elle n'est pas cochée) avec le texte :
+> J'ai contacté le chargé de mission et il m'a expliqué le contexte et les principes de la mission
+> et j'accepte de poursuivre ma candidature sur ce poste.
+
+**À l'état "Accord de principe"** : bandeau rouge informatif :
+> Vous avez accepté de candidater sur le poste décrit ci-dessous. Vous allez recevoir par mail des
+> informations complémentaires, notamment le contact du partenaire local. Veuillez le contacter
+> avant d'accepter définitivement le poste.
+
+Sous ce bandeau, affiche le contenu de l'onglet "Détail du poste" (PDE) — objectifs, tâches,
+compétences, contexte de mission, etc. — en lecture seule, pertinent pour le candidat avant son
+appel au partenaire.
+
+**Popup "Accepter la mission" → Accord définitif** : même mécanique de case à cocher obligatoire,
+avec le texte :
+> J'ai contacté le partenaire et nous avons pu aborder tous les aspects de la mission et j'accepte
+> cette mission (la décision définitive revient à la DCC suite au retour du partenaire et vous sera
+> communiquée au plus tôt).
+
+**Choix d'implémentation laissé à Replit** : réutiliser le composant popup générique déjà utilisé
+ailleurs dans l'app (conception.md §6.1.2), étendu avec une case à cocher bloquante, plutôt que de
+construire un composant dédié à cet écran.
+
+**Test réel avant de livrer** : parcourir le cycle complet côté candidat (Mise en lien → Accord de
+principe → Accord définitif) sur un dossier de test, vérifier qu'aucune information de scoring
+n'est visible à aucune étape, et que les 2 popups bloquent bien la confirmation tant que la case
+n'est pas cochée.

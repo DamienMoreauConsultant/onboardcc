@@ -1,62 +1,80 @@
-import React from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Briefcase, Globe2, Building2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link } from 'wouter';
+import { BriefcaseBusiness, CheckCircle2, History, Loader2 } from 'lucide-react';
+import { postesApi, type CmDashboardKpis } from '@/api/postes';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-export default function ChargeMission() {
+type DashboardCardProps = {
+  title: string;
+  description: string;
+  value: number | undefined;
+  href: string;
+  icon: typeof BriefcaseBusiness;
+  testId: string;
+};
+
+function DashboardCard({ title, description, value, href, icon: Icon, testId }: DashboardCardProps) {
   return (
-    <div className="p-8 space-y-8">
-      <div>
-        <h1 className="text-3xl font-display font-bold text-foreground">Tableau de bord Missions</h1>
-        <p className="text-muted-foreground mt-1 text-sm font-medium">Suivi des fiches de poste, des opportunités et des partenariats ONG.</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="shadow-sm border-t-4 border-t-primary">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Postes à pourvoir</CardTitle>
-            <Briefcase className="h-5 w-5 text-primary opacity-70" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-display font-bold text-foreground">87</div>
-            <p className="text-xs text-muted-foreground mt-1">Dont 14 urgents</p>
-          </CardContent>
-        </Card>
-
-        <Card className="shadow-sm border-t-4 border-t-accent">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Opportunités en cours</CardTitle>
-            <Globe2 className="h-5 w-5 text-accent opacity-70" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-display font-bold text-foreground">32</div>
-            <p className="text-xs text-muted-foreground mt-1">Matching candidats</p>
-          </CardContent>
-        </Card>
-
-        <Card className="shadow-sm border-t-4 border-t-sidebar-accent">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Partenaires Actifs</CardTitle>
-            <Building2 className="h-5 w-5 text-sidebar-accent opacity-70" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-display font-bold text-foreground">145</div>
-            <p className="text-xs text-muted-foreground mt-1">Dans 38 pays</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="shadow-sm">
-        <CardHeader>
-          <CardTitle className="font-display">Derniers postes validés</CardTitle>
-          <CardDescription>Les fiches de poste récemment approuvées prêtes pour la recherche de candidats.</CardDescription>
+    <Link href={href} className="block" data-testid={`link-${testId}`}>
+      <Card className="h-full border-t-4 border-t-primary shadow-sm transition-shadow hover:shadow-md">
+        <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <CardTitle className="text-sm font-medium uppercase tracking-wide text-muted-foreground">{title}</CardTitle>
+          <Icon className="h-5 w-5 text-primary opacity-70" aria-hidden="true" />
         </CardHeader>
         <CardContent>
-          <div className="text-sm text-center py-12 text-muted-foreground">
-            {/* TODO: Wire up actual postes API when available */}
-            <p>La liste complète sera connectée à l'API prochainement.</p>
+          <div className="text-3xl font-display font-bold text-foreground" data-testid={`text-${testId}`}>
+            {value === undefined ? <Loader2 className="h-6 w-6 animate-spin" /> : value}
           </div>
+          <p className="mt-1 text-xs text-muted-foreground">{description}</p>
         </CardContent>
       </Card>
+    </Link>
+  );
+}
+
+export default function ChargeMission() {
+  const [kpis, setKpis] = useState<CmDashboardKpis>();
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    void postesApi.cmDashboardKpis()
+      .then(setKpis)
+      .catch((err: any) => setError(err?.response?.data?.error ?? 'Impossible de charger les indicateurs.'));
+  }, []);
+
+  return (
+    <div className="space-y-8 p-8">
+      <div>
+        <h1 className="text-3xl font-display font-bold text-foreground">Tableau de bord Missions</h1>
+        <p className="mt-1 text-sm font-medium text-muted-foreground">Suivi des postes et des opportunités relevant de vos missions.</p>
+      </div>
+      {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive" data-testid="status-dashboard-error">{error}</p>}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        <DashboardCard
+          title="Postes à pourvoir"
+          description="Postes dont vous avez la charge"
+          value={kpis?.postes_a_pourvoir}
+          href="/cm/postes?etat=%C3%80%20pourvoir"
+          icon={BriefcaseBusiness}
+          testId="cm-postes-a-pourvoir"
+        />
+        <DashboardCard
+          title="Opportunités à approuver"
+          description="Actuellement proposées au CM"
+          value={kpis?.opportunites_a_approuver}
+          href="/cm/postes?opportunites=proposee-au-cm"
+          icon={CheckCircle2}
+          testId="cm-opportunites-a-approuver"
+        />
+        <DashboardCard
+          title="Toutes mes opportunités à approuver"
+          description="Opportunités proposées, y compris celles déjà traitées"
+          value={kpis?.toutes_opportunites_a_approuver}
+          href="/cm/postes?opportunites=proposee-au-cm-historique"
+          icon={History}
+          testId="cm-toutes-opportunites-a-approuver"
+        />
+      </div>
     </div>
   );
 }

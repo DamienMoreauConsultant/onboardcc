@@ -16,11 +16,19 @@ const BASE_SELECT = `
     o.flag_opportunite_non_retenu,o.flag_opportunite_obsolete,
     eo.designation AS etat_designation,
     cand.id_candidat,co.nom_contact,co.prenom_contact,co.date_naissance,
+    cand.id_etat_candidat AS etat_candidat_code,
     ec.designation AS etat_candidat_designation,fdv.date_depart_possible,
-    fp.crm_key AS poste_crm_key,fp.ong,fp.fonction,
+    fp.crm_key AS poste_crm_key,fp.ong,fp.fonction,fp.date_arrivee_souhaitee,
+    fp.contexte_mission,fp.objectifs_mission,fp.taches,fp.competences_detail,
+    fp.odd_lie,fp.dimension_ecclesial,
     ep.designation AS etat_poste_designation,
     p.designation AS pays_designation,r.designation AS region_designation,
     dom.designation AS domaine_designation,
+    (SELECT string_agg(DISTINCT dpost.designation, ', ' ORDER BY dpost.designation)
+     FROM recherche rech
+     JOIN competences cp ON cp.id_competences=rech.id_competences
+     JOIN domaine dpost ON dpost.id_domaine=cp.id_domaine
+     WHERE rech.id_poste=o.id_poste) AS domaines_poste,
     (SELECT string_agg(DISTINCT cp.designation, ', ' ORDER BY cp.designation)
      FROM recherche rech JOIN competences cp ON cp.id_competences=rech.id_competences
      WHERE rech.id_poste=o.id_poste) AS competences_poste,
@@ -32,6 +40,11 @@ const BASE_SELECT = `
        SELECT a.id_domaine FROM a_etudie_dans a WHERE a.id_fiche_de_voeux=o.id_fiche_de_voeux
        UNION
        SELECT a.id_domaine FROM a_travaille_dans a WHERE a.id_fiche_de_voeux=o.id_fiche_de_voeux
+       UNION
+       SELECT cp.id_domaine
+       FROM a_la_competence_de acomp
+       JOIN competences cp ON cp.id_competences=acomp.id_competences
+       WHERE acomp.id_fiche_de_voeux=o.id_fiche_de_voeux
      ) source_domaine
      JOIN domaine dc ON dc.id_domaine=source_domaine.id_domaine) AS domaines_candidat,
     (SELECT string_agg(DISTINCT cc.designation, ', ' ORDER BY cc.designation)
@@ -50,7 +63,17 @@ const BASE_SELECT = `
        AND NOT COALESCE(op.flag_opportunite_obsolete,false)
        AND NOT COALESCE(op.flag_opportunite_non_retenu,false)
        AND COALESCE(op.note_mission,0)>=5) AS nb_postes,
-    (SELECT e.note_ecrite FROM etape e
+     (SELECT json_build_object(
+               'nom', cm.nom_contact,
+               'prenom', cm.prenom_contact,
+               'telephone', cm.tel_contact,
+               'email', cm.email_contact)
+      FROM gere_poste gp
+      JOIN contact cm ON cm.id_contact=gp.id_contact
+      WHERE gp.id_poste=o.id_poste AND cm.role IN ('CM1','CM2')
+      ORDER BY CASE cm.role WHEN 'CM1' THEN 1 ELSE 2 END
+      LIMIT 1) AS cm_contact_json,
+     (SELECT e.note_ecrite FROM etape e
      WHERE e.id_candidat=cand.id_candidat AND e.id_etat_candidat='ACC'
      ORDER BY e.date_evenement DESC,e.id_historique DESC LIMIT 1) AS commentaire_candidat,
     (SELECT e.note_ecrite FROM etape e
@@ -68,6 +91,16 @@ const BASE_SELECT = `
   JOIN region r ON r.id_region=p.id_region
   JOIN domaine dom ON dom.id_domaine=fp.id_domaine
 `;
+
+function hideCandidateScoring(row: Record<string, unknown>) {
+  const {
+    note_contexte: _noteContexte,
+    note_mission: _noteMission,
+    note_warning: _noteWarning,
+    ...safe
+  } = row;
+  return safe;
+}
 
 function roleScope(req: Request, params: unknown[]) {
   const role = req.user!.role;
@@ -107,6 +140,12 @@ router.get('/', requireRole(ALL_ROLES), async (req, res) => {
       params.push(Number(req.query.id_candidat));
       filters.push(`cand.id_candidat=$${params.length}`);
     }
+    const approvalFilter = String(req.query.approbation ?? '');
+    if (approvalFilter === 'proposee-au-cm') {
+      filters.push(`eo.designation='Proposée au CM'`);
+    } else if (approvalFilter === 'proposee-au-cm-historique') {
+      filters.push(`COALESCE(o.flag_opportunite_proposee_a_cm,false)`);
+    }
     const scope = roleScope(req, params);
     const result = await pool.query(
       `${BASE_SELECT}
@@ -121,7 +160,7 @@ router.get('/', requireRole(ALL_ROLES), async (req, res) => {
        LIMIT 250`,
       params,
     );
-    res.json(result.rows);
+    res.json(req.user!.role === 'CAN' ? result.rows.map(hideCandidateScoring) : result.rows);
   } catch (err) {
     console.error('Erreur GET opportunites :', err);
     res.status(500).json({ error: 'Erreur interne du serveur.' });
@@ -170,7 +209,7 @@ router.get('/:id', requireRole(ALL_ROLES), async (req, res) => {
     }
     const [opportunity, details] = await Promise.all([
       pool.query(`${BASE_SELECT} WHERE o.id_opportunite=$1`, [id]),
-      pool.query(
+      req.user!.role === 'CAN' ? Promise.resolve({ rows: [] }) : pool.query(
         `SELECT DISTINCT ON (critere)
            id_criteres_detailles,date_evaluation,critere,valeur_poste,valeur_candidat,note_obtenue
          FROM criteres_detailles WHERE id_opportunite=$1
@@ -178,7 +217,8 @@ router.get('/:id', requireRole(ALL_ROLES), async (req, res) => {
         [id],
       ),
     ]);
-    res.json({ ...opportunity.rows[0], criteres_detailles: details.rows });
+    const payload = { ...opportunity.rows[0], criteres_detailles: details.rows };
+    res.json(req.user!.role === 'CAN' ? hideCandidateScoring(payload) : payload);
   } catch (err) {
     console.error('Erreur GET opportunite détail :', err);
     res.status(500).json({ error: 'Erreur interne du serveur.' });
@@ -284,6 +324,7 @@ router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
       || opportunity.flag_opportunite_obsolete
     )) throw new Error('LOCKED');
     if (action === 'mettre_en_lien') {
+      if (opportunity.etat_candidat_code !== 'ATA') throw new Error('CANDIDATE_NOT_ATA');
       const locks = await client.query(
         `SELECT fp.flag_poste_deja_mis_en_lien,fdv.flag_candidat_deja_mis_en_lien
          FROM fiche_de_poste fp CROSS JOIN fiche_de_voeux fdv
@@ -372,6 +413,9 @@ router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
     await client.query('ROLLBACK');
     console.error('Erreur transition opportunité :', { id: req.params.id, action, message: err.message });
     if (err.message === 'NOT_FOUND') return void res.status(404).json({ error: 'Opportunité introuvable.' });
+    if (err.message === 'CANDIDATE_NOT_ATA') {
+      return void res.status(409).json({ error: 'Le candidat doit être à l’état Attente affectation avant de pouvoir être mis en lien sur cette opportunité.' });
+    }
     if (['PRECONDITION', 'LOCKED'].includes(err.message)) return void res.status(409).json({ error: err.message === 'LOCKED' ? 'Le candidat ou le poste est déjà engagé dans une autre mise en lien.' : 'Cette transition n’est pas autorisée depuis l’état actuel.' });
     res.status(500).json({ error: 'Erreur interne du serveur.' });
   } finally {

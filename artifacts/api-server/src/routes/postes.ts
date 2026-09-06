@@ -744,6 +744,20 @@ router.get(
         ? etatsParam.split(',').map((s) => s.trim()).filter(Boolean)
         : [];
       const etatsFilter = filters.etat?.length ? filters.etat : legacyStates;
+      const opportunityScope = String(req.query.opportunites ?? '');
+      const opportunityPredicate = opportunityScope === 'proposee-au-cm'
+        ? ` AND EXISTS (
+            SELECT 1 FROM opportunite opo
+            JOIN etat_opportunite eop ON eop.id_etat_opportunite=opo.id_etat_opportunite
+            WHERE opo.id_poste=fp.id_poste AND eop.designation='Proposée au CM'
+          )`
+        : opportunityScope === 'proposee-au-cm-historique'
+          ? ` AND EXISTS (
+              SELECT 1 FROM opportunite opo
+              WHERE opo.id_poste=fp.id_poste
+                AND COALESCE(opo.flag_opportunite_proposee_a_cm,false)
+            )`
+          : '';
       const cmParamIndex = isCm ? 2 : null;
       const generatedFilters = posteFilterSql(filters, isCm ? 3 : 2);
 
@@ -770,6 +784,7 @@ router.get(
         LEFT JOIN opportunite o        ON o.id_poste               = fp.id_poste
         LEFT JOIN etat_opportunite eo  ON eo.id_etat_opportunite   = o.id_etat_opportunite
         WHERE ((cardinality($1::text[]) = 0 AND ep.designation <> 'Fermé') OR ep.designation = ANY($1::text[]))
+         ${opportunityPredicate}
         ${generatedFilters.sql}
         GROUP BY fp.id_poste, fp.crm_key, fp.statut_volontaire, fp.fonction, fp.flag_poste_deja_mis_en_lien,
                  ep.designation, p.designation
@@ -783,6 +798,40 @@ router.get(
       res.json(result.rows);
     } catch (err) {
       console.error('Erreur GET /postes :', err);
+      res.status(500).json({ error: 'Erreur interne du serveur.' });
+    }
+  },
+);
+
+/* Dashboard counters are intentionally scoped through gere_poste, just like
+   the CM list.  The opportunity counters count opportunities; list navigation
+   below resolves them back to their distinct owning posts. */
+router.get(
+  '/kpis/cm',
+  requireRole(['CM1', 'CM2', 'CHZ']),
+  async (req, res) => {
+    try {
+      const result = await pool.query(
+        `SELECT
+           (SELECT COUNT(*)::int
+            FROM fiche_de_poste fp
+            JOIN gere_poste gp ON gp.id_poste=fp.id_poste AND gp.id_contact=$1
+            JOIN etat_poste ep ON ep.id_etat_poste=fp.id_etat_poste
+            WHERE ep.designation='À pourvoir') AS postes_a_pourvoir,
+           (SELECT COUNT(*)::int
+            FROM opportunite o
+            JOIN gere_poste gp ON gp.id_poste=o.id_poste AND gp.id_contact=$1
+            JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite
+            WHERE eo.designation='Proposée au CM') AS opportunites_a_approuver,
+           (SELECT COUNT(*)::int
+            FROM opportunite o
+            JOIN gere_poste gp ON gp.id_poste=o.id_poste AND gp.id_contact=$1
+            WHERE COALESCE(o.flag_opportunite_proposee_a_cm,false)) AS toutes_opportunites_a_approuver`,
+        [req.user!.id_contact],
+      );
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error('Erreur GET /postes/kpis/cm :', err);
       res.status(500).json({ error: 'Erreur interne du serveur.' });
     }
   },

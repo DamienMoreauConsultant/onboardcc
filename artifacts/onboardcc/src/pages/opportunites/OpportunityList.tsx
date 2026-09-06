@@ -16,13 +16,14 @@ type Props = {
   mode: 'recruteur' | 'cm';
   postId?: number;
   candidateId?: number;
+  approvalFilter?: 'proposee-au-cm' | 'proposee-au-cm-historique';
   refreshKey?: number;
   onChanged?: () => void | Promise<void>;
 };
 
 const normalize = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr');
 
-export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props) {
+export function OpportunityList({ mode, postId, candidateId, approvalFilter, refreshKey }: Props) {
   const [, setLocation] = useLocation();
   const [items, setItems] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,7 +40,7 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
   const load = async () => {
     setLoading(true);
     try {
-      setItems(await opportunitesApi.list({ id_poste: postId, id_candidat: candidateId }));
+      setItems(await opportunitesApi.list({ id_poste: postId, id_candidat: candidateId, approbation: approvalFilter }));
       setError('');
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Impossible de charger les opportunités.');
@@ -48,7 +49,7 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
     }
   };
 
-  useEffect(() => { void load(); }, [postId, candidateId, refreshKey]);
+  useEffect(() => { void load(); }, [postId, candidateId, approvalFilter, refreshKey]);
 
   const recalculateAll = async () => {
     setRecalculating(true);
@@ -69,7 +70,10 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
   const groups = useMemo(() => {
     let result = items;
 
-    if (!showAll) {
+    // A dashboard drill-down is an explicit server-side selection, so it must
+    // retain every matching opportunity (including a previously rejected or
+    // low-scoring one in the historical view).
+    if (!showAll && !approvalFilter) {
       result = result.filter(item => {
         if (item.flag_opportunite_obsolete || item.flag_opportunite_non_retenu) return false;
         const nm = item.note_mission !== null ? Number(item.note_mission) : NaN;
@@ -135,7 +139,7 @@ export function OpportunityList({ mode, postId, candidateId, refreshKey }: Props
       { items: group2, highlighted: true },
       { items: group3, highlighted: false },
     ].filter(g => g.items.length > 0);
-  }, [items, showAll, appliedSearch, filters, isCandidateOriented]);
+  }, [items, showAll, appliedSearch, filters, isCandidateOriented, approvalFilter]);
 
   if (loading && !items.length) return <div className="flex justify-center p-10"><Loader2 className="h-6 w-6 animate-spin text-primary" data-testid="loading-spinner" /></div>;
 

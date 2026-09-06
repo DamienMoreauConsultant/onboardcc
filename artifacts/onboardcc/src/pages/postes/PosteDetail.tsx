@@ -193,7 +193,13 @@ export default function PosteDetail({ mode }: Props) {
   }, [poste?.competences_json]);
   const canAct = mode === 'recruteur' && !!poste && closeable.includes(poste.etat_designation);
   const canReopen = mode === 'recruteur' && !!poste && reopenable.includes(poste.etat_designation);
-  const listPath = `${mode === 'cm' ? '/cm' : '/recruteur'}/postes`;
+  const dashboardSearch = new URLSearchParams(window.location.search);
+  const opportunityApprovalFilter = dashboardSearch.get('opportunites');
+  const dashboardStateFilter = dashboardSearch.get('etat');
+  const listQuery = opportunityApprovalFilter
+    ? `?opportunites=${opportunityApprovalFilter}`
+    : dashboardStateFilter ? `?etat=${encodeURIComponent(dashboardStateFilter)}` : '';
+  const listPath = `${mode === 'cm' ? '/cm' : '/recruteur'}/postes${listQuery}`;
 
   if (loading) {
     return <div className="flex h-full items-center justify-center"><Loader2 className="h-7 w-7 animate-spin text-primary" /></div>;
@@ -356,6 +362,7 @@ export default function PosteDetail({ mode }: Props) {
           <OpportunityList
             mode={mode}
             postId={poste.id_poste}
+            approvalFilter={opportunityApprovalFilter === 'proposee-au-cm' || opportunityApprovalFilter === 'proposee-au-cm-historique' ? opportunityApprovalFilter : undefined}
             refreshKey={opportunityRefreshKey}
             onChanged={refreshPoste}
           />

@@ -422,7 +422,7 @@ router.get('/:id', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN']), as
                 COALESCE((SELECT json_agg(x) FROM (SELECT h.* FROM veut_habiter_dans z JOIN hebergement h ON h.id_hebergement=z.id_hebergement WHERE z.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') hebergements,
                 COALESCE((SELECT json_agg(x) FROM (SELECT cp.*,z.niveau,z.autre_competence FROM a_la_competence_de z JOIN competences cp ON cp.id_competences=z.id_competences WHERE z.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') competences,
                COALESCE((SELECT json_agg(x) FROM (SELECT s.* FROM inscrit_a ia JOIN stages s ON s.id_stages=ia.id_stages WHERE ia.id_fiche_de_voeux=f.id_fiche_de_voeux)x),'[]') stages,
-               COALESCE((SELECT json_agg(x ORDER BY x.date_evenement DESC) FROM (SELECT e.*,es.designation FROM etape e JOIN etat_candidat es ON es.id_etat_candidat=e.id_etat_candidat WHERE e.id_candidat=c.id_candidat)x),'[]') historique,
+               COALESCE((SELECT json_agg(x ORDER BY x.date_evenement DESC, x.id_historique DESC) FROM (SELECT e.*,es.designation FROM etape e JOIN etat_candidat es ON es.id_etat_candidat=e.id_etat_candidat WHERE e.id_candidat=c.id_candidat)x),'[]') historique,
                (SELECT COUNT(*)::int FROM opportunite o WHERE o.id_fiche_de_voeux=f.id_fiche_de_voeux) AS opportunites_total
        FROM candidat c
        JOIN contact co ON co.id_contact = c.id_contact

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { BriefcaseBusiness, ChevronRight, Loader2, RefreshCw } from 'lucide-react';
 import { postesApi, type PosteRow } from '@/api/postes';
 import { ColumnFilter } from '@/components/data-table/ColumnFilter';
@@ -20,6 +20,7 @@ const filterColumns = [
 ] as const;
 
 export default function PostesList({ mode }: Props) {
+  const [location] = useLocation();
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   const [rows, setRows] = useState<PosteRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,17 +28,30 @@ export default function PostesList({ mode }: Props) {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
 
+  const dashboardFilter = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    const opportunites = params.get('opportunites');
+    return opportunites === 'proposee-au-cm' || opportunites === 'proposee-au-cm-historique' ? opportunites : undefined;
+  }, [location]);
+  const dashboardState = useMemo<Record<string, string[]>>(() => {
+    const etat = new URLSearchParams(window.location.search).get('etat');
+    const state: Record<string, string[]> = {};
+    if (etat) state.etat = [etat];
+    return state;
+  }, [location]);
+  const effectiveFilters = useMemo(() => ({ ...dashboardState, ...filters }), [dashboardState, filters]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setRows(await postesApi.list(filters));
+      setRows(await postesApi.list(effectiveFilters, dashboardFilter));
       setError('');
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Impossible de charger les postes.');
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [dashboardFilter, effectiveFilters]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -53,6 +67,7 @@ export default function PostesList({ mode }: Props) {
     <ColumnFilter columnKey={key} endpoint="/postes/filtres" label={label} activeValues={filters[key] ?? []} onApply={(values) => applyFilter(key, values)} />
   );
   const detailBase = mode === 'cm' ? '/cm' : '/recruteur';
+  const detailQuery = dashboardFilter ? `?tab=opportunites&opportunites=${dashboardFilter}` : '';
   const displayedRows = useMemo(() => {
     const query = search.toLocaleLowerCase('fr-FR');
     if (!query) return rows;
@@ -114,7 +129,7 @@ export default function PostesList({ mode }: Props) {
                 <tbody>
                   {displayedRows.map((row) => (
                     <tr key={row.id_poste} className="border-t transition-colors hover:bg-muted/30">
-                      <td className="px-4 py-4 font-mono font-semibold text-primary"><Link href={`${detailBase}/postes/${row.id_poste}`}>{row.crm_key}</Link></td>
+                      <td className="px-4 py-4 font-mono font-semibold text-primary"><Link href={`${detailBase}/postes/${row.id_poste}${detailQuery}`}>{row.crm_key}</Link></td>
                       <td className="px-4 py-4">{row.pays_designation}</td>
                       <td className="px-4 py-4">{row.statut_volontaire || '—'}</td>
                       <td className="max-w-[220px] px-4 py-4">{row.fonction || '—'}</td>
@@ -123,7 +138,7 @@ export default function PostesList({ mode }: Props) {
                       <td className="px-4 py-4 text-center font-semibold">{row.opp_approuvee}</td>
                       <td className="px-4 py-4 text-center font-semibold">{row.opp_en_affectation}</td>
                       <td className="px-4 py-4 text-center"><Badge variant={row.flag_poste_deja_mis_en_lien ? 'default' : 'secondary'}>{row.flag_poste_deja_mis_en_lien ? 'Oui' : 'Non'}</Badge></td>
-                      <td className="px-4 py-4"><Link href={`${detailBase}/postes/${row.id_poste}`} aria-label={`Ouvrir le poste ${row.crm_key}`}><ChevronRight className="h-4 w-4 text-muted-foreground" /></Link></td>
+                      <td className="px-4 py-4"><Link href={`${detailBase}/postes/${row.id_poste}${detailQuery}`} aria-label={`Ouvrir le poste ${row.crm_key}`}><ChevronRight className="h-4 w-4 text-muted-foreground" /></Link></td>
                     </tr>
                   ))}
                   {!displayedRows.length && <tr><td colSpan={10} className="p-16 text-center text-muted-foreground">Aucun poste ne correspond aux filtres ou à la recherche.</td></tr>}

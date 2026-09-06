@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import { opportunitesApi, type OpportunityAction, type OpportunityDetail, type OpportunityState } from '@/api/opportunites';
 import { candidatsApi } from '@/api/candidats';
 import { useQuery } from '@tanstack/react-query';
@@ -56,6 +58,7 @@ export default function OpportuniteDetail({ mode }: Props) {
   const [error, setError] = useState('');
   const [action, setAction] = useState<AvailableAction | null>(null);
   const [comment, setComment] = useState('');
+  const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const { data: refs } = useQuery({
@@ -103,15 +106,25 @@ export default function OpportuniteDetail({ mode }: Props) {
   if (!detail && !error) return <div className="flex justify-center p-12"><Loader2 className="h-7 w-7 animate-spin text-primary" data-testid="loading-spinner" /></div>;
   if (!detail) return <p className="p-8 text-destructive" data-testid="error-message">{error}</p>;
 
+  const isAcceptanceAction = action?.action === 'accord-de-principe' || action?.action === 'accord-definitif';
+  const acknowledgementText = action?.action === 'accord-de-principe'
+    ? "J’ai contacté le chargé de mission et j’accepte de poursuivre ma candidature."
+    : "J’ai contacté le partenaire et j’accepte cette mission.";
+
   const submitCandidateAction = async () => {
-    if (!action || !comment.trim()) return;
+    if (!action || (isAcceptanceAction ? !acknowledged : !comment.trim())) return;
     setBusy(true);
     try {
-      await opportunitesApi.transition(detail.id_opportunite, action.action, comment.trim());
+      await opportunitesApi.transition(
+        detail.id_opportunite,
+        action.action,
+        isAcceptanceAction ? acknowledgementText : comment.trim(),
+      );
       setDetail(await opportunitesApi.detail(detail.id_opportunite));
       setError('');
       setAction(null);
       setComment('');
+      setAcknowledged(false);
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Action impossible.');
     } finally {
@@ -120,6 +133,13 @@ export default function OpportuniteDetail({ mode }: Props) {
   };
 
   const availableActions = getDetailActions(detail.etat_designation, mode);
+  const candidateCanBeLinked = detail.etat_candidat_code === 'ATA';
+  const cmName = [detail.cm_contact_json?.prenom, detail.cm_contact_json?.nom].filter(Boolean).join(' ') || 'votre chargé de mission';
+
+  const displayCriterionValue = (criterion: OpportunityDetail['criteres_detailles'][number], value: string | null) => {
+    if (criterion.critere === 'Date de départ' && value) return formatDateFR(value);
+    return value || '—';
+  };
 
   const renderPosteSummary = () => {
     const content = (
@@ -128,10 +148,10 @@ export default function OpportuniteDetail({ mode }: Props) {
           <p className="text-sm font-semibold uppercase text-muted-foreground mb-1">Poste</p>
           <h2 className="font-display text-xl font-bold group-hover:underline">{detail.poste_crm_key} · {detail.fonction || 'Poste'}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            {detail.pays_designation} · {detail.ong || 'ONG'}
+            {detail.pays_designation} · {detail.date_arrivee_souhaitee ? formatDateFR(detail.date_arrivee_souhaitee) : 'Date non renseignée'} · {detail.ong || 'ONG'}
           </p>
           <p className="text-sm text-muted-foreground mt-1">
-            Compétences: {detail.competences_poste || 'Non renseigné'} · Langue: {detail.langues_poste || 'Non renseigné'}
+            Domaine(s) : {detail.domaines_poste || 'Non renseigné'} · Langue : {detail.langues_poste || 'Non renseigné'}
           </p>
         </div>
         {mode !== 'candidat' && <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />}
@@ -150,8 +170,8 @@ export default function OpportuniteDetail({ mode }: Props) {
 
   const renderCandidatSummary = () => {
     const content = (
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="relative flex items-center justify-between">
+        <div className="pr-32">
           <p className="text-sm font-semibold uppercase text-muted-foreground mb-1">Candidat</p>
           <h2 className="font-display text-xl font-bold group-hover:underline">
             {detail.prenom_contact} {detail.nom_contact}
@@ -159,10 +179,9 @@ export default function OpportuniteDetail({ mode }: Props) {
           <p className="text-sm text-muted-foreground mt-1">
             Né(e) le {detail.date_naissance ? formatDateFR(detail.date_naissance) : 'Non renseigné'} · Départ: {detail.date_depart_possible ? formatDateFR(detail.date_depart_possible) : 'Non renseigné'}
           </p>
-          <div className="mt-2">
-            <Badge variant="outline" className="text-xs">{detail.etat_candidat_designation || 'État non renseigné'}</Badge>
-          </div>
+          <p className="mt-2 text-sm text-muted-foreground">Domaine(s) : {detail.domaines_candidat || 'Non renseigné'}</p>
         </div>
+        <Badge variant="outline" className="absolute right-0 top-0 text-xs">{detail.etat_candidat_designation || 'État non renseigné'}</Badge>
         {mode !== 'candidat' && <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />}
       </div>
     );
@@ -182,8 +201,8 @@ export default function OpportuniteDetail({ mode }: Props) {
       <Card>
         <CardContent className="p-0">
           <div className="flex flex-col md:flex-row divide-y md:divide-y-0 md:divide-x">
-            {renderPosteSummary()}
-            {renderCandidatSummary()}
+             {renderPosteSummary()}
+             {mode !== 'candidat' && renderCandidatSummary()}
           </div>
 
           <div className="bg-muted/30 border-t p-4 flex flex-wrap items-center justify-between gap-4">
@@ -199,16 +218,55 @@ export default function OpportuniteDetail({ mode }: Props) {
                 <Button
                   key={act.action}
                   variant={act.destructive ? 'destructive' : 'default'}
-                  onClick={() => { setAction(act); setComment(''); }}
+                   disabled={act.action === 'mettre-en-lien' && !candidateCanBeLinked}
+                   onClick={() => { setAction(act); setComment(''); setAcknowledged(false); }}
+                   title={act.action === 'mettre-en-lien' && !candidateCanBeLinked ? 'Le candidat doit être à l’état Attente affectation.' : undefined}
                   data-testid={`button-action-${act.action}`}
                 >
                   {act.label}
                 </Button>
               ))}
+               {mode === 'recruteur' && detail.etat_designation === 'Approuvé CM' && !candidateCanBeLinked && (
+                 <p className="basis-full text-sm text-destructive" data-testid="link-candidate-precondition">
+                   Le candidat doit être à l'état Attente affectation avant de pouvoir être mis en lien sur cette opportunité.
+                 </p>
+               )}
             </div>
           </div>
         </CardContent>
       </Card>
+
+      {mode === 'candidat' && detail.etat_designation === 'Mise en lien' && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm font-medium text-destructive" data-testid="candidate-link-banner">
+          Vous avez été mis en lien avec un poste qui pourrait correspondre à votre projet. Merci de contacter {cmName} qui vous présentera la mission.
+        </div>
+      )}
+
+      {mode === 'candidat' && detail.etat_designation === 'Accord de principe' && (
+        <>
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm font-medium text-destructive" data-testid="candidate-principle-banner">
+            Vous avez accepté de candidater sur le poste décrit ci-dessous. Vous allez recevoir par mail des informations complémentaires, notamment le contact du partenaire local. Veuillez le contacter avant d'accepter définitivement le poste.
+          </div>
+          <Card data-testid="candidate-post-details">
+            <CardContent className="space-y-5 p-6">
+              <h3 className="font-display text-xl font-semibold">Détail du poste</h3>
+              {[
+                ['ODD lié', detail.odd_lie],
+                ['Contexte de mission', detail.contexte_mission],
+                ['Objectifs', detail.objectifs_mission],
+                ['Tâches', detail.taches],
+                ['Compétences', detail.competences_detail],
+                ['Dimension ecclésiale', detail.dimension_ecclesial],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm">{value || '—'}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       {mode !== 'candidat' && (
         <div className="grid gap-2 md:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] items-center" data-testid="comments-flow">
@@ -251,7 +309,7 @@ export default function OpportuniteDetail({ mode }: Props) {
         </div>
       )}
 
-      <div className="space-y-6">
+      {mode !== 'candidat' && <div className="space-y-6">
         <h3 className="text-xl font-display font-semibold" data-testid="scoring-title">Détail du scoring</h3>
 
         <Card data-testid="section-mission">
@@ -286,8 +344,8 @@ export default function OpportuniteDetail({ mode }: Props) {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{crit.valeur_poste || '—'}</TableCell>
-                      <TableCell className="text-muted-foreground">{crit.valeur_candidat || '—'}</TableCell>
+                      <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_poste)}</TableCell>
+                      <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_candidat)}</TableCell>
                       <TableCell className="text-right font-semibold">{crit.note_obtenue ?? '—'}</TableCell>
                     </TableRow>
                   )) : (
@@ -334,8 +392,8 @@ export default function OpportuniteDetail({ mode }: Props) {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{crit.valeur_poste || '—'}</TableCell>
-                      <TableCell className="text-muted-foreground">{crit.valeur_candidat || '—'}</TableCell>
+                      <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_poste)}</TableCell>
+                      <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_candidat)}</TableCell>
                       <TableCell className="text-right font-semibold">{crit.note_obtenue ?? '—'}</TableCell>
                     </TableRow>
                   )) : (
@@ -379,8 +437,8 @@ export default function OpportuniteDetail({ mode }: Props) {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{crit.valeur_poste || '—'}</TableCell>
-                      <TableCell className="text-muted-foreground">{crit.valeur_candidat || '—'}</TableCell>
+                      <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_poste)}</TableCell>
+                      <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_candidat)}</TableCell>
                       <TableCell className="text-right font-semibold">{crit.note_obtenue ?? '—'}</TableCell>
                     </TableRow>
                   )) : (
@@ -391,24 +449,46 @@ export default function OpportuniteDetail({ mode }: Props) {
             </div>
           </CardContent>
         </Card>
-      </div>
+      </div>}
 
       <Dialog open={Boolean(action)} onOpenChange={(open) => !open && setAction(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{action?.label}</DialogTitle>
-            <DialogDescription>Cette action change l'état de l'opportunité. Votre commentaire sera conservé dans le suivi de votre candidature.</DialogDescription>
+             <DialogDescription>
+               {isAcceptanceAction
+                 ? 'Cette confirmation est obligatoire pour poursuivre votre candidature.'
+                 : "Cette action change l'état de l'opportunité. Votre commentaire sera conservé dans le suivi de votre candidature."}
+             </DialogDescription>
           </DialogHeader>
-          <Textarea
-            value={comment}
-            onChange={(event) => setComment(event.target.value.slice(0, 100))}
-            placeholder="Commentaire obligatoire…"
-            data-testid="textarea-comment"
-          />
-          <p className="text-right text-xs text-muted-foreground">{comment.length}/100</p>
+           {isAcceptanceAction ? (
+             <div className="flex items-start gap-3 rounded-md border p-4">
+               <Checkbox
+                 id="candidate-acknowledgement"
+                 checked={acknowledged}
+                 onCheckedChange={(checked) => setAcknowledged(checked === true)}
+                 data-testid="checkbox-acknowledgement"
+               />
+               <Label htmlFor="candidate-acknowledgement" className="cursor-pointer text-sm leading-5">
+                 {action?.action === 'accord-de-principe'
+                   ? "J'ai contacté le chargé de mission et il m'a expliqué le contexte et les principes de la mission et j'accepte de poursuivre ma candidature sur ce poste."
+                   : "J'ai contacté le partenaire et nous avons pu aborder tous les aspects de la mission et j'accepte cette mission (la décision définitive revient à la DCC suite au retour du partenaire et vous sera communiquée au plus tôt)."}
+               </Label>
+             </div>
+           ) : (
+             <>
+               <Textarea
+                 value={comment}
+                 onChange={(event) => setComment(event.target.value.slice(0, 100))}
+                 placeholder="Commentaire obligatoire…"
+                 data-testid="textarea-comment"
+               />
+               <p className="text-right text-xs text-muted-foreground">{comment.length}/100</p>
+             </>
+           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setAction(null)} data-testid="button-cancel">Annuler</Button>
-            <Button disabled={!comment.trim() || busy} variant={action?.destructive ? 'destructive' : 'default'} onClick={() => void submitCandidateAction()} data-testid="button-confirm">
+             <Button disabled={(isAcceptanceAction ? !acknowledged : !comment.trim()) || busy} variant={action?.destructive ? 'destructive' : 'default'} onClick={() => void submitCandidateAction()} data-testid="button-confirm">
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Confirmer
             </Button>
           </DialogFooter>
