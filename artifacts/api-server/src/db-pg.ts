@@ -14,7 +14,7 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-// La variable DATABASE_URL est fournie par Replit (format : postgresql://user:pass@host:port/db)
+// La variable DATABASE_URL est fournie par l'environnement Replit.
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL doit être défini. Avez-vous configuré la base de données ?');
 }

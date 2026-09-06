@@ -27,6 +27,17 @@ import {
 } from '../services/posteContactUpsert';
 
 const router = Router();
+const csvFileFilter: multer.Options['fileFilter'] = (_req, file, callback) => {
+  const extensionOk = file.originalname.toLowerCase().endsWith('.csv');
+  const mimeOk = ['text/csv', 'application/csv', 'application/vnd.ms-excel', 'text/plain'].includes(file.mimetype);
+  if (extensionOk && mimeOk) callback(null, true);
+  else callback(new Error('Seuls les fichiers CSV sont autorisés.'));
+};
+const attachmentFileFilter: multer.Options['fileFilter'] = (_req, file, callback) => {
+  const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
+  if (allowed.includes(file.mimetype)) callback(null, true);
+  else callback(new Error('Type de pièce jointe non autorisé.'));
+};
 
 /**
  * Multer — stockage en mémoire vive.
@@ -35,10 +46,12 @@ const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 Mo max
+  fileFilter: csvFileFilter,
 });
 const actionUpload = multer({
   storage: multer.memoryStorage(),
   limits: { files: 2, fileSize: 10 * 1024 * 1024 },
+  fileFilter: attachmentFileFilter,
 });
 
 /**
@@ -149,6 +162,10 @@ function validateRow(
   refs: RefData,
 ): { ligne: number; statut: 'ok' | 'erreur'; message: string } {
   const errors: string[] = [];
+  const formulaField = Object.entries(row).find(([, value]) => typeof value === 'string' && /^[=+\-@]/.test(value.trimStart()));
+  if (formulaField) {
+    errors.push(`Valeur CSV potentiellement exécutable interdite dans la colonne ${formulaField[0]}.`);
+  }
 
   // Champs obligatoires (Mandatory dans le contrat d'échange)
   const mandatoryFields = [
@@ -419,6 +436,9 @@ router.post(
         skipEmptyLines: true,
         transformHeader: (h) => h.trim(),
       });
+      if (parsed.data.length > 5000) {
+        return void res.status(400).json({ error: 'Le fichier CSV dépasse la limite de 5 000 lignes.' });
+      }
 
       const headerError = validateHeaders(parsed.meta.fields);
       if (headerError) {
@@ -463,6 +483,9 @@ router.post(
         skipEmptyLines: true,
         transformHeader: (h) => h.trim(),
       });
+      if (parsed.data.length > 5000) {
+        return void res.status(400).json({ error: 'Le fichier CSV dépasse la limite de 5 000 lignes.' });
+      }
 
       const headerError = validateHeaders(parsed.meta.fields);
       if (headerError) {

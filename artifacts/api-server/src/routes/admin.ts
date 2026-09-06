@@ -72,7 +72,7 @@ router.post('/utilisateurs', requireRole(['ADMIN']), async (req, res) => {
   const parsed = validUserPayload(req.body);
   if (!parsed.value) { res.status(400).json({ error: parsed.error }); return; }
   const data = parsed.value;
-  const temporaryPassword = `Dcc-${randomBytes(12).toString('base64url')}`;
+  const temporaryPassword = randomBytes(18).toString('base64url');
   const contactCrmKey = `USR_${randomBytes(12).toString('hex').toUpperCase()}`;
   const client = await pool.connect();
   try {

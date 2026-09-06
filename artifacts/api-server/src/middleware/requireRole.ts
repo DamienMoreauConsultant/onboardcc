@@ -20,6 +20,7 @@
 
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { getJwtSecret } from '../lib/jwtConfig';
 
 /** Structure du payload stocké dans le JWT */
 export interface JwtPayload {
@@ -63,11 +64,10 @@ export function requireRole(allowedRoles: string[]) {
       return;
     }
 
-    // Supporte JWT_SECRET ou SESSION_SECRET (déjà présent dans l'environnement Replit)
-    const secret = process.env.JWT_SECRET || process.env.SESSION_SECRET;
-    if (!secret) {
-      // Erreur de configuration serveur — ne jamais exposer le détail au client
-      console.error('Ni JWT_SECRET ni SESSION_SECRET ne sont configurés');
+    let secret: string;
+    try {
+      secret = getJwtSecret();
+    } catch {
       res.status(500).json({ error: 'Erreur de configuration serveur.' });
       return;
     }

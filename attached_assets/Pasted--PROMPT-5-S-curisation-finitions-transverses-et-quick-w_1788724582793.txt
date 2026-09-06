@@ -1,0 +1,133 @@
+# PROMPT 5 — Sécurisation, finitions transverses et quick wins
+# ⚠️ Allégé le 06/09/2026 (décision Damien) : `prompt6_gestion_comptes_admin.txt` a déjà livré et
+# testé un audit RBAC complet (toutes les routes candidats/postes/opportunités/admin basculées sur
+# `role_applicatif`, tests positifs ET négatifs par rôle — voir Correctif_DCC_20260904.md, A23/P4_12).
+# Le §1 ci-dessous est donc réduit aux seules vérifications de **non-régression** que ce nouvel
+# audit ne couvre pas automatiquement (dérive historique sur les vœux, atomicité d'une transaction
+# précise, points de vigilance signalés lors de correctifs antérieurs) — pas de ré-audit complet
+# des routes, déjà fait. Objectif explicite : éviter de payer deux fois le même audit en tokens
+# Replit.
+# Référence : conception.md §6.1 (Principes transverses), §6.5 (Synthèse sécurité),
+#             §7.4 (Checklist sécurisation mise en production), §5.4 (Quick wins)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+Ce prompt ne crée pas de nouvel écran — il consolide la sécurité et corrige les finitions
+transverses identifiées dans la spécification. Passe-le en revue point par point.
+
+---
+
+## 1. Non-régressions RBAC ciblées (pas un ré-audit complet — déjà fait par prompt6)
+
+**Ne relis pas toutes les routes une par une** — `prompt6` vient de le faire de façon exhaustive
+avec tests réels par rôle (positifs et négatifs). Vérifie uniquement les 3 points suivants, qui ne
+sont pas mécaniquement couverts par la bascule `role_applicatif` :
+
+1. **Dérive historique vœux** (trouvée le 27/08/2026, prompt3c) : les rôles CM/CHZ avaient un droit
+   d'écriture plus large que prévu sur `PATCH /api/candidats/:id/voeux`, déjà corrigé et vérifié à
+   l'époque (CM1 → 403) — confirme que cette route utilise bien désormais `role_applicatif` comme
+   les autres (pas un oubli isolé de la migration prompt6) et qu'aucune autre route candidat n'a la
+   même dérive.
+2. **Atomicité de `déverrouillerVoeux()`** : vérifie qu'elle remet bien à zéro `verrouille`,
+   `flag_fiche_de_voeux_soumise` et la date de soumission en une seule transaction (déjà corrigé, à
+   retester comme non-régression après tous les changements RBAC récents).
+3. **Boutons d'action de l'écran OD, par rôle et par état** (`prompt4.txt` §2) : `prompt4f` avait
+   corrigé un écart trouvé par son propre audit (actions candidat exposées au recruteur) — confirme
+   par un test réel avec les 3 rôles concernés (recruteur, CM, candidat) que seules les actions
+   autorisées à ce rôle pour l'état courant sont exposées à l'écran **et** acceptées côté API,
+   spécifiquement en changeant l'ID dans l'URL/la requête (IDOR, voir §3 checklist) — ce point
+   précis n'a pas été retesté depuis la bascule `role_applicatif`.
+
+⚠️ Le point de vigilance sur `/cm/candidats/:id` (accès CM scopé à `gere_poste`) a déjà été
+reconfirmé lors du test réel de `prompt6` — pas besoin de le retester une 3e fois ici.
+
+---
+
+## 2. Vérification — édition par onglet (conception.md §6.1.1)
+
+Repasse sur les écrans Candidat (prompt3) : confirme qu'il n'existe **aucun** bouton "MODIFIER"
+global qui déverrouillerait plusieurs onglets à la fois. Chaque `[Edit]` ne doit toucher que
+les champs de son propre onglet, via sa propre route API (`PATCH /candidats/:id/etat-civil`,
+`PATCH /candidats/:id/projet`, `PATCH /candidats/:id/voeux`).
+
+---
+
+## 3. Checklist sécurisation (conception.md §7.4 — à cocher au fil de l'implémentation)
+
+⚠️ **Priorité réelle, pas juste théorique** : le domaine `.replit.app` de ce projet est configuré
+en accès **public** ("Anyone on the internet with the URL") — les points ci-dessous (cookies,
+CORS, headers) sont donc déjà exposés maintenant, pas seulement "à vérifier avant la mise en prod
+o2switch".
+
+- [x] **Mots de passe** : bcrypt confirmé (coût 12) via `prompt6` (création de compte, reset de mot
+      de passe) — déjà vérifié, pas de nouveau test nécessaire ici.
+- [ ] **Mot de passe oublié** (ajouté 01/09/2026, correctif prompt3d1) : re-vérifie que le mot de
+      passe n'est modifié **qu'après** validation du lien (jamais immédiatement à la demande),
+      que le lien est signé/expirant (30 min)/à usage unique, que la limitation anti-abus (1
+      demande / 15 min) est bien persistée en base et pas seulement en mémoire, et qu'aucune
+      réponse ne permet de déduire si un email correspond à un compte existant
+- [ ] **Garde-fou modifications non enregistrées** (ajouté 01/09/2026, correctif prompt3d1) :
+      re-teste précisément le bouton Retour du navigateur sur un onglet en édition (pas seulement
+      le changement d'onglet interne) — un premier bug avait laissé le Retour contourner le
+      dialogue de confirmation avant correction
+- [ ] **JWT** : cookie `HttpOnly; Secure; SameSite=Strict`, jamais en `localStorage`, TTL 8h
+- [ ] **CORS** : liste blanche explicite des origines (jamais `allow_origins=["*"]`)
+- [ ] **Secrets** : toutes les valeurs sensibles (DB, JWT_SECRET, SMTP) dans `.env`, jamais dans
+      le code source ni dans les logs — vérifie qu'aucun `.env` n'est commité (`.gitignore`)
+- [ ] **Validation des entrées** : chaque endpoint qui reçoit un ID valide qu'il existe et que
+      l'utilisateur y a droit (pas d'IDOR — un CM ne doit pas pouvoir lire le détail d'un poste
+      qu'il ne gère pas en changeant l'ID dans l'URL)
+- [ ] **Injection SQL** : requêtes paramétrées uniquement (`%s` / requêtes préparées), jamais de
+      concaténation de chaînes dans une requête SQL
+- [ ] **XSS** : React échappe par défaut — vérifie qu'aucun `dangerouslySetInnerHTML` n'est utilisé
+      sans passer par une bibliothèque de sanitization
+- [ ] **Import CSV** : valide le type MIME et la taille du fichier avant traitement (protection
+      contre l'upload de fichiers arbitraires)
+- [ ] **Historisation RGPD** : `etape` et `criteres_detailles` ne doivent contenir aucune donnée
+      de tiers non pertinente (ex. ne pas logger l'intégralité d'un mot de passe par erreur dans
+      un commentaire de popup)
+- [ ] **Headers de sécurité HTTP** : `Content-Security-Policy`, `X-Frame-Options: DENY`,
+      `X-Content-Type-Options: nosniff` (à poser via middleware Express — ex. `helmet` — ou config
+      du reverse proxy)
+
+---
+
+## 4. Cohérence des libellés d'état (conception.md §6.1.4)
+
+Vérifie qu'aucun code 3 lettres (CRE, AP1, APO, TEM…) n'apparaît dans une réponse API destinée
+au frontend, ni dans un composant React — seuls les libellés complets (`designation`) doivent
+être manipulés côté interface. Les codes ne doivent exister que comme clé technique interne
+(`id_etat_candidat`), jamais affichés.
+
+---
+
+## 5. Jeu de données de test — vérification post-déploiement
+
+Une fois `prompt_0_sql.sql` exécuté et `Data/postes_import_test_v1.csv` importé, vérifie :
+- Les 10 candidats de test sont répartis sur différents états (voir script de seed) — connecte-toi
+  successivement avec chacun des comptes candidat actifs (à partir de AP2) pour vérifier l'accès
+  à l'espace Candidat.
+- Les 3 comptes CM/Recruteur (`loic.dupont`, `marie.nguyen`, `pierre.martin`) permettent de
+  naviguer dans les écrans Poste et Candidat sans erreur.
+- Lance `matching_algo()` manuellement sur quelques postes/candidats de test et vérifie que
+  `criteres_detailles` se remplit correctement (10 lignes par opportunité).
+
+---
+
+## 6. Quick wins (conception.md §5.4 — à intégrer si le temps le permet, non bloquant)
+
+- [ ] Email automatique au candidat à chaque changement d'état
+- [ ] Export PDF de la fiche de vœux (vue imprimable)
+- [ ] Barre de progression de complétion de la fiche de vœux
+- [ ] Sauvegarde automatique du brouillon (autosave toutes les 2 minutes pendant la saisie)
+- [ ] Lien direct dans l'email de notification → atterrit directement sur l'opportunité concernée
+
+---
+
+## Livrable attendu à la fin de ce prompt
+
+Un prototype navigable de bout en bout : import d'un poste → création d'un candidat → soumission
+de vœux → création automatique d'opportunité → scoring → proposition CM → approbation → mise en
+lien → accord de principe → accord définitif → décision DCC → affectation confirmée, avec les
+3 objets (candidat, poste, opportunité) synchronisés à chaque étape, et la checklist sécurité
+du §3 entièrement cochée.

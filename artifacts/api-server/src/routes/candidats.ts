@@ -24,9 +24,20 @@ import { sendCandidateInvitations, smtpIsConfigured, type CandidateInvitation } 
 import { Opportunite } from '../services/matching';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 2 } });
+const csvFileFilter: multer.Options['fileFilter'] = (_req, file, callback) => {
+  const extensionOk = file.originalname.toLowerCase().endsWith('.csv');
+  const mimeOk = ['text/csv', 'application/csv', 'application/vnd.ms-excel', 'text/plain'].includes(file.mimetype);
+  if (extensionOk && mimeOk) callback(null, true);
+  else callback(new Error('Seuls les fichiers CSV sont autorisés.'));
+};
+const attachmentFileFilter: multer.Options['fileFilter'] = (_req, file, callback) => {
+  const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
+  if (allowed.includes(file.mimetype)) callback(null, true);
+  else callback(new Error('Type de pièce jointe non autorisé.'));
+};
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 }, fileFilter: csvFileFilter });
 const RECRUITERS = ['RECRUTEUR', 'ADMIN'];
-const actionUpload = multer({ storage: multer.memoryStorage(), limits: { files: 2, fileSize: 10 * 1024 * 1024 } });
+const actionUpload = multer({ storage: multer.memoryStorage(), limits: { files: 2, fileSize: 10 * 1024 * 1024 }, fileFilter: attachmentFileFilter });
 
 /* This order is the published 48-column CRM exchange contract. */
 const CSV_COLUMNS = [
@@ -130,7 +141,11 @@ function validate(row: Record<string,string>, line: number, r: Refs) {
   if (bool(row.experience_engagement) && !row.experience_engagement_detail?.trim()) errors.push('experience_engagement_detail est requis lorsque experience_engagement = TRUE');
   return { ligne: line, statut: errors.length ? 'erreur' as const : 'ok' as const, message: errors.length ? errors.join(' | ') : '✓' };
 }
-function parsed(req: any) { return Papa.parse<Record<string,string>>(req.file.buffer.toString('utf8'), { header: true, skipEmptyLines: true, transformHeader: h => h.trim() }); }
+function parsed(req: any) {
+  const result = Papa.parse<Record<string,string>>(req.file.buffer.toString('utf8'), { header: true, skipEmptyLines: true, transformHeader: h => h.trim() });
+  if (result.data.length > 5000) throw new Error('Le fichier CSV dépasse la limite de 5 000 lignes.');
+  return result;
+}
 async function existingCandidateWebKeys(rows: Record<string,string>[]) {
   const webKeys = [...new Set(rows.map(row => row.ref_candidat?.trim()).filter(Boolean))];
   if (!webKeys.length) return new Set<string>();
@@ -145,6 +160,12 @@ function validateAll(rows: Record<string,string>[], r: Refs, existingWebKeys: Se
   const web = new Set<string>(), emails = new Set<string>();
   return rows.map((row,i) => {
     const result=validate(row,i+2,r);
+    const formulaField = Object.entries(row).find(([,value]) => typeof value === 'string' && /^[=+\-@]/.test(value.trimStart()));
+    if(formulaField) {
+      const message=`Valeur CSV potentiellement exécutable interdite dans la colonne ${formulaField[0]}.`;
+      result.statut='erreur';
+      result.message=result.message==='✓'?message:`${result.message} | ${message}`;
+    }
     const webKey = row.ref_candidat?.trim();
     if (webKey && existingWebKeys.has(webKey)) {
       const message = `Candidat déjà importé : ref_candidat=${webKey} — un candidat déjà en base ne doit jamais être réenvoyé, toute correction se fait depuis l'écran Recruteur.`;
@@ -531,9 +552,15 @@ router.patch('/:id/projet', requireRole(RECRUITERS), async (req,res) => {
   }
 });
 router.patch('/:id/date-revue', requireRole(RECRUITERS), async (req,res) => {
+  const id = Number(req.params.id);
+  if(!Number.isInteger(id) || id <= 0) return void res.status(400).json({error:'Identifiant candidat invalide.'});
   const date = nullableDate(req.body.date_revue);
   if(date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return void res.status(400).json({error:'Date ISO AAAA-MM-JJ requise.'});
-  try { await pool.query('UPDATE candidat SET date_revue=$1,date_revue_modifiee_par=$2,date_revue_modifiee_le=CURRENT_DATE WHERE id_candidat=$3',[date,`${req.user!.prenom} ${req.user!.nom}`,req.params.id]);res.json({message:'Date de revue mise à jour.'}); }catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
+  try {
+    const updated = await pool.query('UPDATE candidat SET date_revue=$1,date_revue_modifiee_par=$2,date_revue_modifiee_le=CURRENT_DATE WHERE id_candidat=$3 RETURNING id_candidat',[date,`${req.user!.prenom} ${req.user!.nom}`,id]);
+    if(!updated.rows.length) return void res.status(404).json({error:'Candidat non trouvé.'});
+    res.json({message:'Date de revue mise à jour.'});
+  }catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
 });
 
 router.get('/configuration/pieces-jointes', requireRole(['RECRUTEUR','ADMIN','CANDIDAT','CM']), (_req,res) => {
@@ -758,7 +785,7 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
   }
 }
 
-router.post('/:id/soumettre-voeux-provisoire', requireRole(['CANDIDAT', ...RECRUITERS]), (req,res) => void submitVoeux(req,res,false));
+router.post('/:id/soumettre-voeux-provisoire', requireRole(['CANDIDAT']), (req,res) => void submitVoeux(req,res,false));
 router.post('/:id/soumettre-voeux-definitifs', requireRole(['CANDIDAT']), (req,res) => void submitVoeux(req,res,true));
 
 export default router;

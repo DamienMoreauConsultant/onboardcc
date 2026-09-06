@@ -21,6 +21,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import pool from '../db-pg';
 import { requireRole } from '../middleware/requireRole';
 import { sendPasswordResetEmail, smtpIsConfigured } from '../lib/candidateInvitations';
+import { getJwtExpireHours, getJwtSecret } from '../lib/jwtConfig';
+import { logger } from '../lib/logger';
 
 const router = Router();
 const FORGOT_PASSWORD_MESSAGE = 'Si un compte actif correspond à cet identifiant, un lien de réinitialisation sera envoyé.';
@@ -109,9 +111,8 @@ router.post('/login', async (req, res) => {
       prenom: user.prenom || '',
     };
 
-    // Supporte JWT_SECRET ou SESSION_SECRET (déjà disponible dans l'environnement Replit)
-    const secret = (process.env.JWT_SECRET || process.env.SESSION_SECRET)!;
-    const expireHours = parseInt(process.env.JWT_EXPIRE_HOURS ?? '8', 10);
+    const secret = getJwtSecret();
+    const expireHours = getJwtExpireHours();
 
     const token = jwt.sign(payload, secret, { expiresIn: `${expireHours}h` });
 
@@ -137,7 +138,7 @@ router.post('/login', async (req, res) => {
       prenom: user.prenom || '',
     });
   } catch (err) {
-    console.error('Erreur lors de la connexion :', err);
+    logger.error({ err: err instanceof Error ? err.message : 'unknown' }, 'Échec technique de connexion');
     res.status(500).json({ error: 'Erreur interne du serveur.' });
   }
 });
@@ -145,7 +146,6 @@ router.post('/login', async (req, res) => {
 router.post('/mot-de-passe-oublie', async (req, res) => {
   const login = typeof req.body?.login === 'string' ? req.body.login.trim() : '';
   if (!login) return void res.status(400).json({error:'Identifiant ou email requis.'});
-  let emailForLog: string | null = null;
   try {
     const found = await pool.query(
       `SELECT u.id_user,u.active,c.email_contact,c.prenom_contact
@@ -155,9 +155,8 @@ router.post('/mot-de-passe-oublie', async (req, res) => {
       [login],
     );
     if(!found.rows.length || found.rows[0].active===false) return void res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
-    emailForLog = found.rows[0].email_contact ?? null;
     if(!smtpIsConfigured()) {
-      console.error('Erreur mot de passe oublié : SMTP non configuré', { login, email: emailForLog });
+      logger.warn('Demande de réinitialisation ignorée : SMTP non configuré');
       return void res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
     }
     const nonce=randomBytes(24).toString('base64url');
@@ -171,7 +170,7 @@ router.post('/mot-de-passe-oublie', async (req, res) => {
       [nonceHash,found.rows[0].id_user],
     );
     if(!claimed.rows.length) return void res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
-    const secret=(process.env.JWT_SECRET || process.env.SESSION_SECRET)!;
+    const secret=getJwtSecret();
     const token=jwt.sign({purpose:'password-reset',sub:String(found.rows[0].id_user),nonce},secret,{expiresIn:'30m'});
     const frontendUrl=(process.env.FRONTEND_URL || '').replace(/\/$/,'');
     const resetUrl=`${frontendUrl}/login?reset_token=${encodeURIComponent(token)}`;
@@ -181,14 +180,14 @@ router.post('/mot-de-passe-oublie', async (req, res) => {
       try {
         await pool.query('UPDATE user_ SET password_reset_nonce_hash=NULL WHERE id_user=$1',[found.rows[0].id_user]);
       } catch(cleanupError) {
-        console.error('Erreur nettoyage mot de passe oublié après échec d’envoi', { login, email: emailForLog, error: cleanupError });
+        logger.error({err:cleanupError instanceof Error ? cleanupError.message : 'unknown'}, 'Échec du nettoyage après erreur SMTP');
       }
-      console.error('Erreur envoi email mot de passe oublié', { login, email: emailForLog, error });
+      logger.error({err:error instanceof Error ? error.message : 'unknown'}, 'Échec de l’envoi du courriel de réinitialisation');
       return void res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
     }
     res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
   } catch(err) {
-    console.error('Erreur technique mot de passe oublié', { login, email: emailForLog, error: err });
+    logger.error({err:err instanceof Error ? err.message : 'unknown'}, 'Échec technique de réinitialisation');
     res.status(202).json({message:FORGOT_PASSWORD_MESSAGE});
   }
 });
@@ -198,14 +197,14 @@ router.post('/reinitialiser-password', async (req,res) => {
   const newPassword=typeof req.body?.nouveau_password==='string'?req.body.nouveau_password:'';
   if(!token || newPassword.length<8) return void res.status(400).json({error:'Lien invalide ou mot de passe de moins de 8 caractères.'});
   try {
-    const secret=(process.env.JWT_SECRET || process.env.SESSION_SECRET)!;
+    const secret=getJwtSecret();
     const payload=jwt.verify(token,secret) as jwt.JwtPayload & {purpose?:string;nonce?:string};
     if(payload.purpose!=='password-reset' || !payload.sub || !payload.nonce) throw new Error('INVALID');
     const nonceHash=createHash('sha256').update(payload.nonce).digest('hex');
     const updated=await pool.query(
       `UPDATE user_
        SET password=$1,password_reset_nonce_hash=NULL,password_reset_requested_at=NULL
-       WHERE id_user=$2 AND password_reset_nonce_hash=$3
+        WHERE id_user=$2 AND password_reset_nonce_hash=$3 AND active=true
        RETURNING id_user`,
       [await bcrypt.hash(newPassword,12),payload.sub,nonceHash],
     );

@@ -38,7 +38,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     return initialSection ?? (mode === 'candidat' ? 'voeux' : 'etat-civil');
   });
   const [pendingNavigation, setPendingNavigation] = useState<{kind:'tab'|'route'|'history';value:string}|null>(null);
-  const historyGuard = useRef({restoring:false,leaving:false});
+  const historyGuard = useRef({leaving:false});
   const [action, setAction] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [attachmentDescription, setAttachmentDescription] = useState('');
@@ -112,14 +112,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     };
     const onPopState=() => {
       if(historyGuard.current.leaving) return;
-      if(historyGuard.current.restoring) {
-        historyGuard.current.restoring=false;
-        return;
-      }
-      const target=new URL(window.location.href);
-      historyGuard.current.restoring=true;
-      window.history.go(1);
-      setPendingNavigation({kind:'history',value:toAppPath(target)});
+      setPendingNavigation({kind:'history',value:''});
     };
     document.addEventListener('click',onClick,true);
     window.addEventListener('beforeunload',onBeforeUnload);
@@ -210,8 +203,16 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     }
     if(pending?.kind==='history') {
       historyGuard.current.leaving=true;
-      window.setTimeout(() => window.history.go(-2),0);
+      window.setTimeout(() => window.history.back(),0);
     }
+  };
+
+  const continueEditing = () => {
+    if(pendingNavigation?.kind === 'history') {
+      const guardId=`dcc-dirty-${Date.now()}`;
+      window.history.pushState({...window.history.state,__dccDirtyGuard:guardId},'',window.location.href);
+    }
+    setPendingNavigation(null);
   };
 
   const onDirtyChange = useCallback((section: EditableSection, changed: boolean) => {
@@ -410,7 +411,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
             <AlertDialogDescription>Vous avez des modifications non enregistrées sur cet onglet. Voulez-vous les abandonner ?</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setPendingNavigation(null)}>Continuer l’édition</AlertDialogCancel>
+            <AlertDialogCancel onClick={continueEditing}>Continuer l’édition</AlertDialogCancel>
             <AlertDialogAction onClick={abandonChanges}>Abandonner les modifications</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
