@@ -28,12 +28,10 @@ export default function Login() {
 
   useEffect(() => {
     if (user && !loading) {
-      switch (user.role) {
-        case 'REC': setLocation('/recruteur'); break;
-        case 'CM1':
-        case 'CM2':
-        case 'CHZ': setLocation('/cm'); break;
-        case 'CAN': setLocation('/candidat/accueil'); break;
+      switch (user.role_applicatif) {
+        case 'RECRUTEUR': setLocation('/recruteur'); break;
+        case 'CM': setLocation('/cm'); break;
+        case 'CANDIDAT': setLocation('/candidat/accueil'); break;
         case 'ADMIN': setLocation('/admin/referentiels'); break;
       }
     }

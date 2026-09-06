@@ -6,8 +6,8 @@
  *
  * Accès RBAC :
  *   - REC / ADMIN : liste complète, import, fermer, réouvrir
- *   - CHZ : liste restreinte (gere_poste uniquement), mais droits d'action recruteur
- *   - CM1 / CM2 : liste restreinte (gere_poste uniquement), détail lecture seule
+ *   - RECRUTEUR : visibilité et actions complètes, que le rôle contact soit REC ou CHZ
+ *   - CM : liste restreinte aux postes rattachés via gere_poste, détail en lecture seule
  *
  * Ordre des routes : les routes statiques (/import/template, /etats)
  * sont déclarées AVANT la route dynamique /:id pour éviter les conflits.
@@ -287,16 +287,6 @@ async function ensurePosteHistory(client: { query: Function }) {
   `);
 }
 
-/** Un CHZ conserve les actions recruteur, mais uniquement sur les postes qu'il gère. */
-async function chzCanAccessPoste(role: string, idContact: number, idPoste: number): Promise<boolean> {
-  if (role !== 'CHZ') return true;
-  const access = await pool.query(
-    'SELECT 1 FROM gere_poste WHERE id_poste=$1 AND id_contact=$2',
-    [idPoste, idContact],
-  );
-  return access.rows.length > 0;
-}
-
 type PosteFilterSpec = { expression: string; joins: string; conditionSql: string };
 const POSTE_FILTERS: Record<string, PosteFilterSpec> = {
   etat: {
@@ -350,7 +340,7 @@ function posteFilterSql(filters: Record<string, string[]>, startIndex: number) {
 ───────────────────────────────────────────────────────────────────── */
 router.get(
   '/import/template',
-  requireRole(['REC', 'CHZ', 'ADMIN']),
+  requireRole(['RECRUTEUR', 'ADMIN']),
   (_req, res) => {
     const csv = CSV_COLUMNS.join(',') + '\n';
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -365,7 +355,7 @@ router.get(
 ───────────────────────────────────────────────────────────────────── */
 router.get(
   '/etats',
-  requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN']),
+  requireRole(['RECRUTEUR', 'CM', 'ADMIN']),
   async (_req, res) => {
     try {
       const result = await pool.query(
@@ -381,7 +371,7 @@ router.get(
 
 router.get(
   '/filtres/:colonne',
-  requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN']),
+  requireRole(['RECRUTEUR', 'CM', 'ADMIN']),
   async (req, res) => {
     const filter = POSTE_FILTERS[String(req.params.colonne)];
     if (!filter) {
@@ -390,7 +380,7 @@ router.get(
     }
     try {
       const user = req.user!;
-      const isCm = ['CM1', 'CM2', 'CHZ'].includes(user.role);
+      const isCm = user.role_applicatif === 'CM';
       const result = await pool.query(
         `SELECT DISTINCT ${filter.expression} AS value
          FROM fiche_de_poste fp
@@ -415,7 +405,7 @@ router.get(
 ───────────────────────────────────────────────────────────────────── */
 router.post(
   '/import/verifier',
-  requireRole(['REC', 'CHZ', 'ADMIN']),
+  requireRole(['RECRUTEUR', 'ADMIN']),
   upload.single('file'),
   async (req, res) => {
     if (!req.file) {
@@ -457,7 +447,7 @@ router.post(
 ───────────────────────────────────────────────────────────────────── */
 router.post(
   '/import/executer',
-  requireRole(['REC', 'CHZ', 'ADMIN']),
+  requireRole(['RECRUTEUR', 'ADMIN']),
   upload.single('file'),
   async (req, res) => {
     if (!req.file) {
@@ -726,17 +716,17 @@ router.post(
    GET /api/postes
    Liste les postes avec compteurs d'opportunités.
      - REC / ADMIN : tous les postes
-     - CM1 / CM2 / CHZ : uniquement les postes gérés (gere_poste)
+     - CM : uniquement les postes gérés (gere_poste)
    Query param : ?etats=À+pourvoir,Pré-affecté,...
    Par défaut : tous les états sauf "Fermé"
 ───────────────────────────────────────────────────────────────────── */
 router.get(
   '/',
-  requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN']),
+  requireRole(['RECRUTEUR', 'CM', 'ADMIN']),
   async (req, res) => {
     try {
       const user = req.user!;
-      const isCm = ['CM1', 'CM2', 'CHZ'].includes(user.role);
+      const isCm = user.role_applicatif === 'CM';
 
       const filters = parsePosteFilters(req.query.filtres);
       const etatsParam = req.query.etats as string | undefined;
@@ -808,7 +798,7 @@ router.get(
    below resolves them back to their distinct owning posts. */
 router.get(
   '/kpis/cm',
-  requireRole(['CM1', 'CM2', 'CHZ']),
+  requireRole(['CM']),
   async (req, res) => {
     try {
       const result = await pool.query(
@@ -844,7 +834,7 @@ router.get(
 ───────────────────────────────────────────────────────────────────── */
 router.get(
   '/:id',
-  requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN']),
+  requireRole(['RECRUTEUR', 'CM', 'ADMIN']),
   async (req, res) => {
     const idPoste = parseInt(req.params.id as string, 10);
     if (isNaN(idPoste)) {
@@ -914,7 +904,7 @@ router.get(
       }
 
       // Vérification d'accès pour les CM : doivent apparaître dans gere_poste
-      const isCm = ['CM1', 'CM2', 'CHZ'].includes(user.role);
+      const isCm = user.role_applicatif === 'CM';
       if (isCm) {
         const contacts = result.rows[0].contacts_json as Array<{ id_contact: number }> | null;
         if (!contacts?.some((c) => c.id_contact === user.id_contact)) {
@@ -939,17 +929,13 @@ router.get(
 ───────────────────────────────────────────────────────────────────── */
 router.patch(
   '/:id/fermer',
-  requireRole(['REC', 'CHZ', 'ADMIN']),
+  requireRole(['RECRUTEUR', 'ADMIN']),
   actionUpload.array('pieces_jointes', 2),
   async (req, res) => {
     const idPoste = parseInt(req.params.id as string, 10);
     if (isNaN(idPoste)) { res.status(400).json({ error: 'id_poste invalide.' }); return; }
 
     try {
-      if (!await chzCanAccessPoste(req.user!.role, req.user!.id_contact, idPoste)) {
-        res.status(403).json({ error: 'Accès refusé : vous ne gérez pas ce poste.' });
-        return;
-      }
       const current = await pool.query(
         `SELECT ep.designation FROM fiche_de_poste fp
          JOIN etat_poste ep ON ep.id_etat_poste = fp.id_etat_poste
@@ -1006,17 +992,13 @@ router.patch(
 ───────────────────────────────────────────────────────────────────── */
 router.patch(
   '/:id/reouvrir',
-  requireRole(['REC', 'CHZ', 'ADMIN']),
+  requireRole(['RECRUTEUR', 'ADMIN']),
   actionUpload.array('pieces_jointes', 2),
   async (req, res) => {
     const idPoste = parseInt(req.params.id as string, 10);
     if (isNaN(idPoste)) { res.status(400).json({ error: 'id_poste invalide.' }); return; }
 
     try {
-      if (!await chzCanAccessPoste(req.user!.role, req.user!.id_contact, idPoste)) {
-        res.status(403).json({ error: 'Accès refusé : vous ne gérez pas ce poste.' });
-        return;
-      }
       const current = await pool.query(
         `SELECT ep.designation FROM fiche_de_poste fp
          JOIN etat_poste ep ON ep.id_etat_poste = fp.id_etat_poste

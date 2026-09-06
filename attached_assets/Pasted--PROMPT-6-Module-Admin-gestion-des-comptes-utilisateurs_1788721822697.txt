@@ -1,0 +1,153 @@
+# PROMPT 6 — Module Admin : gestion des comptes utilisateurs (Admin/Recruteur/CM)
+# ⚠️ Ordre révisé le 04/09/2026 (décision Damien) : envoyer AVANT prompt5 (sécurisation), pas
+# après — l'audit RBAC de prompt5 §1 doit porter sur le modèle `role_applicatif` final posé ici,
+# pas sur l'ancien système `contact.role` que ce prompt remplace de toute façon juste après. Pas de
+# dépendance avec prompt4 (Opportunité), qui peut être envoyé avant ou après indifféremment.
+# Référence : conception.md §6.1.1 ("Rôle applicatif vs rôle contact", ajouté 28/08/2026)
+#             prompt1.txt (module Admin référentiels, §"Module Admin — Référentiels")
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+**Contexte (ENF-12)** : la DCC n'a pas de ressource IT dédiée et connaît un fort turnover. Il
+n'existe aujourd'hui **aucun moyen, dans l'application, de créer ou désactiver un compte**
+Admin/Recruteur/CM — les 3 comptes actuels ont été créés directement en SQL par
+`prompt_0_sql.sql`. Ce prompt ajoute l'écran manquant, avec la même exigence de simplicité que
+le module Admin référentiels déjà livré (prompt1) : **un seul écran générique, pas de formation
+nécessaire.**
+
+---
+
+## 0. ⚠️ Changement de schéma préalable — distinction rôle applicatif / rôle contact
+
+**À exécuter avant le reste de ce prompt** (SQL Console Replit, gratuit) :
+
+```sql
+ALTER TABLE user_ ADD COLUMN role_applicatif VARCHAR(20);
+
+-- ⚠️ Révisé 28/08/2026 (Correctif_DCC A23) : CHZ (Chargé de Zone) a le rôle
+-- applicatif RECRUTEUR (droits complets), pas CM — seuls CM1/CM2 ont le rôle
+-- applicatif CM (droits restreints : approuver/rejeter une opportunité proposée).
+-- role_contact (CM1/CM2/CHZ) reste utilisé séparément pour la visibilité sur un
+-- poste précis via `gere_poste`, quel que soit le rôle applicatif.
+UPDATE user_ SET role_applicatif = CASE
+    WHEN c.role = 'ADMIN' THEN 'ADMIN'
+    WHEN c.role IN ('REC', 'CHZ') THEN 'RECRUTEUR'
+    WHEN c.role IN ('CM1','CM2') THEN 'CM'
+    WHEN c.role = 'CAN' THEN 'CANDIDAT'
+  END
+FROM contact c
+WHERE c.id_contact = user_.id_contact;
+
+ALTER TABLE user_ ALTER COLUMN role_applicatif SET NOT NULL;
+ALTER TABLE user_ ADD CONSTRAINT chk_role_applicatif
+  CHECK (role_applicatif IN ('ADMIN', 'RECRUTEUR', 'CM', 'CANDIDAT'));
+```
+
+**Pourquoi** (voir conception.md §6.1.1) : `contact.role` porte 8 valeurs (rôle dans
+l'organisation DCC : ADMIN/REC/CM1/CM2/CHZ/CAN/MIS/PAR), mais il n'existe que **4 comportements
+applicatifs distincts** (Admin/Recruteur/CM/Candidat) — CM1, CM2 et CHZ ont exactement les mêmes
+droits. Continuer à écrire `requireRole(['CM1','CM2','CHZ'])` partout est source d'oubli — c'est
+d'ailleurs la cause directe d'une régression RBAC trouvée le 27/08/2026 (prompt3c).
+
+**Corrections de code à appliquer avec ce changement de schéma :**
+1. **Login** (`POST /api/auth/login`) : le JWT embarque désormais **les deux** rôles —
+   `{ id_user, role_applicatif, role_contact, id_contact, id_candidat }` (`role_contact` =
+   l'ancien `contact.role`, renommé dans le payload pour clarté).
+2. **Middleware `requireRole(...)`** : bascule pour vérifier `role_applicatif` au lieu de
+   `role`. Remplace partout `requireRole(['CM1','CM2','CHZ'])` par `requireRole(['CM'])`,
+   `requireRole(['REC'])` par `requireRole(['RECRUTEUR'])`, etc. — audite **toutes** les routes
+   existantes (candidats, postes, **et opportunités** — module ajouté le 04/09/2026 par `prompt4c`
+   à `prompt4f`, postérieur à la 1ère version de ce prompt) pour appliquer ce remplacement, pas
+   seulement les nouvelles. Inclut la **nouvelle route `/cm/candidats/:id`** (lecture seule, ajoutée
+   par `prompt4f` pour la navigation depuis l'écran OD) — vérifie et scope son accès de la même
+   façon que `/cm/postes` (`gere_poste`), pas d'accès libre à tout candidat.
+2bis. ⚠️ **Point ajouté 04/09/2026 (Correctif_DCC_20260904, P4_12) — ne pas se limiter au
+   remplacement de `requireRole` ci-dessus.** `GET /api/postes` et `GET /api/postes/:id`
+   contiennent aussi un **filtre de données** posé par `prompt2b_correctif_dcc_poste_backend.txt`
+   §4 (déployé le 31/08/2026, Correctif A23) :
+   ```sql
+   WHERE (:role_contact != 'CHZ'
+          OR id_poste IN (SELECT id_poste FROM gere_poste WHERE id_contact = :id_contact))
+   ```
+   Ce filtre restreint à tort la visibilité d'un CHZ aux seuls postes où il est rattaché — décision
+   inversée par Damien le 04/09/2026 : un CHZ (`role_applicatif = 'RECRUTEUR'`) doit voir **tous**
+   les postes, exactement comme un `REC`, sans aucune restriction. **Retire complètement ce
+   filtre** lors de cet audit (ne pas le migrer en `role_applicatif`, le supprimer purement et
+   simplement) — ne touche pas au filtre équivalent sur `/cm/postes` (prompt2 §4), qui reste
+   légitime pour `role_applicatif = 'CM'` (CM1/CM2). Teste avec le compte CHZ existant
+   (`pierre.martin`, `crm_key='CHZ_PIERRE'`) : doit voir tous les postes après ce correctif, y
+   compris ceux où il n'apparaît pas dans `gere_poste`.
+3. **Import candidat** (`POST /api/candidats/import/executer`, prompt3 §2) : à la création du
+   compte `user_`, pose `role_applicatif = 'CANDIDAT'` (en plus de `contact.role = 'CAN'` déjà
+   posé).
+4. **`gere_poste`** (rattachement CM principal/secondaire/CHZ à un poste, prompt2) : **ne change
+   pas** — continue d'utiliser `contact.role` (CM1/CM2/CHZ), qui reste la donnée pertinente pour
+   cette logique métier précise (distincte du contrôle d'accès générique).
+
+---
+
+## 1. Écran — Gestion des comptes *(Front · Recruteur, rôle ADMIN uniquement)*
+
+Route : `/admin/utilisateurs`
+
+**Liste des comptes** : Nom · Prénom · Email · Rôle applicatif (badge) · Rôle contact (badge,
+ex. "CM1") · Actif (oui/non) · Actions (Désactiver/Réactiver).
+
+**Bouton "Ajouter un utilisateur"** → popup/formulaire en 2 temps :
+1. **Choix du rôle applicatif** : `ADMIN`, `RECRUTEUR` ou `CM` — **`CANDIDAT` n'apparaît pas
+   dans ce choix**, un candidat n'est jamais créé manuellement (voir prompt3, import CSV
+   uniquement).
+2. **Selon le choix**, affiche les champs adaptés :
+   - `ADMIN` : nom, prénom, email, téléphone, genre — `contact.role` posé automatiquement à
+     `ADMIN` (pas de choix supplémentaire).
+   - `RECRUTEUR` : mêmes champs + un **sélecteur obligatoire** du rôle contact parmi `REC`
+     (recruteur classique) ou `CHZ` (Chargé de Zone) — ⚠️ **révisé 04/09/2026 (Correctif_DCC_20260904,
+     P4_12) : `CHZ` est exactement équivalent à `REC` en tous points, y compris la visibilité —
+     aucune restriction de scope sur les postes.** Ce point remplace l'arbitrage du 31/08/2026
+     (A23/conception.md §6.1.1), qui limitait par erreur la visibilité de CHZ aux postes rattachés
+     via `gere_poste` — cette limitation est retirée. Le sélecteur de rôle contact CM1/CM2/CHZ
+     reste néanmoins nécessaire pour renseigner `gere_poste` (donnée métier de rattachement,
+     affichée sur la fiche poste), mais ne doit plus jamais servir de filtre d'accès pour CHZ.
+   ⚠️ **Point ajouté 04/09/2026 (prompt4j, P4_32), tranché le même jour** : le bouton "Annuler
+   affectation" (écran OD, ajouté par `prompt4j_correctif_dcc_cockpit_recruteur.txt` §2) avait été
+   restreint au seul rôle `REC` (`contact.role`), CHZ exclu, par prudence en attendant confirmation.
+   **Décision DCC/Damien : CHZ doit avoir cette action aussi**, sans exception — les CHZ sont des
+   salariés (pas des bénévoles comme CM1/CM2) qui remplacent parfois un recruteur pendant ses
+   congés, la DCC leur fait confiance avec les droits complets d'un recruteur. Lors de cet audit,
+   étends explicitement "Annuler affectation" à `role_applicatif = 'RECRUTEUR'` sans distinction
+   REC/CHZ, cohérent avec le reste des droits déjà alignés. Si un rôle supplémentaire plus restreint
+   s'avère nécessaire plus tard, ce sera une évolution séparée, pas anticipée ici.
+   - `CM` : mêmes champs + un **sélecteur obligatoire** du rôle contact précis parmi `CM1`,
+     `CM2` (nécessaire pour `gere_poste`, voir §0 point 4).
+
+**À la validation** : transaction unique créant `contact` (avec le rôle contact déterminé
+ci-dessus) + `user_` (login = email, mot de passe temporaire haché bcrypt, `role_applicatif`
+posé selon le choix de l'étape 1) + **envoi d'un email d'invitation** (réutilise exactement le
+mécanisme déjà construit pour l'import candidat, prompt3 §2 — ne le duplique pas).
+
+**Désactivation** (bouton par ligne) : utilise la colonne `active` déjà présente sur `user_`
+(ajoutée par l'agent lors du prompt3) — **jamais de suppression physique** d'un compte (cohérent
+avec la convention déjà appliquée aux référentiels, prompt1). Un compte désactivé ne peut plus
+se connecter (`POST /api/auth/login` doit vérifier `user_.active` en plus du mot de passe).
+
+**API backend** (`routes/admin.js`, à côté des routes référentiels existantes) :
+```
+GET    /api/admin/utilisateurs
+POST   /api/admin/utilisateurs
+PATCH  /api/admin/utilisateurs/:id/desactiver
+PATCH  /api/admin/utilisateurs/:id/reactiver
+```
+Toutes protégées par `requireRole(['ADMIN'])`.
+
+---
+
+## Points de vigilance
+
+- Ne construis aucun écran de gestion pour le rôle Candidat ici — un candidat n'existe qu'en
+  base via l'import (prompt3), jamais créé par cet écran.
+- Vérifie que les 3 comptes existants (`admin.test`, `recruteur.test`, `loic.dupont`,
+  `marie.nguyen`, `pierre.martin`) apparaissent correctement dans la liste après le backfill du
+  §0, avec le bon rôle applicatif et le bon rôle contact.
+- L'audit de remplacement `requireRole(['CM1','CM2','CHZ'])` → `requireRole(['CM'])` (§0 point 2)
+  est aussi utile en préparation de prompt5 (audit RBAC) — signale dans ton rapport toute route
+  où tu as trouvé et corrigé une incohérence, pour que ce soit tracé.

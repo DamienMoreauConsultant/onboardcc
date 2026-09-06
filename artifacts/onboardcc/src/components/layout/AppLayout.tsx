@@ -13,25 +13,19 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   if (!user) return null;
 
   const getNavItems = () => {
-    switch (user.role) {
-      case 'REC':
+    switch (user.role_applicatif) {
+      case 'RECRUTEUR':
         return [
           { label: 'Home', href: '/recruteur', icon: LayoutDashboard },
           { label: 'Candidats', href: '/recruteur/candidats', icon: Users },
           { label: 'Postes', href: '/recruteur/postes', icon: Briefcase },
         ];
-      case 'CM1':
-      case 'CM2':
+      case 'CM':
         return [
           { label: 'Missions', href: '/cm', icon: Briefcase },
           { label: 'Mes postes', href: '/cm/postes', icon: Briefcase },
         ];
-      case 'CHZ':
-        return [
-          { label: 'Missions', href: '/cm', icon: Briefcase },
-          { label: 'Mes postes', href: '/recruteur/postes', icon: Briefcase },
-        ];
-      case 'CAN':
+      case 'CANDIDAT':
         return [
           { label: 'Mon espace', href: '/candidat/accueil', icon: GraduationCap },
           { label: 'Ma fiche de vœux', href: '/candidat/voeux', icon: User },
@@ -39,6 +33,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       case 'ADMIN':
         return [
           { label: 'Référentiels', href: '/admin/referentiels', icon: Database },
+          { label: 'Utilisateurs', href: '/admin/utilisateurs', icon: Users },
         ];
       default:
         return [];
@@ -86,7 +81,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
             </Avatar>
             <div className="overflow-hidden">
               <p className="text-sm font-medium truncate text-sidebar-foreground">{user.prenom} {user.nom}</p>
-              <p className="text-xs text-sidebar-foreground/60 truncate font-medium uppercase tracking-wider">{user.role}</p>
+              <p className="text-xs text-sidebar-foreground/60 truncate font-medium uppercase tracking-wider">{user.role_contact}</p>
             </div>
           </div>
           <Button variant="ghost" className="w-full justify-start text-sidebar-foreground/80 hover:text-sidebar-foreground hover:bg-sidebar-accent/50" onClick={logout}>
@@ -106,7 +101,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
               </div>
               <div>
                 <p className="font-display text-sm font-bold leading-none">onboard<span className="text-sidebar-primary">cc</span></p>
-                <p className="mt-1 text-[10px] uppercase tracking-wider text-sidebar-foreground/60">{user.role}</p>
+                <p className="mt-1 text-[10px] uppercase tracking-wider text-sidebar-foreground/60">{user.role_contact}</p>
               </div>
             </div>
             <Button size="icon" variant="ghost" className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" onClick={logout} aria-label="Déconnexion">

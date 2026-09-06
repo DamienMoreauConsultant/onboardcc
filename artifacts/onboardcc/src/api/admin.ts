@@ -12,6 +12,27 @@ export type ReferentielResponse = {
   rows: ReferentielItem[];
 };
 
+export type UserAccount = {
+  id_user: number;
+  nom: string;
+  prenom: string;
+  email: string;
+  role_applicatif: 'ADMIN' | 'RECRUTEUR' | 'CM' | 'CANDIDAT';
+  role_contact: string;
+  active: boolean;
+  invitation?: 'sent' | 'pending_smtp_configuration' | 'failed';
+};
+
+export type CreateUserAccountInput = {
+  role_applicatif: 'ADMIN' | 'RECRUTEUR' | 'CM';
+  role_contact: 'ADMIN' | 'REC' | 'CHZ' | 'CM1' | 'CM2';
+  nom: string;
+  prenom: string;
+  email: string;
+  telephone: string;
+  genre: string;
+};
+
 export const adminApi = {
   getReferentiel: async (table: string): Promise<ReferentielResponse> => {
     const { data } = await api.get<ReferentielResponse>(`/admin/referentiels/${table}`);
@@ -25,6 +46,22 @@ export const adminApi = {
 
   updateReferentiel: async (table: string, id: number | string, payload: Record<string, unknown>): Promise<ReferentielItem> => {
     const { data } = await api.patch<ReferentielItem>(`/admin/referentiels/${table}/${id}`, payload);
+    return data;
+  },
+
+  getUtilisateurs: async (): Promise<UserAccount[]> => {
+    const { data } = await api.get<UserAccount[]>('/admin/utilisateurs');
+    return data;
+  },
+
+  createUtilisateur: async (payload: CreateUserAccountInput): Promise<UserAccount> => {
+    const { data } = await api.post<UserAccount>('/admin/utilisateurs', payload);
+    return data;
+  },
+
+  setUtilisateurActif: async (id: number, active: boolean): Promise<UserAccount> => {
+    const action = active ? 'reactiver' : 'desactiver';
+    const { data } = await api.patch<UserAccount>(`/admin/utilisateurs/${id}/${action}`);
     return data;
   },
 };

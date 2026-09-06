@@ -11,6 +11,7 @@ import Login from '@/pages/Login';
 import ChargeMission from '@/pages/ChargeMission';
 import Candidate from '@/pages/Candidate';
 import AdminReferentiels from '@/pages/admin/AdminReferentiels';
+import AdminUtilisateurs from '@/pages/admin/AdminUtilisateurs';
 import PostesList from '@/pages/postes/PostesList';
 import PosteImport from '@/pages/postes/PosteImport';
 import PosteDetail from '@/pages/postes/PosteDetail';
@@ -28,88 +29,95 @@ function Router() {
       <Route path="/login" component={Login} />
       
       <Route path="/recruteur">
-        <RoleGuard allowedRoles={['REC']}>
+        <RoleGuard allowedRoles={['RECRUTEUR']}>
           <AppLayout>
             <Recruiter />
           </AppLayout>
         </RoleGuard>
       </Route>
       <Route path="/recruteur/candidats/import">
-        <RoleGuard allowedRoles={['REC']}><AppLayout><CandidatImport /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['RECRUTEUR']}><AppLayout><CandidatImport /></AppLayout></RoleGuard>
       </Route>
       <Route path="/recruteur/opportunites/:id">
-        <RoleGuard allowedRoles={['REC', 'CHZ']}><AppLayout><OpportuniteDetail mode="recruteur" /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['RECRUTEUR']}><AppLayout><OpportuniteDetail mode="recruteur" /></AppLayout></RoleGuard>
       </Route>
       <Route path="/recruteur/candidats/:id">
-        <RoleGuard allowedRoles={['REC']}><AppLayout><CandidatDetail mode="recruteur" /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['RECRUTEUR']}><AppLayout><CandidatDetail mode="recruteur" /></AppLayout></RoleGuard>
       </Route>
       <Route path="/recruteur/candidats">
-        <RoleGuard allowedRoles={['REC']}><AppLayout><CandidatsList /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['RECRUTEUR']}><AppLayout><CandidatsList /></AppLayout></RoleGuard>
       </Route>
       <Route path="/recruteur/postes/import">
-        <RoleGuard allowedRoles={['REC', 'CHZ']}>
+        <RoleGuard allowedRoles={['RECRUTEUR']}>
           <AppLayout><PosteImport /></AppLayout>
         </RoleGuard>
       </Route>
       <Route path="/recruteur/postes/:id">
-        <RoleGuard allowedRoles={['REC', 'CHZ']}>
+        <RoleGuard allowedRoles={['RECRUTEUR']}>
           <AppLayout><PosteDetail mode="recruteur" /></AppLayout>
         </RoleGuard>
       </Route>
       <Route path="/recruteur/postes">
-        <RoleGuard allowedRoles={['REC', 'CHZ']}>
+        <RoleGuard allowedRoles={['RECRUTEUR']}>
           <AppLayout><PostesList mode="recruteur" /></AppLayout>
         </RoleGuard>
       </Route>
 
       <Route path="/cm">
-        <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}>
+        <RoleGuard allowedRoles={['CM']}>
           <AppLayout>
             <ChargeMission />
           </AppLayout>
         </RoleGuard>
       </Route>
       <Route path="/cm/postes/:id">
-        <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}>
+        <RoleGuard allowedRoles={['CM']}>
           <AppLayout><PosteDetail mode="cm" /></AppLayout>
         </RoleGuard>
       </Route>
       <Route path="/cm/opportunites/:id">
-        <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}><AppLayout><OpportuniteDetail mode="cm" /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['CM']}><AppLayout><OpportuniteDetail mode="cm" /></AppLayout></RoleGuard>
       </Route>
       <Route path="/cm/candidats/:id">
-        <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}><AppLayout><CandidatDetail mode="cm" /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['CM']}><AppLayout><CandidatDetail mode="cm" /></AppLayout></RoleGuard>
       </Route>
       <Route path="/cm/postes">
-        <RoleGuard allowedRoles={['CM1', 'CM2', 'CHZ']}>
+        <RoleGuard allowedRoles={['CM']}>
           <AppLayout><PostesList mode="cm" /></AppLayout>
         </RoleGuard>
       </Route>
 
       <Route path="/candidat/accueil">
-        <RoleGuard allowedRoles={['CAN']}>
+        <RoleGuard allowedRoles={['CANDIDAT']}>
           <AppLayout>
             <Candidate />
           </AppLayout>
         </RoleGuard>
       </Route>
       <Route path="/candidat/opportunites/:id">
-        <RoleGuard allowedRoles={['CAN']}><AppLayout><OpportuniteDetail mode="candidat" /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['CANDIDAT']}><AppLayout><OpportuniteDetail mode="candidat" /></AppLayout></RoleGuard>
       </Route>
       <Route path="/candidat/voeux">
-        <RoleGuard allowedRoles={['CAN']}><AppLayout><CandidatDetail mode="candidat" initialSection="voeux" /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['CANDIDAT']}><AppLayout><CandidatDetail mode="candidat" initialSection="voeux" /></AppLayout></RoleGuard>
       </Route>
       <Route path="/candidat/etat-civil">
-        <RoleGuard allowedRoles={['CAN']}><AppLayout><CandidatDetail mode="candidat" initialSection="etat-civil" /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['CANDIDAT']}><AppLayout><CandidatDetail mode="candidat" initialSection="etat-civil" /></AppLayout></RoleGuard>
       </Route>
       <Route path="/candidat/projet">
-        <RoleGuard allowedRoles={['CAN']}><AppLayout><CandidatDetail mode="candidat" initialSection="projet" /></AppLayout></RoleGuard>
+        <RoleGuard allowedRoles={['CANDIDAT']}><AppLayout><CandidatDetail mode="candidat" initialSection="projet" /></AppLayout></RoleGuard>
       </Route>
 
       <Route path="/admin/referentiels">
         <RoleGuard allowedRoles={['ADMIN']}>
           <AppLayout>
             <AdminReferentiels />
+          </AppLayout>
+        </RoleGuard>
+      </Route>
+      <Route path="/admin/utilisateurs">
+        <RoleGuard allowedRoles={['ADMIN']}>
+          <AppLayout>
+            <AdminUtilisateurs />
           </AppLayout>
         </RoleGuard>
       </Route>

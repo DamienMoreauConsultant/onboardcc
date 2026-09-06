@@ -20,10 +20,116 @@
  */
 
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
+import { randomBytes } from 'node:crypto';
 import pool from '../db-pg';
 import { requireRole } from '../middleware/requireRole';
+import { sendUserInvitation, smtpIsConfigured } from '../lib/candidateInvitations';
 
 const router = Router();
+const USER_ROLES = ['ADMIN', 'RECRUTEUR', 'CM'] as const;
+type UserRole = typeof USER_ROLES[number];
+const CONTACT_ROLES: Record<UserRole, readonly string[]> = {
+  ADMIN: ['ADMIN'],
+  RECRUTEUR: ['REC', 'CHZ'],
+  CM: ['CM1', 'CM2'],
+};
+
+function validUserPayload(body: unknown): { value?: { nom: string; prenom: string; email: string; telephone: string; genre: string; role_applicatif: UserRole; role_contact: string }; error?: string } {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'Corps de requête invalide.' };
+  const data = body as Record<string, unknown>;
+  const allowed = ['nom', 'prenom', 'email', 'telephone', 'genre', 'role_applicatif', 'role_contact'];
+  if (Object.keys(data).some((key) => !allowed.includes(key))) return { error: 'Champ non autorisé.' };
+  const read = (key: string, max: number) => typeof data[key] === 'string' && data[key].trim().length > 0 && data[key].trim().length <= max ? data[key].trim() : null;
+  const nom = read('nom', 50), prenom = read('prenom', 50), email = read('email', 50);
+  const telephone = read('telephone', 50), genre = read('genre', 20);
+  if (!nom || !prenom || !email || !telephone || !genre) return { error: 'Nom, prénom, email, téléphone et genre sont obligatoires.' };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'Email invalide.' };
+  if (!USER_ROLES.includes(data.role_applicatif as UserRole)) return { error: 'Rôle applicatif invalide.' };
+  const role_applicatif = data.role_applicatif as UserRole;
+  const role_contact = read('role_contact', 20);
+  if (!role_contact || !CONTACT_ROLES[role_applicatif].includes(role_contact)) return { error: 'Rôle contact incompatible avec le rôle applicatif.' };
+  return { value: { nom, prenom, email, telephone, genre, role_applicatif, role_contact } };
+}
+
+router.get('/utilisateurs', requireRole(['ADMIN']), async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT u.id_user,u.login,u.active,u.role_applicatif,u.id_contact,
+              c.nom_contact AS nom,c.prenom_contact AS prenom,c.email_contact AS email,
+              c.tel_contact AS telephone,c.genre,c.role AS role_contact
+       FROM user_ u JOIN contact c ON c.id_contact=u.id_contact
+       ORDER BY c.nom_contact,c.prenom_contact,u.id_user`,
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Erreur GET utilisateurs :', error);
+    res.status(500).json({ error: 'Erreur interne du serveur.' });
+  }
+});
+
+router.post('/utilisateurs', requireRole(['ADMIN']), async (req, res) => {
+  const parsed = validUserPayload(req.body);
+  if (!parsed.value) { res.status(400).json({ error: parsed.error }); return; }
+  const data = parsed.value;
+  const temporaryPassword = `Dcc-${randomBytes(12).toString('base64url')}`;
+  const contactCrmKey = `USR_${randomBytes(12).toString('hex').toUpperCase()}`;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await client.query(
+      'SELECT 1 FROM contact c LEFT JOIN user_ u ON u.id_contact=c.id_contact WHERE lower(u.login)=lower($1) OR lower(c.email_contact)=lower($1) LIMIT 1',
+      [data.email],
+    );
+    if (existing.rows.length) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ error: 'Un compte utilise déjà cet email ou cet identifiant.' });
+      return;
+    }
+    const contact = await client.query(
+      `INSERT INTO contact(crm_key,role,genre,nom_contact,prenom_contact,tel_contact,email_contact)
+       VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id_contact`,
+      [contactCrmKey, data.role_contact, data.genre, data.nom, data.prenom, data.telephone, data.email],
+    );
+    const user = await client.query(
+      `INSERT INTO user_(login,password,id_contact,role_applicatif,active)
+       VALUES($1,$2,$3,$4,true) RETURNING id_user,active`,
+      [data.email, await bcrypt.hash(temporaryPassword, 12), contact.rows[0].id_contact, data.role_applicatif],
+    );
+    await client.query('COMMIT');
+    let invitation = 'pending_smtp_configuration';
+    if (smtpIsConfigured()) {
+      try {
+        await sendUserInvitation({ email: data.email, prenom: data.prenom, temporaryPassword, roleLabel: data.role_applicatif });
+        invitation = 'sent';
+      } catch (emailError) {
+        console.error('Compte créé mais invitation non envoyée :', emailError);
+        invitation = 'failed';
+      }
+    }
+    res.status(201).json({ ...user.rows[0], id_contact: contact.rows[0].id_contact, ...data, invitation });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch { /* transaction déjà validée */ }
+    console.error('Erreur POST utilisateurs :', error);
+    if (error?.code === '23505') { res.status(409).json({ error: 'Un compte ou contact avec ces données existe déjà.' }); return; }
+    res.status(500).json({ error: 'Erreur interne du serveur.' });
+  } finally { client.release(); }
+});
+
+async function setUserActive(req: any, res: any, active: boolean): Promise<void> {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: 'Identifiant utilisateur invalide.' }); return; }
+  try {
+    const result = await pool.query('UPDATE user_ SET active=$1 WHERE id_user=$2 RETURNING id_user,active', [active, id]);
+    if (!result.rows.length) { res.status(404).json({ error: 'Utilisateur non trouvé.' }); return; }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Erreur changement état utilisateur :', error);
+    res.status(500).json({ error: 'Erreur interne du serveur.' });
+  }
+}
+router.patch('/utilisateurs/:id/desactiver', requireRole(['ADMIN']), async (req, res) => setUserActive(req, res, false));
+router.patch('/utilisateurs/:id/reactiver', requireRole(['ADMIN']), async (req, res) => setUserActive(req, res, true));
 
 /** Configuration par table : clé primaire, colonnes éditables, restrictions */
 const TABLES_CONFIG: Record<string, {

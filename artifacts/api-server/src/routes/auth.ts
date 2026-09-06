@@ -33,7 +33,7 @@ const FORGOT_PASSWORD_MESSAGE = 'Si un compte actif correspond à cet identifian
  * Processus :
  *   1. Recherche l'utilisateur par son login dans la table user_, joint avec contact.
  *   2. Vérifie le mot de passe fourni contre le hash bcrypt stocké en base.
- *   3. Déduit le rôle depuis contact.role (CAN, CM1, CM2, CHZ, ADMIN) ou 'REC' si absent.
+ *   3. Charge le rôle applicatif depuis user_ et le rôle métier depuis contact.
  *   4. Crée un JWT signé avec les infos de l'utilisateur, durée JWT_EXPIRE_HOURS.
  *   5. Pose ce JWT en cookie HttpOnly sur la réponse.
  */
@@ -52,7 +52,8 @@ router.post('/login', async (req, res) => {
          u.id_user,
          u.password AS hash, u.active,
          c.id_contact,
-         c.role,
+         c.role AS role_contact,
+         u.role_applicatif,
          c.nom_contact      AS nom,
          c.prenom_contact   AS prenom,
          -- Pour les candidats, récupère l'id_candidat (NULL pour les autres rôles)
@@ -84,24 +85,24 @@ router.post('/login', async (req, res) => {
       return;
     }
 
-    // Liste blanche stricte des rôles reconnus par l'application.
-    // 'REC' est un rôle explicite (staff DCC sans rôle spécifique), pas un repli par défaut.
+    // Liste blanche stricte des rôles applicatifs reconnus par l'application.
     // Un rôle absent de cette liste → refus d'accès immédiat (jamais de repli silencieux
     // vers un rôle plus ou moins privilégié — cela masquerait une corruption de données).
-    const ALLOWED_ROLES = ['REC', 'CAN', 'CM1', 'CM2', 'CHZ', 'ADMIN'] as const;
-    type AllowedRole = typeof ALLOWED_ROLES[number];
-    if (!ALLOWED_ROLES.includes(user.role as AllowedRole)) {
+    const ALLOWED_APPLICATION_ROLES = ['ADMIN', 'RECRUTEUR', 'CM', 'CANDIDAT'] as const;
+    type AllowedApplicationRole = typeof ALLOWED_APPLICATION_ROLES[number];
+    if (!ALLOWED_APPLICATION_ROLES.includes(user.role_applicatif as AllowedApplicationRole)) {
       res.status(403).json({
-        error: `Rôle '${user.role ?? 'null'}' non reconnu. Accès refusé. Contactez l'administrateur.`,
+        error: `Rôle applicatif '${user.role_applicatif ?? 'null'}' non reconnu. Accès refusé. Contactez l'administrateur.`,
       });
       return;
     }
-    const role = user.role as AllowedRole;
+    const role_applicatif = user.role_applicatif as AllowedApplicationRole;
 
     // Crée le payload du JWT (jamais stocker d'informations sensibles dans le JWT)
     const payload = {
       id_user: user.id_user,
-      role,
+      role_applicatif,
+      role_contact: user.role_contact,
       id_contact: user.id_contact,
       id_candidat: user.id_candidat ?? null,
       nom: user.nom || '',
@@ -127,7 +128,9 @@ router.post('/login', async (req, res) => {
 
     // Retourne les infos utiles au frontend (jamais le hash du mot de passe)
     res.json({
-      role,
+      id_user: user.id_user,
+      role_applicatif,
+      role_contact: user.role_contact,
       id_contact: user.id_contact,
       id_candidat: user.id_candidat ?? null,
       nom: user.nom || '',

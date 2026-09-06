@@ -8,7 +8,7 @@
  *      pour la route appelée.
  *
  * Utilisation dans une route Express :
- *   router.get('/route', requireRole(['REC', 'ADMIN']), handler);
+ *   router.get('/route', requireRole(['RECRUTEUR', 'ADMIN']), handler);
  *
  * Sécurité :
  *   - Le JWT est lu depuis un cookie HttpOnly (jamais depuis le header Authorization
@@ -24,7 +24,8 @@ import jwt from 'jsonwebtoken';
 /** Structure du payload stocké dans le JWT */
 export interface JwtPayload {
   id_user: number;
-  role: string;          // 'CAN' | 'CM1' | 'CM2' | 'CHZ' | 'REC' | 'ADMIN'
+  role_applicatif: 'ADMIN' | 'RECRUTEUR' | 'CM' | 'CANDIDAT';
+  role_contact: string;
   id_contact: number;
   id_candidat: number | null;
   nom: string;
@@ -43,7 +44,7 @@ declare global {
 /**
  * Fabrique le middleware de contrôle de rôle.
  *
- * @param allowedRoles — tableau des rôles autorisés (ex. ['REC', 'ADMIN'])
+ * @param allowedRoles — tableau des rôles autorisés (ex. ['RECRUTEUR', 'ADMIN'])
  *                       Un tableau vide signifie "toute personne authentifiée est autorisée".
  *
  * Le middleware renvoie :
@@ -81,10 +82,17 @@ export function requireRole(allowedRoles: string[]) {
       return;
     }
 
+    // Rejette aussi les JWT émis avant la migration role_applicatif.
+    const applicationRoles = ['ADMIN', 'RECRUTEUR', 'CM', 'CANDIDAT'];
+    if (!applicationRoles.includes(decoded.role_applicatif) || typeof decoded.role_contact !== 'string') {
+      res.status(401).json({ error: 'Session expirée ou token invalide — veuillez vous reconnecter.' });
+      return;
+    }
+
     // Vérifie que le rôle de l'utilisateur est dans la liste des rôles autorisés
     // Si allowedRoles est vide, tout utilisateur authentifié passe.
-    if (allowedRoles.length > 0 && !allowedRoles.includes(decoded.role)) {
-      res.status(403).json({ error: `Accès refusé — rôle '${decoded.role}' non autorisé pour cette ressource.` });
+    if (allowedRoles.length > 0 && !allowedRoles.includes(decoded.role_applicatif)) {
+      res.status(403).json({ error: `Accès refusé — rôle '${decoded.role_applicatif}' non autorisé pour cette ressource.` });
       return;
     }
 

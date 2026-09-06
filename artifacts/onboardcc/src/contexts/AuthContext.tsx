@@ -20,17 +20,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
-  const handleRoleRedirect = (role: string) => {
-    switch (role) {
-      case 'REC':
+  const handleRoleRedirect = (roleApplicatif: SessionUser['role_applicatif']) => {
+    switch (roleApplicatif) {
+      case 'RECRUTEUR':
         setLocation('/recruteur');
         break;
-      case 'CM1':
-      case 'CM2':
-      case 'CHZ':
+      case 'CM':
         setLocation('/cm');
         break;
-      case 'CAN':
+      case 'CANDIDAT':
         setLocation('/candidat/accueil');
         break;
       case 'ADMIN':
@@ -54,7 +52,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const userData = await authApi.login(credentials);
       setUser(userData);
-      handleRoleRedirect(userData.role);
+      handleRoleRedirect(userData.role_applicatif);
     } catch (err: any) {
       toast({
         title: 'Erreur de connexion',

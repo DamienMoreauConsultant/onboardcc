@@ -1,5 +1,6 @@
 - [Historique des postes](poste-history.md) — `etape` est candidat-only ; les actions de fiche de poste ont un historique dédié.
-- [Périmètre CHZ sur les postes](poste-chz-scope.md) — CHZ a les actions recruteur sur les postes, mais uniquement pour ceux auxquels il est rattaché.
+- [Périmètre CHZ sur les postes](poste-chz-scope.md) — CHZ a désormais la visibilité et toutes les actions d’un recruteur, sans filtre `gere_poste`.
+- [Rôles applicatifs et contacts](roles-applicatifs-contacts.md) — le RBAC repose sur 4 rôles applicatifs ; le rôle contact reste une donnée métier.
 - [Dates d’import des postes](poste-import-dates.md) — les dates CRM doivent être validées en `JJ/MM/AAAA` puis converties en ISO avant PostgreSQL.
 - [Sécurité du mot de passe oublié](password-reset-safety.md) — une demande anonyme émet un lien expirant ; elle ne remplace jamais directement le mot de passe.
 - [Couverture des destinations](voeux-destination-coverage.md) — chaque brouillon sérialise toutes les régions ; la soumission exige OUI, P1–P6 ou Non partout.

@@ -138,7 +138,7 @@ export default function OpportuniteDetail({ mode }: Props) {
   };
 
   const availableActions = getDetailActions(detail.etat_designation, mode)
-    .filter((candidateAction) => candidateAction.action !== 'annuler-affectation' || user?.role === 'REC');
+    .filter((candidateAction) => candidateAction.action !== 'annuler-affectation' || user?.role_applicatif === 'RECRUTEUR');
   const candidateCanBeLinked = detail.etat_candidat_code === 'ATA';
   const cmName = [detail.cm_contact_json?.prenom, detail.cm_contact_json?.nom].filter(Boolean).join(' ') || 'votre chargé de mission';
 

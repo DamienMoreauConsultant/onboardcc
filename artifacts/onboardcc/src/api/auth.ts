@@ -2,7 +2,8 @@ import { api } from './client';
 
 // Types alignés sur la réponse du backend (routes/auth.ts)
 export type SessionUser = {
-  role: 'REC' | 'CM1' | 'CM2' | 'CHZ' | 'CAN' | 'ADMIN';
+  role_applicatif: 'ADMIN' | 'RECRUTEUR' | 'CM' | 'CANDIDAT';
+  role_contact: 'ADMIN' | 'REC' | 'CHZ' | 'CM1' | 'CM2' | 'CAN' | 'MIS' | 'PAR';
   id_contact: number;
   id_candidat: number | null;
   nom: string;

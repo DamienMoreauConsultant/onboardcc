@@ -4,7 +4,7 @@ import { requireRole } from '../middleware/requireRole';
 
 const router = Router();
 
-router.get('/cockpit', requireRole(['REC']), async (_req, res): Promise<void> => {
+router.get('/cockpit', requireRole(['RECRUTEUR']), async (_req, res): Promise<void> => {
   try {
     const result = await pool.query(
       `SELECT

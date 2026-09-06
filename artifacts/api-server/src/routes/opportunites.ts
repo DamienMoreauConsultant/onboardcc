@@ -4,8 +4,8 @@ import pool from '../db-pg';
 import { Opportunite } from '../services/matching';
 
 const router = Router();
-const ALL_ROLES = ['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN'];
-const STAFF_ROLES = ['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN'];
+const ALL_ROLES = ['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT'];
+const STAFF_ROLES = ['RECRUTEUR', 'CM', 'ADMIN'];
 
 const BASE_SELECT = `
   SELECT
@@ -103,20 +103,16 @@ function hideCandidateScoring(row: Record<string, unknown>) {
 }
 
 function roleScope(req: Request, params: unknown[]) {
-  const role = req.user!.role;
-  if (role === 'CAN') {
+  const role = req.user!.role_applicatif;
+  if (role === 'CANDIDAT') {
     params.push(req.user!.id_candidat);
     return ` AND cand.id_candidat=$${params.length}
       AND eo.designation IN ('Mise en lien','Accord de principe','Accepté','Affecté','Refus candidat','Refus partenaire')`;
   }
-  if (['CM1', 'CM2'].includes(role)) {
+  if (role === 'CM') {
     params.push(req.user!.id_contact);
     return ` AND EXISTS(SELECT 1 FROM gere_poste gp WHERE gp.id_poste=o.id_poste AND gp.id_contact=$${params.length})
       AND eo.designation NOT IN ('Provisoire','Non qualifié','Rejeté système','Rejeté recruteur')`;
-  }
-  if (role === 'CHZ') {
-    params.push(req.user!.id_contact);
-    return ` AND EXISTS(SELECT 1 FROM gere_poste gp WHERE gp.id_poste=o.id_poste AND gp.id_contact=$${params.length})`;
   }
   return '';
 }
@@ -160,7 +156,7 @@ router.get('/', requireRole(ALL_ROLES), async (req, res) => {
        LIMIT 250`,
       params,
     );
-    res.json(req.user!.role === 'CAN' ? result.rows.map(hideCandidateScoring) : result.rows);
+    res.json(req.user!.role_applicatif === 'CANDIDAT' ? result.rows.map(hideCandidateScoring) : result.rows);
   } catch (err) {
     console.error('Erreur GET opportunites :', err);
     res.status(500).json({ error: 'Erreur interne du serveur.' });
@@ -209,7 +205,7 @@ router.get('/:id', requireRole(ALL_ROLES), async (req, res) => {
     }
     const [opportunity, details] = await Promise.all([
       pool.query(`${BASE_SELECT} WHERE o.id_opportunite=$1`, [id]),
-      req.user!.role === 'CAN' ? Promise.resolve({ rows: [] }) : pool.query(
+      req.user!.role_applicatif === 'CANDIDAT' ? Promise.resolve({ rows: [] }) : pool.query(
         `SELECT DISTINCT ON (critere)
            id_criteres_detailles,date_evaluation,critere,valeur_poste,valeur_candidat,note_obtenue
          FROM criteres_detailles WHERE id_opportunite=$1
@@ -218,7 +214,7 @@ router.get('/:id', requireRole(ALL_ROLES), async (req, res) => {
       ),
     ]);
     const payload = { ...opportunity.rows[0], criteres_detailles: details.rows };
-    res.json(req.user!.role === 'CAN' ? hideCandidateScoring(payload) : payload);
+    res.json(req.user!.role_applicatif === 'CANDIDAT' ? hideCandidateScoring(payload) : payload);
   } catch (err) {
     console.error('Erreur GET opportunite détail :', err);
     res.status(500).json({ error: 'Erreur interne du serveur.' });
@@ -244,20 +240,20 @@ const transitionRules: Record<TransitionName, {
   to: string;
   commentField?: 'appreciation_recruteur' | 'commentaire_charge_mission';
 }> = {
-  proposer_cm: { roles: ['REC', 'CHZ', 'ADMIN'], from: ['Non qualifié'], to: 'Proposée au CM', commentField: 'appreciation_recruteur' },
-  approuver: { roles: ['CM1', 'CM2'], from: ['Proposée au CM'], to: 'Approuvé CM', commentField: 'commentaire_charge_mission' },
-  rejeter_cm: { roles: ['CM1', 'CM2'], from: ['Proposée au CM'], to: 'Rejeté CM', commentField: 'commentaire_charge_mission' },
-  rejeter_recruteur: { roles: ['REC', 'CHZ', 'ADMIN'], from: ['Non qualifié'], to: 'Rejeté recruteur', commentField: 'appreciation_recruteur' },
-  mettre_en_lien: { roles: ['REC', 'CHZ', 'ADMIN'], from: ['Approuvé CM'], to: 'Mise en lien', commentField: 'appreciation_recruteur' },
-  accord_de_principe: { roles: ['CAN'], from: ['Mise en lien'], to: 'Accord de principe' },
-  accord_definitif: { roles: ['CAN'], from: ['Accord de principe'], to: 'Accepté' },
-  decision_dcc: { roles: ['REC', 'ADMIN'], from: ['Accepté'], to: 'Affecté', commentField: 'appreciation_recruteur' },
-  refuser_candidat: { roles: ['CAN'], from: ['Mise en lien', 'Accord de principe'], to: 'Refus candidat' },
-  refuser_partenaire: { roles: ['REC', 'CHZ', 'ADMIN'], from: ['Accepté'], to: 'Refus partenaire', commentField: 'appreciation_recruteur' },
-  annuler_affectation: { roles: ['REC'], from: ['Affecté'], to: 'Rejet après affectation', commentField: 'appreciation_recruteur' },
+  proposer_cm: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Non qualifié'], to: 'Proposée au CM', commentField: 'appreciation_recruteur' },
+  approuver: { roles: ['CM'], from: ['Proposée au CM'], to: 'Approuvé CM', commentField: 'commentaire_charge_mission' },
+  rejeter_cm: { roles: ['CM'], from: ['Proposée au CM'], to: 'Rejeté CM', commentField: 'commentaire_charge_mission' },
+  rejeter_recruteur: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Non qualifié'], to: 'Rejeté recruteur', commentField: 'appreciation_recruteur' },
+  mettre_en_lien: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Approuvé CM'], to: 'Mise en lien', commentField: 'appreciation_recruteur' },
+  accord_de_principe: { roles: ['CANDIDAT'], from: ['Mise en lien'], to: 'Accord de principe' },
+  accord_definitif: { roles: ['CANDIDAT'], from: ['Accord de principe'], to: 'Accepté' },
+  decision_dcc: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Accepté'], to: 'Affecté', commentField: 'appreciation_recruteur' },
+  refuser_candidat: { roles: ['CANDIDAT'], from: ['Mise en lien', 'Accord de principe'], to: 'Refus candidat' },
+  refuser_partenaire: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Accepté'], to: 'Refus partenaire', commentField: 'appreciation_recruteur' },
+  annuler_affectation: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Affecté'], to: 'Rejet après affectation', commentField: 'appreciation_recruteur' },
 };
 
-router.post('/:id/recalculer', requireRole(['REC', 'CHZ', 'ADMIN']), async (req, res) => {
+router.post('/:id/recalculer', requireRole(['RECRUTEUR', 'ADMIN']), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!(await canAccess(req, id))) return void res.status(404).json({ error: 'Opportunité introuvable.' });
@@ -268,7 +264,7 @@ router.post('/:id/recalculer', requireRole(['REC', 'CHZ', 'ADMIN']), async (req,
   }
 });
 
-router.post('/recalculer-liste', requireRole(['REC', 'CHZ', 'ADMIN']), async (req, res) => {
+router.post('/recalculer-liste', requireRole(['RECRUTEUR', 'ADMIN']), async (req, res) => {
   const idPoste = Number(req.body?.id_poste);
   const idCandidat = Number(req.body?.id_candidat);
   if (!Number.isInteger(idPoste) && !Number.isInteger(idCandidat)) {
@@ -303,7 +299,7 @@ router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
   const action = String(req.params.action).replaceAll('-', '_') as TransitionName;
   const rule = transitionRules[action];
   if (!rule) return void res.status(404).json({ error: 'Action inconnue.' });
-  if (!rule.roles.includes(req.user!.role)) return void res.status(403).json({ error: 'Rôle non autorisé pour cette action.' });
+  if (!rule.roles.includes(req.user!.role_applicatif)) return void res.status(403).json({ error: 'Rôle non autorisé pour cette action.' });
   const comment = typeof req.body?.commentaire === 'string' ? req.body.commentaire.trim() : '';
   if (!comment) return void res.status(400).json({ error: 'Un commentaire est obligatoire.' });
   if (comment.length > 100) return void res.status(400).json({ error: 'Le commentaire est limité à 100 caractères.' });

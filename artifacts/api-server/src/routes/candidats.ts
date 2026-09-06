@@ -25,7 +25,7 @@ import { Opportunite } from '../services/matching';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 2 } });
-const RECRUITERS = ['REC', 'ADMIN'];
+const RECRUITERS = ['RECRUTEUR', 'ADMIN'];
 const actionUpload = multer({ storage: multer.memoryStorage(), limits: { files: 2, fileSize: 10 * 1024 * 1024 } });
 
 /* This order is the published 48-column CRM exchange contract. */
@@ -162,7 +162,18 @@ function validateAll(rows: Record<string,string>[], r: Refs, existingWebKeys: Se
     return result;
   });
 }
-function self(req: any, id: string | string[]) { return req.user!.role !== 'CAN' || String(req.user!.id_candidat) === String(id); }
+function self(req: any, id: string | string[]) { return req.user!.role_applicatif !== 'CANDIDAT' || String(req.user!.id_candidat) === String(id); }
+async function cmCanAccessCandidate(req: any, id: string | string[]): Promise<boolean> {
+  if (req.user!.role_applicatif !== 'CM') return true;
+  const result = await pool.query(
+    `SELECT 1 FROM opportunite o
+     JOIN fiche_de_voeux f ON f.id_fiche_de_voeux=o.id_fiche_de_voeux
+     JOIN gere_poste gp ON gp.id_poste=o.id_poste
+     WHERE f.id_candidat=$1 AND gp.id_contact=$2 LIMIT 1`,
+    [id, req.user!.id_contact],
+  );
+  return result.rows.length > 0;
+}
 const DATE_FORM_FIELDS = new Set(['date_naissance', 'perso_date_mariage', 'projet_date_depart_souhaitee', 'date_depart_souhaite', 'date_revue']);
 const formValue = (field: string, value: unknown) => DATE_FORM_FIELDS.has(field) ? nullableDate(value) : value;
 const referenceId = (item: unknown, idField: string) => {
@@ -224,8 +235,8 @@ async function transition(client: any, id: string, state: string, actor: string,
   await client.query('INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES($1,$2,$3,$4)', [actor, note, state, id]);
 }
 
-router.get('/import/template', requireRole(['REC','ADMIN']), (_req,res) => { res.type('text/csv').attachment('template_candidats_dcc.csv').send(`${CSV_COLUMNS.join(',')}\n`); });
-router.post('/import/verifier', requireRole(['REC','ADMIN']), upload.single('file'), async (req,res) => {
+router.get('/import/template', requireRole(RECRUITERS), (_req,res) => { res.type('text/csv').attachment('template_candidats_dcc.csv').send(`${CSV_COLUMNS.join(',')}\n`); });
+router.post('/import/verifier', requireRole(RECRUITERS), upload.single('file'), async (req,res) => {
   if (!req.file) return void res.status(400).json({ error: 'Aucun fichier reçu.' });
   try { const p = parsed(req); const h = headers(p.meta.fields); if (h) return void res.status(400).json({error:h}); if (p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`}); const [r, existingWebKeys]=await Promise.all([refs(),existingCandidateWebKeys(p.data)]); res.json({ lignes:validateAll(p.data,r,existingWebKeys) }); } catch (e) { console.error(e); res.status(500).json({error:'Erreur interne du serveur.'}); }
 });
@@ -235,7 +246,7 @@ router.post('/import/verifier', requireRole(['REC','ADMIN']), upload.single('fil
  * Liste tous les candidats (recruteurs et CM uniquement).
  * Développé en détail au prompt 3.
  */
-router.post('/import/executer', requireRole(['REC','ADMIN']), upload.single('file'), async (req,res) => {
+router.post('/import/executer', requireRole(RECRUITERS), upload.single('file'), async (req,res) => {
   if (!req.file) return void res.status(400).json({error:'Aucun fichier reçu.'});
   const client = await pool.connect();
   try {
@@ -273,7 +284,8 @@ router.post('/import/executer', requireRole(['REC','ADMIN']), upload.single('fil
       const has=await client.query('SELECT 1 FROM user_ WHERE id_contact=$1',[idContact]);
       if(!has.rows.length) {
         const temporaryPassword = `Dcc-${randomBytes(12).toString('base64url')}`;
-        await client.query('INSERT INTO user_(login,password,id_contact) VALUES($1,$2,$3)',[row.email.trim(),await bcrypt.hash(temporaryPassword,12),idContact]);
+        await client.query(`INSERT INTO user_(login,password,id_contact,role_applicatif)
+          VALUES($1,$2,$3,'CANDIDAT')`,[row.email.trim(),await bcrypt.hash(temporaryPassword,12),idContact]);
         invitations.push({ email: row.email.trim(), prenom: text(row.prenom), temporaryPassword });
       }
     }
@@ -360,7 +372,7 @@ router.get('/filtres/:colonne', requireRole(RECRUITERS), async (req,res) => {
  * Référentiels actifs nécessaires aux éditeurs du dossier et de la fiche de vœux.
  * Cette route est accessible au candidat car elle ne retourne que des libellés publics.
  */
-router.get('/referentiels/voeux', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN']), async (_req,res) => {
+router.get('/referentiels/voeux', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async (_req,res) => {
   try {
     const [durees, environnements, hebergements, competences, langues, niveauxLangue, regions, domaines, aides] = await Promise.all([
       pool.query("SELECT id_duree id, periode label FROM duree WHERE COALESCE(active,true) ORDER BY periode"),
@@ -395,8 +407,9 @@ router.get('/referentiels/voeux', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMI
  * Détail complet d'un candidat.
  * Développé au prompt 3.
  */
-router.get('/:id', requireRole(['REC', 'CM1', 'CM2', 'CHZ', 'ADMIN', 'CAN']), async (req, res) => {
+router.get('/:id', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async (req, res) => {
   if (!self(req, req.params.id)) return void res.status(403).json({ error: 'Accès refusé à ce dossier.' });
+  if (!(await cmCanAccessCandidate(req, req.params.id))) return void res.status(403).json({ error: 'Accès refusé à ce dossier.' });
   try {
     const result = await pool.query(
       `SELECT c.*, co.nom_contact, co.prenom_contact, co.email_contact, co.tel_contact,
@@ -523,7 +536,7 @@ router.patch('/:id/date-revue', requireRole(RECRUITERS), async (req,res) => {
   try { await pool.query('UPDATE candidat SET date_revue=$1,date_revue_modifiee_par=$2,date_revue_modifiee_le=CURRENT_DATE WHERE id_candidat=$3',[date,`${req.user!.prenom} ${req.user!.nom}`,req.params.id]);res.json({message:'Date de revue mise à jour.'}); }catch(e){console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});}
 });
 
-router.get('/configuration/pieces-jointes', requireRole(['REC','ADMIN','CAN','CM1','CM2','CHZ']), (_req,res) => {
+router.get('/configuration/pieces-jointes', requireRole(['RECRUTEUR','ADMIN','CANDIDAT','CM']), (_req,res) => {
   res.json({storageUrl:process.env.PIECE_JOINTE_STORAGE_URL || null});
 });
 
@@ -540,7 +553,7 @@ router.post('/:id/annulerCandidature', requireRole(RECRUITERS), actionUpload.arr
 router.post('/:id/valider_session_choisir', requireRole(RECRUITERS), actionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'ATA'));
 
 /** Vœux are the only writable surface for a candidate, within the state-specific window. */
-router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) => {
+router.patch('/:id/voeux', requireRole(['CANDIDAT', ...RECRUITERS]), async (req,res) => {
   if(!self(req,req.params.id)) return void res.status(403).json({error:'Accès refusé à ce dossier.'});
   const client=await pool.connect();
   try { await client.query('BEGIN'); const found=await client.query('SELECT c.id_etat_candidat,f.* FROM candidat c LEFT JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE OF c',[req.params.id]); if(!found.rows.length)throw new Error('NOT_FOUND'); let f=found.rows[0];
@@ -548,7 +561,7 @@ router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) 
       const created=await client.query('INSERT INTO fiche_de_voeux(id_candidat,part_seul) VALUES($1,false) ON CONFLICT(id_candidat) DO UPDATE SET id_candidat=EXCLUDED.id_candidat RETURNING *',[req.params.id]);
       f={...created.rows[0],id_etat_candidat:found.rows[0].id_etat_candidat};
     }
-    const candidate=req.user!.role==='CAN'; const open=!f.verrouille && ((f.id_etat_candidat==='AP2'&&!f.flag_fiche_de_voeux_soumise)||(f.id_etat_candidat==='CHO'&&!f.date_voeux_definitifs));
+    const candidate=req.user!.role_applicatif==='CANDIDAT'; const open=!f.verrouille && ((f.id_etat_candidat==='AP2'&&!f.flag_fiche_de_voeux_soumise)||(f.id_etat_candidat==='CHO'&&!f.date_voeux_definitifs));
     if(candidate&&!open)throw new Error('LOCKED');
     const candidateFields=['zone_orange','conditions_spartiates','hopital_proche','fonctionnaire_dispo_demandee','date_depart_souhaite','nouveau_poste','nouvelle_langue','competences_a_developper','centres_interret','categorie_ecclesiale','categorie_ecclesiale_detail'];
     const allowed=candidate?candidateFields:[...candidateFields,'part_seul','acces_candidat','verrouille'];
@@ -641,7 +654,7 @@ router.patch('/:id/voeux', requireRole(['CAN', ...RECRUITERS]), async (req,res) 
     await client.query('COMMIT');res.json({message:'Vœux mis à jour.'});
   }catch(e:any){
     await client.query('ROLLBACK');
-    console.error('Erreur PATCH vœux :', {id:req.params.id, role:req.user?.role, message:e.message});
+    console.error('Erreur PATCH vœux :', {id:req.params.id, role:req.user?.role_applicatif, message:e.message});
     const message=String(e.message);
     res.status(message==='NOT_FOUND'?404:message==='LOCKED'?403:400).json({
       error:message==='LOCKED'
@@ -745,7 +758,7 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
   }
 }
 
-router.post('/:id/soumettre-voeux-provisoire', requireRole(['CAN', ...RECRUITERS]), (req,res) => void submitVoeux(req,res,false));
-router.post('/:id/soumettre-voeux-definitifs', requireRole(['CAN']), (req,res) => void submitVoeux(req,res,true));
+router.post('/:id/soumettre-voeux-provisoire', requireRole(['CANDIDAT', ...RECRUITERS]), (req,res) => void submitVoeux(req,res,false));
+router.post('/:id/soumettre-voeux-definitifs', requireRole(['CANDIDAT']), (req,res) => void submitVoeux(req,res,true));
 
 export default router;
