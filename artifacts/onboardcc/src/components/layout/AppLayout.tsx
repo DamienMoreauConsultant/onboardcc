@@ -16,6 +16,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     switch (user.role) {
       case 'REC':
         return [
+          { label: 'Home', href: '/recruteur', icon: LayoutDashboard },
           { label: 'Candidats', href: '/recruteur/candidats', icon: Users },
           { label: 'Postes', href: '/recruteur/postes', icon: Briefcase },
         ];

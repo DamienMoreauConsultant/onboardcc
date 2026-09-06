@@ -1,0 +1,117 @@
+# PROMPT 4j — Écran d'accueil Recruteur (cockpit) + Annuler affectation candidat
+# Référence : Correctif_DCC_20260904.md, issues P4_31, P4_32
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ============================================================================
+
+## 0. Script SQL préalable
+
+```sql
+-- P4_31 : délai de réponse pour l'état "Accord de principe" (ACP), aujourd'hui NULL (décision A07
+-- du 26/08/2026, volontairement sans délai à l'époque — révisée le 04/09/2026 par Damien).
+-- ⚠️ 15 jours = valeur PROPOSÉE par défaut (double du délai MEL, 5j) — Damien peut l'ajuster
+-- librement ensuite avec un simple UPDATE, aucune dépendance de code sur cette valeur précise.
+UPDATE etat_candidat SET delais_de_reponse = 15 WHERE id_etat_candidat = 'ACP';
+
+-- P4_32 : nouvel état opportunité pour "Annuler affectation"
+INSERT INTO etat_opportunite (designation, active) VALUES ('Rejet après affectation', true);
+```
+
+---
+
+## 1. Écran d'accueil (cockpit) Recruteur (P4_31)
+
+Nouvel écran, nouvelle entrée de menu "Home" (en haut du menu latéral, rôle `RECRUTEUR`).
+
+### 1.1 KPI
+
+- **Candidats en ATA** : `COUNT(candidat) WHERE etat = 'ATA'`.
+- **Candidats en Accepté** : `COUNT(candidat) WHERE etat = 'Accepté'` (le libellé métier exact posé
+  par `accordDefinitif()` est "Accepté", pas "Accord définitif" — utilise ce badge/libellé même si
+  le KPI peut être titré "Accord définitif" à l'écran pour rester lisible par le recruteur).
+
+### 1.2 Liste d'alertes — mécanisme générique (pas 2 règles codées en dur)
+
+Pour **chaque état candidat dont `etat_candidat.delais_de_reponse` n'est pas `NULL`** (aujourd'hui :
+MEL=5j, ACP=15j après ce correctif, ACC=8j), calcule pour chaque candidat actuellement dans cet état :
+
+```sql
+-- Pseudo-requête : date d'entrée dans l'état courant = la ligne `etape` la plus récente
+-- (id_historique le plus grand, cohérent avec le tri retenu en P4_28) où id_etat_candidat
+-- correspond à l'état actuel du candidat.
+SELECT c.id_candidat, c.nom_candidat, c.prenom_candidat, ec.designation AS etat,
+       e.date_evenement AS date_entree_etat, ec.delais_de_reponse
+FROM candidat c
+JOIN etat_candidat ec ON ec.id_etat_candidat = c.etat
+JOIN LATERAL (
+  SELECT date_evenement
+  FROM etape
+  WHERE id_candidat = c.id_candidat AND id_etat_candidat = c.etat
+  ORDER BY id_historique DESC
+  LIMIT 1
+) e ON true
+WHERE ec.delais_de_reponse IS NOT NULL
+  AND CURRENT_DATE > e.date_evenement + (ec.delais_de_reponse || ' days')::interval
+```
+
+**Affichage** : une ligne par candidat en dépassement, format libre mais informatif, ex. :
+`{Prénom} {Nom} est toujours "{désignation état}" depuis {nb jours réels} jours (délai autorisé :
+{delais_de_reponse} jours)`.
+
+⚠️ **Calculé à l'affichage, pas persisté** — pas de nouvelle table d'alertes, la liste se
+recalcule à chaque chargement de l'écran (reste toujours exacte, pas de risque de désynchronisation
+ni de doublon). Si Damien veut un historique des alertes déjà vues plus tard, ce sera un correctif
+séparé, pas fait ici.
+
+**Point de vigilance signalé, pas décidé ici** : ce mécanisme surveille automatiquement TOUS les
+états à délai configuré, y compris ACC (déjà 8j depuis A07) — un candidat resté "Accepté" trop
+longtemps sans passer "Affecté" apparaîtra donc aussi dans la liste, en plus de MEL et ACP. C'est
+une conséquence naturelle du mécanisme générique, pas un ajout arbitraire — signale-le à Damien
+dans le rapport de complétion, ne le retire pas sans qu'il le demande explicitement.
+
+### 1.3 Test réel avant de livrer
+
+1. Vérifier les 2 KPI sur des données réelles (compter à la main via SQL et comparer).
+2. Prendre un candidat de test en "Mis en lien" depuis plus de 5 jours (ou modifier temporairement
+   la date de la ligne `etape` correspondante, puis restaurer) → doit apparaître dans la liste
+   d'alertes avec le bon nombre de jours.
+3. Vérifier qu'un candidat en "Mis en lien" depuis moins de 5 jours n'apparaît pas.
+4. Vérifier qu'un candidat dans un état sans délai configuré (ex. ATA) n'apparaît jamais dans la
+   liste, quelle que soit son ancienneté dans cet état.
+
+---
+
+## 2. Bouton "Annuler affectation" (P4_32)
+
+### 2.1 Diagnostic préalable — candidat "Affecté" introuvable en recherche
+
+Avant de corriger : identifie précisément pourquoi un candidat à l'état "Affecté" n'apparaît pas
+dans les résultats de `/recruteur/candidats` (recherche et/ou liste). Rapporte s'il s'agit d'un
+filtre volontaire sur les états terminaux (auquel cas retire ce filtre, ou ajoute une option pour
+l'inclure) ou d'un vrai bug (pagination, jointure, filtre par défaut mal posé...).
+
+### 2.2 Bouton "Annuler affectation"
+
+Disponible sur l'écran OD, pour une opportunité à l'état "Affecté" (le bouton n'apparaît que sur
+**cette** opportunité précise, pas sur les autres opportunités du même candidat).
+
+**Effet, dans une seule transaction** :
+1. Réutilise `changement_hypothese_candidat()` (réactivation R9, `prompt4.txt` §4) pour rouvrir les
+   opportunités sœurs du candidat et du poste concernés : `flag_opportunite_obsolete = false` et
+   `flag_opportunite_non_retenu = false` sur celles qui les avaient à `true`.
+2. **En plus de R9** (qui ne couvre pas ces 2 points) :
+   - Pose l'opportunité concernée (celle sur laquelle le bouton a été cliqué) à l'état
+     **"Rejet après affectation"** (créé au §0).
+   - Remet `candidat.etat` à **`ATA`** explicitement (ne pas laisser R9 déterminer seul l'état
+     résultant du candidat pour cette action précise).
+3. `fiche_de_poste.id_etat_poste` repasse à "À pourvoir" (ou "Pré-réservé" s'il existe encore une
+   autre opportunité "Approuvé CM" sur ce poste — même logique de déverrouillage que §3 de
+   `prompt4.txt`, à réutiliser telle quelle).
+
+### 2.3 Test réel avant de livrer
+
+1. Sur un dossier de test explicitement nommé (même discipline que `prompt4i`), simuler un
+   candidat "Affecté" avec au moins une opportunité sœur `flag_opportunite_obsolete = true`.
+2. Cliquer "Annuler affectation" → vérifier : `candidat.etat = 'ATA'`, l'opportunité concernée à
+   "Rejet après affectation", l'opportunité sœur avec `flag_opportunite_obsolete = false`.
+3. Vérifier que le candidat redevient trouvable dans `/recruteur/candidats` une fois revenu à ATA.
+4. Restaurer intégralement les données de test après vérification.

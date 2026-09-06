@@ -14,6 +14,7 @@ export type OpportunityState =
   | 'Rejeté CM'
   | 'Refus candidat'
   | 'Refus partenaire'
+  | 'Rejet après affectation'
   | 'Obsolète';
 
 export type Opportunity = {
@@ -87,7 +88,8 @@ export type OpportunityAction =
   | 'accord-definitif'
   | 'decision-dcc'
   | 'refuser-candidat'
-  | 'refuser-partenaire';
+  | 'refuser-partenaire'
+  | 'annuler-affectation';
 
 export const opportunitesApi = {
   list: async (filters: { id_poste?: number; id_candidat?: number; approbation?: 'proposee-au-cm' | 'proposee-au-cm-historique' }) =>

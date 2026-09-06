@@ -235,7 +235,8 @@ type TransitionName =
   | 'accord_definitif'
   | 'decision_dcc'
   | 'refuser_candidat'
-  | 'refuser_partenaire';
+  | 'refuser_partenaire'
+  | 'annuler_affectation';
 
 const transitionRules: Record<TransitionName, {
   roles: string[];
@@ -253,6 +254,7 @@ const transitionRules: Record<TransitionName, {
   decision_dcc: { roles: ['REC', 'ADMIN'], from: ['Accepté'], to: 'Affecté', commentField: 'appreciation_recruteur' },
   refuser_candidat: { roles: ['CAN'], from: ['Mise en lien', 'Accord de principe'], to: 'Refus candidat' },
   refuser_partenaire: { roles: ['REC', 'CHZ', 'ADMIN'], from: ['Accepté'], to: 'Refus partenaire', commentField: 'appreciation_recruteur' },
+  annuler_affectation: { roles: ['REC'], from: ['Affecté'], to: 'Rejet après affectation', commentField: 'appreciation_recruteur' },
 };
 
 router.post('/:id/recalculer', requireRole(['REC', 'CHZ', 'ADMIN']), async (req, res) => {
@@ -334,8 +336,22 @@ router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
       if (locks.rows[0].flag_poste_deja_mis_en_lien || locks.rows[0].flag_candidat_deja_mis_en_lien) throw new Error('LOCKED');
     }
 
-    const state = await client.query('SELECT id_etat_opportunite FROM etat_opportunite WHERE designation=$1', [rule.to]);
+    const state = await client.query(
+      'SELECT id_etat_opportunite FROM etat_opportunite WHERE designation=$1 AND COALESCE(active,true)',
+      [rule.to],
+    );
     if (!state.rows.length) throw new Error('STATE');
+    if (action === 'annuler_affectation') {
+      await client.query(
+        `UPDATE opportunite
+         SET flag_opportunite_obsolete=false,
+             flag_opportunite_non_retenu=false
+         WHERE id_opportunite<>$1
+           AND (id_poste=$2 OR id_fiche_de_voeux=$3)
+           AND (COALESCE(flag_opportunite_obsolete,false) OR COALESCE(flag_opportunite_non_retenu,false))`,
+        [opportunity.id_opportunite, opportunity.id_poste, opportunity.id_fiche_de_voeux],
+      );
+    }
     const updates = ['id_etat_opportunite=$1'];
     const values: unknown[] = [state.rows[0].id_etat_opportunite];
     if (rule.commentField) {
@@ -344,6 +360,15 @@ router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
     }
     if (action === 'proposer_cm') updates.push('flag_opportunite_proposee_a_cm=true');
     if (action === 'approuver') updates.push('flag_opportunite_retenue=true');
+    if (action === 'annuler_affectation') {
+      // Les opportunités sœurs sont rouvertes, mais l'opportunité annulée reste
+      // explicitement non retenue et ne doit plus être considérée comme retenue.
+      updates.push(
+        'flag_opportunite_obsolete=false',
+        'flag_opportunite_non_retenu=true',
+        'flag_opportunite_retenue=false',
+      );
+    }
     if (['rejeter_cm', 'rejeter_recruteur', 'refuser_candidat', 'refuser_partenaire'].includes(action)) {
       updates.push('flag_opportunite_non_retenu=true');
     }
@@ -376,6 +401,43 @@ router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
          SET flag_opportunite_obsolete=true
          WHERE id_opportunite<>$1 AND (id_poste=$2 OR id_fiche_de_voeux=$3)`,
         [opportunity.id_opportunite, opportunity.id_poste, opportunity.id_fiche_de_voeux],
+      );
+    }
+    if (action === 'annuler_affectation') {
+      const ataState = await client.query(
+        'SELECT delais_de_reponse FROM etat_candidat WHERE id_etat_candidat=$1',
+        ['ATA'],
+      );
+      if (!ataState.rows.length) throw new Error('CANDIDATE_STATE');
+      await client.query(
+        `UPDATE candidat
+         SET id_etat_candidat='ATA',
+             date_revue=CASE WHEN $1::int IS NULL THEN NULL ELSE CURRENT_DATE+$1::int END
+         WHERE id_candidat=$2`,
+        [ataState.rows[0].delais_de_reponse, opportunity.id_candidat],
+      );
+      await client.query(
+        'UPDATE fiche_de_voeux SET flag_candidat_deja_mis_en_lien=false WHERE id_fiche_de_voeux=$1',
+        [opportunity.id_fiche_de_voeux],
+      );
+      await client.query(
+        `UPDATE fiche_de_poste
+         SET flag_poste_deja_mis_en_lien=false,
+             id_etat_poste=(SELECT id_etat_poste FROM etat_poste WHERE designation=CASE
+               WHEN EXISTS(
+                 SELECT 1
+                 FROM opportunite ox
+                 JOIN etat_opportunite ex ON ex.id_etat_opportunite=ox.id_etat_opportunite
+                 WHERE ox.id_poste=$1
+                   AND ox.id_opportunite<>$2
+                   AND ex.designation='Approuvé CM'
+               ) THEN 'Pré-réservé' ELSE 'À pourvoir' END)
+         WHERE id_poste=$1`,
+        [opportunity.id_poste, opportunity.id_opportunite],
+      );
+      await client.query(
+        'INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES($1,$2,$3,$4)',
+        [`${req.user!.prenom} ${req.user!.nom}`, comment, 'ATA', opportunity.id_candidat],
       );
     }
     if (['refuser_candidat', 'refuser_partenaire'].includes(action)) {
@@ -415,6 +477,12 @@ router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
     if (err.message === 'NOT_FOUND') return void res.status(404).json({ error: 'Opportunité introuvable.' });
     if (err.message === 'CANDIDATE_NOT_ATA') {
       return void res.status(409).json({ error: 'Le candidat doit être à l’état Attente affectation avant de pouvoir être mis en lien sur cette opportunité.' });
+    }
+    if (err.message === 'STATE') {
+      return void res.status(409).json({ error: 'L’état cible de cette transition est indisponible.' });
+    }
+    if (err.message === 'CANDIDATE_STATE') {
+      return void res.status(409).json({ error: 'L’état Attente affectation est indisponible.' });
     }
     if (['PRECONDITION', 'LOCKED'].includes(err.message)) return void res.status(409).json({ error: err.message === 'LOCKED' ? 'Le candidat ou le poste est déjà engagé dans une autre mise en lien.' : 'Cette transition n’est pas autorisée depuis l’état actuel.' });
     res.status(500).json({ error: 'Erreur interne du serveur.' });

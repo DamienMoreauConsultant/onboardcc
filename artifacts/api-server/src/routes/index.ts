@@ -20,6 +20,7 @@ import adminRouter from "./admin";
 import candidatsRouter from "./candidats";
 import postesRouter from "./postes";
 import opportunitesRouter from "./opportunites";
+import recruteurRouter from "./recruteur";
 
 const router: IRouter = Router();
 
@@ -40,5 +41,7 @@ router.use("/postes", postesRouter);
 
 // Opportunités de matching (développé au prompt 4)
 router.use("/opportunites", opportunitesRouter);
+
+router.use("/recruteur", recruteurRouter);
 
 export default router;

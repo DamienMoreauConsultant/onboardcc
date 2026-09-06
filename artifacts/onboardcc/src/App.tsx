@@ -18,6 +18,7 @@ import CandidatsList from '@/pages/candidats/CandidatsList';
 import CandidatImport from '@/pages/candidats/CandidatImport';
 import CandidatDetail from '@/pages/candidats/CandidatDetail';
 import OpportuniteDetail from '@/pages/opportunites/OpportuniteDetail';
+import Recruiter from '@/pages/Recruiter';
 
 const queryClient = new QueryClient();
 
@@ -29,7 +30,7 @@ function Router() {
       <Route path="/recruteur">
         <RoleGuard allowedRoles={['REC']}>
           <AppLayout>
-            <CandidatsList />
+            <Recruiter />
           </AppLayout>
         </RoleGuard>
       </Route>

@@ -315,7 +315,7 @@ router.get('/', requireRole(RECRUITERS), async (req, res) => {
         JOIN contact co ON co.id_contact = c.id_contact
         JOIN etat_candidat ec ON ec.id_etat_candidat = c.id_etat_candidat
         LEFT JOIN fiche_de_voeux f ON f.id_candidat = c.id_candidat
-        WHERE ((cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('AFF','NEL','NCA'))
+        WHERE ((cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('NEL','NCA'))
            OR ec.designation=ANY($1::text[]))${generatedFilters.sql}
       ),
       matching_candidates AS (

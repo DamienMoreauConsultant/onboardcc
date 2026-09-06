@@ -15,6 +15,7 @@ import { FieldHelp } from '@/pages/candidats/components/FieldHelp';
 import { WarningScore } from './WarningScore';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateFR } from '@/lib/date';
+import { useAuth } from '@/contexts/AuthContext';
 
 type Props = { mode: 'recruteur' | 'cm' | 'candidat' };
 
@@ -39,6 +40,9 @@ function getDetailActions(state: OpportunityState, mode: Props['mode']): Availab
       { action: 'decision-dcc', label: 'Décision DCC' },
       { action: 'refuser-partenaire', label: 'Refus partenaire', destructive: true },
     ];
+    if (state === 'Affecté') return [
+      { action: 'annuler-affectation', label: 'Annuler affectation', destructive: true },
+    ];
   } else if (mode === 'candidat') {
     if (state === 'Mise en lien') return [
       { action: 'accord-de-principe', label: 'Accord de principe' },
@@ -53,6 +57,7 @@ function getDetailActions(state: OpportunityState, mode: Props['mode']): Availab
 }
 
 export default function OpportuniteDetail({ mode }: Props) {
+  const { user } = useAuth();
   const [, params] = useRoute(`/${mode}/opportunites/:id`);
   const [detail, setDetail] = useState<OpportunityDetail | null>(null);
   const [error, setError] = useState('');
@@ -132,7 +137,8 @@ export default function OpportuniteDetail({ mode }: Props) {
     }
   };
 
-  const availableActions = getDetailActions(detail.etat_designation, mode);
+  const availableActions = getDetailActions(detail.etat_designation, mode)
+    .filter((candidateAction) => candidateAction.action !== 'annuler-affectation' || user?.role === 'REC');
   const candidateCanBeLinked = detail.etat_candidat_code === 'ATA';
   const cmName = [detail.cm_contact_json?.prenom, detail.cm_contact_json?.nom].filter(Boolean).join(' ') || 'votre chargé de mission';
 
