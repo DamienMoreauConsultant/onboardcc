@@ -22,6 +22,7 @@ import pool from '../db-pg';
 import { nullableDate, parseFrenchDate } from '../lib/frenchDate';
 import { sendCandidateInvitations, smtpIsConfigured, type CandidateInvitation } from '../lib/candidateInvitations';
 import { Opportunite } from '../services/matching';
+import { actionUpload, cleanupUploadedFiles, uploadedFileUrls, verifyUploadedFiles } from '../lib/actionUploads';
 
 const router = Router();
 const csvFileFilter: multer.Options['fileFilter'] = (_req, file, callback) => {
@@ -30,14 +31,9 @@ const csvFileFilter: multer.Options['fileFilter'] = (_req, file, callback) => {
   if (extensionOk && mimeOk) callback(null, true);
   else callback(new Error('Seuls les fichiers CSV sont autorisés.'));
 };
-const attachmentFileFilter: multer.Options['fileFilter'] = (_req, file, callback) => {
-  const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
-  if (allowed.includes(file.mimetype)) callback(null, true);
-  else callback(new Error('Type de pièce jointe non autorisé.'));
-};
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 }, fileFilter: csvFileFilter });
 const RECRUITERS = ['RECRUTEUR', 'ADMIN'];
-const actionUpload = multer({ storage: multer.memoryStorage(), limits: { files: 2, fileSize: 10 * 1024 * 1024 }, fileFilter: attachmentFileFilter });
+const candidateActionUpload = actionUpload('candidats');
 
 /* This order is the published 48-column CRM exchange contract. */
 const CSV_COLUMNS = [
@@ -568,16 +564,18 @@ router.get('/configuration/pieces-jointes', requireRole(['RECRUTEUR','ADMIN','CA
 });
 
 async function action(req:any,res:any,target:string, extra?: (c:any)=>Promise<void>) {
-  const client=await pool.connect(); try { await client.query('BEGIN'); const row=await client.query('SELECT c.id_etat_candidat,c.id_contact,f.id_fiche_de_voeux,f.flag_candidat_deja_mis_en_lien,f.flag_fiche_de_voeux_soumise,f.date_voeux_provisoires,f.date_voeux_definitifs FROM candidat c JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE',[req.params.id]); if(!row.rows.length)throw new Error('NOT_FOUND'); const c=row.rows[0];
+  const files=(req.files as Express.Multer.File[] | undefined) ?? [];
+  const client=await pool.connect(); try { await verifyUploadedFiles(files); if(files.length && !optionalText(req.body.pj_description))throw new Error('ATTACHMENT_DESCRIPTION'); await client.query('BEGIN'); const row=await client.query('SELECT c.id_etat_candidat,c.id_contact,f.id_fiche_de_voeux,f.flag_candidat_deja_mis_en_lien,f.flag_fiche_de_voeux_soumise,f.date_voeux_provisoires,f.date_voeux_definitifs FROM candidat c JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE',[req.params.id]); if(!row.rows.length)throw new Error('NOT_FOUND'); const c=row.rows[0];
     if(!req.body?.commentaire?.trim())throw new Error('COMMENT'); if(target==='NEL'&&(c.id_etat_candidat!=='AP2'||c.flag_candidat_deja_mis_en_lien))throw new Error('PRE'); if(target==='CHO'&&(c.id_etat_candidat!=='AP2'||(!c.flag_fiche_de_voeux_soumise&&!c.date_voeux_provisoires)))throw new Error('VOEUX_PROVISOIRES'); if(target==='NCA'&&!['CHO','ATA'].includes(c.id_etat_candidat))throw new Error('PRE'); if(target==='ATA'&&(c.id_etat_candidat!=='CHO'||!c.date_voeux_definitifs))throw new Error('VOEUX_DEFINITIFS');
-    const attachmentUrls=[req.body.url1_piece_jointe,req.body.url2_piece_jointe].map((value:unknown)=>optionalText(value));
+    const uploadedUrls=uploadedFileUrls('candidats',String(req.params.id),files);
+    const attachmentUrls=(uploadedUrls.length ? uploadedUrls : [req.body.url1_piece_jointe,req.body.url2_piece_jointe].map((value:unknown)=>optionalText(value))).slice(0,2);
     for(const url of attachmentUrls) if(url && (!/^https?:\/\//i.test(url)||url.length>250)) throw new Error('URL');
     await transition(client,req.params.id,target,`${req.user!.prenom} ${req.user!.nom}`,req.body.commentaire); await client.query('UPDATE etape SET pj_description=$1,url1_piece_jointe=$2,url2_piece_jointe=$3 WHERE id_historique=(SELECT max(id_historique) FROM etape WHERE id_candidat=$4)',[optionalText(req.body.pj_description),attachmentUrls[0],attachmentUrls[1],req.params.id]); if(target==='CHO')await client.query('UPDATE fiche_de_voeux SET flag_fiche_de_voeux_soumise=false,verrouille=false,verrouille_par=NULL,date_verrouillage=NULL WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]); if(['NEL','NCA'].includes(target))await client.query('UPDATE user_ SET active=false WHERE id_contact=$1',[c.id_contact]); if(target==='NCA')await client.query('UPDATE opportunite SET flag_opportunite_non_retenu=true WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]); if(extra)await extra(c); await client.query('COMMIT');res.json({message:'Transition effectuée.',etat:target});
-  }catch(e:any){await client.query('ROLLBACK'); const messages:Record<string,string>={NOT_FOUND:'Candidat non trouvé.',COMMENT:'Commentaire obligatoire.',URL:'Les pièces jointes doivent être des URL HTTP ou HTTPS valides.',VOEUX_PROVISOIRES:'La fiche de vœux provisoire doit être soumise avant de valider cet appel.',VOEUX_DEFINITIFS:'La fiche de vœux définitive doit être soumise avant de valider la session Choisir.'}; const msg=messages[e.message]??'Transition non autorisée pour cet état.';res.status(e.message==='NOT_FOUND'?404:['COMMENT','URL'].includes(e.message)?400:409).json({error:msg});}finally{client.release();}}
-router.post('/:id/rejeter', requireRole(RECRUITERS), actionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'NEL'));
-router.post('/:id/valider_appel2', requireRole(RECRUITERS), actionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'CHO'));
-router.post('/:id/annulerCandidature', requireRole(RECRUITERS), actionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'NCA'));
-router.post('/:id/valider_session_choisir', requireRole(RECRUITERS), actionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'ATA'));
+  }catch(e:any){await client.query('ROLLBACK'); await cleanupUploadedFiles(files); const messages:Record<string,string>={NOT_FOUND:'Candidat non trouvé.',COMMENT:'Commentaire obligatoire.',ATTACHMENT_DESCRIPTION:'La description est obligatoire lorsqu’une pièce jointe est fournie.',URL:'Les pièces jointes doivent être des URL HTTP ou HTTPS valides.',VOEUX_PROVISOIRES:'La fiche de vœux provisoire doit être soumise avant de valider cet appel.',VOEUX_DEFINITIFS:'La fiche de vœux définitive doit être soumise avant de valider la session Choisir.'}; const msg=messages[e.message]??(e instanceof Error?e.message:'Transition non autorisée pour cet état.');res.status(e.message==='NOT_FOUND'?404:['COMMENT','URL','ATTACHMENT_DESCRIPTION'].includes(e.message)?400:409).json({error:msg});}finally{client.release();}}
+router.post('/:id/rejeter', requireRole(RECRUITERS), candidateActionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'NEL'));
+router.post('/:id/valider_appel2', requireRole(RECRUITERS), candidateActionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'CHO'));
+router.post('/:id/annulerCandidature', requireRole(RECRUITERS), candidateActionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'NCA'));
+router.post('/:id/valider_session_choisir', requireRole(RECRUITERS), candidateActionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'ATA'));
 
 /** Vœux are the only writable surface for a candidate, within the state-specific window. */
 router.patch('/:id/voeux', requireRole(['CANDIDAT', ...RECRUITERS]), async (req,res) => {
@@ -771,6 +769,12 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
     } else {
       await Opportunite.creerPourCandidat(fiche.id_fiche_de_voeux, client);
     }
+    if(req.user!.role_applicatif !== 'CANDIDAT') {
+      await client.query(
+        'INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES($1,$2,$3,$4)',
+        [author, definitive ? 'Soumission des vœux définitifs pour le compte du candidat.' : 'Soumission des vœux provisoires pour le compte du candidat.', expectedState, req.params.id],
+      );
+    }
     await client.query('COMMIT');
     res.json({message:definitive?'Vœux définitifs soumis.':'Vœux provisoires soumis.'});
   } catch(e:any) {
@@ -785,7 +789,7 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
   }
 }
 
-router.post('/:id/soumettre-voeux-provisoire', requireRole(['CANDIDAT']), (req,res) => void submitVoeux(req,res,false));
-router.post('/:id/soumettre-voeux-definitifs', requireRole(['CANDIDAT']), (req,res) => void submitVoeux(req,res,true));
+router.post('/:id/soumettre-voeux-provisoire', requireRole(['CANDIDAT', ...RECRUITERS]), (req,res) => void submitVoeux(req,res,false));
+router.post('/:id/soumettre-voeux-definitifs', requireRole(['CANDIDAT', ...RECRUITERS]), (req,res) => void submitVoeux(req,res,true));
 
 export default router;

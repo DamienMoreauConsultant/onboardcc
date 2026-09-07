@@ -42,7 +42,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
   const [action, setAction] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [attachmentDescription, setAttachmentDescription] = useState('');
-  const [attachmentUrls, setAttachmentUrls] = useState(['','']);
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [submitDefinitive, setSubmitDefinitive] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [reviewDate, setReviewDate] = useState('');
@@ -51,10 +51,6 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
   const { data: refs } = useQuery({
     queryKey: ['voeux-references'],
     queryFn: candidatsApi.voeuxReferences,
-  });
-  const { data: attachmentConfig } = useQuery({
-    queryKey: ['attachment-configuration'],
-    queryFn: candidatsApi.attachmentConfiguration,
   });
 
   const reload = useCallback(async (showLoading = false) => {
@@ -148,12 +144,12 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     try {
       await candidatsApi.transition(detail.id_candidat, action as 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', comment, {
         description:attachmentDescription,
-        urls:attachmentUrls,
+        files:attachmentFiles,
       });
       setAction(null);
       setComment('');
       setAttachmentDescription('');
-      setAttachmentUrls(['','']);
+      setAttachmentFiles([]);
       await reload(false);
     } catch (e: any) {
       setError(e.response?.data?.error ?? 'Action impossible.');
@@ -376,7 +372,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirmer cette transition</DialogTitle>
-            <DialogDescription>Un commentaire est obligatoire. Vous pouvez référencer jusqu’à deux pièces déposées dans l’espace partagé.</DialogDescription>
+            <DialogDescription>Un commentaire est obligatoire. Vous pouvez joindre jusqu’à deux fichiers PDF, JPEG ou PNG de 5 Mio maximum chacun.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <Textarea 
@@ -385,18 +381,36 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
               placeholder="Commentaire obligatoire…" 
               className="min-h-[100px]"
             />
-            {safeUrl(attachmentConfig?.storageUrl) && (
-              <a href={safeUrl(attachmentConfig?.storageUrl)!} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline">
-                <ExternalLink className="h-4 w-4"/>Accéder à l’espace de stockage partagé
-              </a>
-            )}
-            <Input value={attachmentDescription} onChange={(e) => setAttachmentDescription(e.target.value)} placeholder="Description des pièces jointes" maxLength={50}/>
-            <Input type="url" value={attachmentUrls[0]} onChange={(e) => setAttachmentUrls([e.target.value,attachmentUrls[1]])} placeholder="URL de la pièce jointe 1"/>
-            <Input type="url" value={attachmentUrls[1]} onChange={(e) => setAttachmentUrls([attachmentUrls[0],e.target.value])} placeholder="URL de la pièce jointe 2"/>
+            <Input
+              type="file"
+              accept="application/pdf,image/jpeg,image/png"
+              multiple
+              onChange={(event) => {
+                const selectedFiles = Array.from(event.target.files ?? []);
+                if (selectedFiles.length > 2) {
+                  setError('Vous pouvez sélectionner au maximum deux pièces jointes.');
+                  event.target.value = '';
+                  setAttachmentFiles([]);
+                  return;
+                }
+                const files = selectedFiles;
+                const invalid = files.find((file) => !['application/pdf', 'image/jpeg', 'image/png'].includes(file.type) || file.size > 5 * 1024 * 1024);
+                if (invalid) {
+                  setError('Chaque pièce jointe doit être un PDF, JPEG ou PNG de 5 Mio maximum.');
+                  event.target.value = '';
+                  setAttachmentFiles([]);
+                  return;
+                }
+                setError('');
+                setAttachmentFiles(files);
+              }}
+            />
+            <p className="text-xs text-muted-foreground">{attachmentFiles.length}/2 fichier(s) sélectionné(s)</p>
+            <Input value={attachmentDescription} onChange={(e) => setAttachmentDescription(e.target.value)} placeholder={attachmentFiles.length ? 'Description obligatoire des pièces jointes' : 'Description des pièces jointes (facultative)'} maxLength={50}/>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAction(null)}>Annuler</Button>
-            <Button disabled={!comment.trim() || busy} onClick={() => void transition()}>
+            <Button variant="outline" onClick={() => { setAction(null); setAttachmentFiles([]); setAttachmentDescription(''); }}>Annuler</Button>
+            <Button disabled={!comment.trim() || (attachmentFiles.length > 0 && !attachmentDescription.trim()) || busy} onClick={() => void transition()}>
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Confirmer
             </Button>
@@ -420,8 +434,12 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
       <AlertDialog open={submitDefinitive !== null} onOpenChange={(open) => !open && setSubmitDefinitive(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Soumettre la fiche de vœux</AlertDialogTitle>
-            <AlertDialogDescription>Après soumission, les vœux seront verrouillés. Confirmer la soumission {submitDefinitive ? 'définitive' : 'provisoire'} ?</AlertDialogDescription>
+            <AlertDialogTitle>{mode === 'recruteur' ? 'Faire pour le compte du candidat' : 'Soumettre la fiche de vœux'}</AlertDialogTitle>
+            <AlertDialogDescription className={mode === 'recruteur' ? 'text-destructive' : undefined}>
+              {mode === 'recruteur'
+                ? `Vous confirmez agir pour le compte du candidat. La soumission ${submitDefinitive ? 'définitive' : 'provisoire'} sera verrouillée et votre identité sera inscrite dans l’historique.`
+                : `Après soumission, les vœux seront verrouillés. Confirmer la soumission ${submitDefinitive ? 'définitive' : 'provisoire'} ?`}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Annuler</AlertDialogCancel>

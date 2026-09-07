@@ -96,8 +96,13 @@ export const opportunitesApi = {
     (await api.get<Opportunity[]>('/opportunites', { params: filters })).data,
   detail: async (id: number) =>
     (await api.get<OpportunityDetail>(`/opportunites/${id}`)).data,
-  transition: async (id: number, action: OpportunityAction, commentaire: string) =>
-    (await api.post(`/opportunites/${id}/${action}`, { commentaire })).data,
+  transition: async (id: number, action: OpportunityAction, commentaire: string, attachments: {description?: string; files?: File[]} = {}) => {
+    const form = new FormData();
+    form.append('commentaire', commentaire);
+    if (attachments.description) form.append('pj_description', attachments.description);
+    attachments.files?.slice(0, 2).forEach((file) => form.append('pieces_jointes', file));
+    return (await api.post(`/opportunites/${id}/${action}`, form)).data;
+  },
   recalculate: async (id: number) =>
     (await api.post(`/opportunites/${id}/recalculer`)).data,
   recalculateList: async (filters: { id_poste?: number; id_candidat?: number }) =>

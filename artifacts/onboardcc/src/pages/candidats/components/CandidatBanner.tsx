@@ -103,7 +103,10 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
                   <Button key={key} size="sm" variant="outline" disabled={busy || (key === 'valider_appel2' && !detail.flag_fiche_de_voeux_soumise && !detail.date_voeux_provisoires)} onClick={() => onAction(key)}>{label}</Button>
                 ))}
                 {status === '2ème appel téléphonique' && !detail.flag_fiche_de_voeux_soumise && !detail.date_voeux_provisoires && (
-                  <Button size="sm" variant="outline" onClick={() => onSubmit(false)} disabled={busy}><Send className="mr-2 h-4 w-4" />Soumettre la fiche</Button>
+                  <Button size="sm" variant="outline" onClick={() => onSubmit(false)} disabled={busy}><Send className="mr-2 h-4 w-4" />Faire pour le compte du candidat</Button>
+                )}
+                {status === 'Session choisir' && !definitiveLocked && (
+                  <Button size="sm" variant="outline" onClick={() => onSubmit(true)} disabled={busy}><Send className="mr-2 h-4 w-4" />Faire pour le compte du candidat</Button>
                 )}
               </>
             ) : mode === 'candidat' ? (

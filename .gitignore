@@ -52,3 +52,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Fichiers téléversés localement (le dossier doit être monté/persisté en production)
+uploads/
+artifacts/api-server/uploads/

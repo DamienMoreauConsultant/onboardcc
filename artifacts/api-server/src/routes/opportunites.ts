@@ -2,10 +2,12 @@ import { Router, type Request } from 'express';
 import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
 import { Opportunite } from '../services/matching';
+import { actionUpload, cleanupUploadedFiles, uploadedFileUrls, verifyUploadedFiles } from '../lib/actionUploads';
 
 const router = Router();
 const ALL_ROLES = ['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT'];
 const STAFF_ROLES = ['RECRUTEUR', 'CM', 'ADMIN'];
+const opportunityActionUpload = actionUpload('opportunites');
 
 const BASE_SELECT = `
   SELECT
@@ -245,8 +247,8 @@ const transitionRules: Record<TransitionName, {
   rejeter_cm: { roles: ['CM'], from: ['Proposée au CM'], to: 'Rejeté CM', commentField: 'commentaire_charge_mission' },
   rejeter_recruteur: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Non qualifié'], to: 'Rejeté recruteur', commentField: 'appreciation_recruteur' },
   mettre_en_lien: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Approuvé CM'], to: 'Mise en lien', commentField: 'appreciation_recruteur' },
-  accord_de_principe: { roles: ['CANDIDAT'], from: ['Mise en lien'], to: 'Accord de principe' },
-  accord_definitif: { roles: ['CANDIDAT'], from: ['Accord de principe'], to: 'Accepté' },
+  accord_de_principe: { roles: ['CANDIDAT', 'RECRUTEUR', 'ADMIN'], from: ['Mise en lien'], to: 'Accord de principe' },
+  accord_definitif: { roles: ['CANDIDAT', 'RECRUTEUR', 'ADMIN'], from: ['Accord de principe'], to: 'Accepté' },
   decision_dcc: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Accepté'], to: 'Affecté', commentField: 'appreciation_recruteur' },
   refuser_candidat: { roles: ['CANDIDAT'], from: ['Mise en lien', 'Accord de principe'], to: 'Refus candidat' },
   refuser_partenaire: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Accepté'], to: 'Refus partenaire', commentField: 'appreciation_recruteur' },
@@ -295,17 +297,41 @@ router.post('/recalculer-liste', requireRole(['RECRUTEUR', 'ADMIN']), async (req
   }
 });
 
-router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
+router.post('/:id/:action', requireRole(ALL_ROLES), opportunityActionUpload.array('pieces_jointes', 2), async (req, res) => {
   const action = String(req.params.action).replaceAll('-', '_') as TransitionName;
   const rule = transitionRules[action];
-  if (!rule) return void res.status(404).json({ error: 'Action inconnue.' });
-  if (!rule.roles.includes(req.user!.role_applicatif)) return void res.status(403).json({ error: 'Rôle non autorisé pour cette action.' });
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  if (!rule) {
+    await cleanupUploadedFiles(files);
+    return void res.status(404).json({ error: 'Action inconnue.' });
+  }
+  if (!rule.roles.includes(req.user!.role_applicatif)) {
+    await cleanupUploadedFiles(files);
+    return void res.status(403).json({ error: 'Rôle non autorisé pour cette action.' });
+  }
   const comment = typeof req.body?.commentaire === 'string' ? req.body.commentaire.trim() : '';
-  if (!comment) return void res.status(400).json({ error: 'Un commentaire est obligatoire.' });
-  if (comment.length > 100) return void res.status(400).json({ error: 'Le commentaire est limité à 100 caractères.' });
+  const attachmentDescription = typeof req.body?.pj_description === 'string' ? req.body.pj_description.trim() : '';
+  if (!comment) {
+    await cleanupUploadedFiles(files);
+    return void res.status(400).json({ error: 'Un commentaire est obligatoire.' });
+  }
+  const acceptanceAction = ['accord_de_principe', 'accord_definitif'].includes(action);
+  if (comment.length > (acceptanceAction ? 1000 : 100)) {
+    await cleanupUploadedFiles(files);
+    return void res.status(400).json({ error: acceptanceAction ? 'Le texte de confirmation est limité à 1 000 caractères.' : 'Le commentaire est limité à 100 caractères.' });
+  }
+  if (files.length && !attachmentDescription) {
+    await cleanupUploadedFiles(files);
+    return void res.status(400).json({ error: 'La description est obligatoire lorsqu’une pièce jointe est fournie.' });
+  }
+  if (files.length && !['mettre_en_lien', 'accord_de_principe', 'accord_definitif', 'decision_dcc'].includes(action)) {
+    await cleanupUploadedFiles(files);
+    return void res.status(400).json({ error: 'Les pièces jointes ne sont pas disponibles pour cette action.' });
+  }
 
   const client = await pool.connect();
   try {
+    await verifyUploadedFiles(files);
     await client.query('BEGIN');
     const current = await client.query(
       `${BASE_SELECT} WHERE o.id_opportunite=$1 FOR UPDATE OF o,fdv,fp,cand`,
@@ -459,9 +485,10 @@ router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
         accord_definitif: 'ACC',
         decision_dcc: 'AFF',
       };
+      const attachmentUrls = uploadedFileUrls('opportunites', String(opportunity.id_opportunite), files);
       await client.query(
-        'INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES($1,$2,$3,$4)',
-        [`${req.user!.prenom} ${req.user!.nom}`, comment, candidateState[action], opportunity.id_candidat],
+        'INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat,pj_description,url1_piece_jointe,url2_piece_jointe) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [`${req.user!.prenom} ${req.user!.nom}`, comment, candidateState[action], opportunity.id_candidat, attachmentDescription || null, attachmentUrls[0] ?? null, attachmentUrls[1] ?? null],
       );
     }
 
@@ -469,6 +496,7 @@ router.post('/:id/:action', requireRole(ALL_ROLES), async (req, res) => {
     res.json({ message: 'Transition effectuée.', etat: rule.to });
   } catch (err: any) {
     await client.query('ROLLBACK');
+    await cleanupUploadedFiles(files);
     console.error('Erreur transition opportunité :', { id: req.params.id, action, message: err.message });
     if (err.message === 'NOT_FOUND') return void res.status(404).json({ error: 'Opportunité introuvable.' });
     if (err.message === 'CANDIDATE_NOT_ATA') {

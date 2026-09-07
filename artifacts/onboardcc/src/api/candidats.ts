@@ -49,14 +49,12 @@ export const candidatsApi = {
     return (await api.post('/candidats/import/executer', form, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
   },
   save: async (id: number, section: 'etat-civil' | 'projet' | 'voeux', values: Record<string, unknown>) => (await api.patch(`/candidats/${id}/${section}`, values)).data,
-  transition: async (id: number, action: 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', commentaire: string, attachments: {description?: string; urls?: string[]} = {}) => {
+  transition: async (id: number, action: 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', commentaire: string, attachments: {description?: string; files?: File[]} = {}) => {
     const form = new FormData();
     form.append('commentaire', commentaire);
     if (attachments.description) form.append('pj_description', attachments.description);
-    attachments.urls?.slice(0, 2).forEach((url,index) => {
-      if(url) form.append(`url${index+1}_piece_jointe`,url);
-    });
-    return (await api.post(`/candidats/${id}/${action}`, form, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
+    attachments.files?.slice(0, 2).forEach((file) => form.append('pieces_jointes', file));
+    return (await api.post(`/candidats/${id}/${action}`, form)).data;
   },
   reviseReviewDate: async (id: number, date_revue: string | null) => (await api.patch(`/candidats/${id}/date-revue`, { date_revue })).data,
   submitVoeux: async (id: number, definitive: boolean) => (await api.post(`/candidats/${id}/${definitive ? 'soumettre-voeux-definitifs' : 'soumettre-voeux-provisoire'}`)).data,

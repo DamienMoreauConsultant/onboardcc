@@ -1,0 +1,137 @@
+# PROMPT 5b — Finitions finales : RBAC "pour le compte du candidat", upload de pièces jointes,
+# commentaire candidat à l'acceptation
+# Référence : Correctif_DCC_20260904.md, issues P4_34, P4_35, P4_36
+#             A22 (pièces jointes, ancien modèle URL manuelle), A35 (soumission vœux pour le
+#             candidat), P4_30/prompt4i (popups d'acceptation candidat)
+# Stack : Node.js + Express (backend), React (frontend) — voir prompt1. Code commenté partout.
+# ⚠️ §3 (upload) écrit pour tourner IDENTIQUEMENT sur Replit, o2switch et le futur serveur DCC sans
+# aucun changement de code — seul le contenu de la variable d'environnement change par
+# environnement (même principe déjà appliqué à `PIECE_JOINTE_STORAGE_URL` depuis A22). Ne pas
+# différer ce prompt : le tester maintenant sur Replit vérifie déjà tout le mécanisme.
+# ============================================================================
+
+## 1. RBAC — "Pour le compte du candidat" sur les 4 actions candidat (P4_34)
+
+**Confirmé par Damien (06/09/2026)** : le correctif IDOR de `prompt5` doit bloquer un candidat
+agissant sur le dossier d'un **autre** candidat — il ne doit **jamais** bloquer un recruteur agissant
+légitimement pour le compte d'un candidat. Vérifie d'abord, avant toute autre modification, que le
+bouton existant "Soumettre pour le candidat" (A35, `soumettre_voeux_provisoire()`) fonctionne
+toujours après le correctif IDOR de `prompt5` — teste-le réellement sur un dossier AP2 de test.
+Rapporte le résultat précisément avant de continuer ce prompt.
+
+**Extension demandée** : applique le même mécanisme (fonction existante + paramètre d'acteur
+supplémentaire pour la traçabilité, comme A35 — **ne duplique aucune méthode**) aux 3 autres actions
+réservées au candidat :
+- `soumettre_voeux_definitif()`
+- `accordDePrincipe(id_opportunite)`
+- `accordDefinitif(id_opportunite)`
+
+Pour chacune : ajoute côté écran recruteur (OD, onglet Vœux) un bouton "[Faire pour le compte du
+candidat]" visible quand l'action est possible pour l'état courant, déclenchant la même logique que
+l'action candidat correspondante, avec traçabilité de l'acteur réel (même schéma que A35 :
+`modifie_par` = nom du recruteur).
+
+**Popup de confirmation** : ajoute une mention en rouge, avant le bouton de confirmation, sur les 4
+popups concernées (provisoire, définitif, accord de principe, accord définitif) :
+> Vous êtes en train de {action} pour le compte du candidat. Êtes-vous certain de vouloir continuer ?
+
+(`{action}` = libellé adapté à chaque cas, ex. "soumettre la fiche de vœux provisoire",
+"valider l'accord de principe"...)
+
+**Test réel avant de livrer** : sur un dossier de test, déclenche chacune des 4 actions via le
+bouton recruteur "pour le compte du candidat" → vérifie la mention rouge affichée, la transition
+réussie, et `modifie_par` correctement tracé sur la ligne `etape` créée.
+
+---
+
+## 2. Commentaire candidat sur les popups d'acceptation (P4_36)
+
+Sur les 2 popups d'acceptation candidat (Accord de principe et Accord définitif, ajoutées par
+`prompt4i_correctif_dcc_cockpit_cm_v4.txt` §7, écran COP) : ajoute un champ de texte libre
+**"Votre commentaire (facultatif)"**, en plus de la case à cocher obligatoire déjà en place.
+
+**Enregistrement** : à la validation, la ligne `etape` créée par `accordDePrincipe()` /
+`accordDefinitif()` doit avoir `note_ecrite` = la mention officielle de l'attestation (texte déjà
+en place) **suivie** du commentaire candidat s'il en a saisi un (ex. séparés par un saut de ligne ou
+un séparateur clair) — **ne remplace jamais** la mention officielle, l'ajoute seulement si présente.
+
+**Test réel avant de livrer** :
+1. Valider un accord de principe avec un commentaire → vérifie que `etape.note_ecrite` contient
+   bien la mention officielle ET le commentaire du candidat.
+2. Valider sans commentaire (champ laissé vide) → vérifie que seule la mention officielle est
+   enregistrée, pas de texte vide ajouté artificiellement.
+
+---
+
+## 3. Upload réel de pièces jointes (P4_35)
+
+⚠️ **Principe de conception, à respecter précisément** : le code doit fonctionner **sans
+modification** quel que soit l'environnement (Replit aujourd'hui, o2switch demain, le serveur DCC
+plus tard) — seule la **valeur** d'une variable d'environnement change entre environnements, jamais
+le code. Deux responsabilités bien séparées :
+- **L'écriture du fichier** se fait toujours en **local**, relative au dossier de l'application
+  (ex. `./uploads/`, créé automatiquement s'il n'existe pas) — peu importe où l'app tourne à ce
+  moment-là, elle écrit sur son propre disque. Aucune dépendance à un chemin absolu ni à un serveur
+  distant.
+- **L'URL publique** utilisée pour construire le lien stocké en base vient de
+  `PIECE_JOINTE_STORAGE_URL` (variable d'environnement déjà posée par A22) — c'est la **seule**
+  chose qui change entre Replit (ex. `https://<domaine-replit>/uploads/`) et o2switch (ex.
+  `https://passerelle.dm-informatique.fr/uploads/`) et le futur serveur DCC.
+
+**Hypothèse de stockage confirmée par Damien** : pas d'intégration API Google Drive réelle (aurait
+demandé une configuration OAuth/compte de service distincte) — stockage local classique.
+
+**Valeur de `PIECE_JOINTE_STORAGE_URL` sur Replit (dev)** : si elle n'est pas déjà définie, déduis-la
+automatiquement de l'URL de base déjà utilisée ailleurs dans l'app pour générer des liens cliquables
+(emails de réinitialisation de mot de passe, invitations de compte, prompt6) plutôt que de demander
+à Damien de la saisir manuellement — ex. `${APP_BASE_URL}/uploads/` si une variable de ce type
+existe déjà. Sers le dossier `uploads/` en statique à ce même chemin (`/uploads`).
+
+### 3.1 Mécanisme
+
+Sur la popup générique de transition (`conception.md` §6.1.2, utilisée notamment pour
+`decisionDCC()`, `mettre_en_lien()`... — voir capture Damien), remplace les 2 champs texte libre
+"URL de la pièce jointe 1/2" par 2 boutons "Choisir un fichier" :
+
+1. L'utilisateur clique, le navigateur ouvre le sélecteur de fichier natif (`<input type="file">`).
+2. Formats acceptés, vérifiés côté client **et** côté serveur (jamais l'un sans l'autre) : PDF,
+   JPEG, PNG (même liste que le correctif `prompt5` déjà en place pour la validation MIME) — rejette
+   avec un message clair si le format ne correspond pas.
+3. Taille maximale : réutilise la même limite que l'import CSV (5 Mio) sauf avis contraire — à
+   confirmer si une limite différente est souhaitée pour ce type de fichier.
+4. Si le format est valide : renomme le fichier (ex. `{crm_key ou id}_{JJMMAAAA}_{HHMMSS}.{ext}`,
+   cohérent avec l'exemple donné par Damien) et l'**écrit localement** dans le dossier `uploads/` de
+   l'application (`fs.writeFile`, pas d'appel réseau vers un autre serveur).
+5. Sert ce dossier en statique via Express (`app.use('/uploads', express.static(...))` ou
+   équivalent) — c'est ce qui permet à `PIECE_JOINTE_STORAGE_URL` + nom de fichier de fonctionner
+   comme une vraie URL accessible, quel que soit l'environnement.
+6. Construit l'**URL complète** en concaténant `PIECE_JOINTE_STORAGE_URL` (env var) + nom de fichier
+   généré, et la stocke dans `etape.url1_piece_jointe` / `url2_piece_jointe` (colonnes déjà
+   existantes, `VARCHAR(250)` — vérifie que la longueur reste suffisante avec le nouveau format de
+   nom de fichier).
+7. **Le champ "Description des pièces jointes" devient obligatoire dès qu'au moins un fichier est
+   choisi** (aucune contrainte s'il n'y a aucune pièce jointe).
+
+### 3.2 Affichage
+
+Partout où `url1_piece_jointe`/`url2_piece_jointe` sont déjà rendus cliquables (déjà corrigé par
+A22 — onglet "Progression et documents") : garde le même principe, l'utilisateur voit un bouton/lien
+nommé (ex. "📎 Voir la pièce jointe 1"), jamais l'URL brute affichée en texte.
+
+### 3.3 Test réel avant de livrer (sur Replit, dès maintenant)
+
+1. Uploader un PDF valide → vérifie le renommage, l'écriture locale dans `uploads/`, l'URL complète
+   en base (construite avec la valeur actuelle de `PIECE_JOINTE_STORAGE_URL` sur Replit), le lien
+   cliquable et accessible côté affichage.
+2. Tenter d'uploader un format non toléré (ex. `.exe`) → rejeté avec message clair, côté client ET
+   en rejouant l'appel API directement (pour confirmer que la validation serveur n'est pas
+   contournable).
+3. Tenter de confirmer une transition avec une pièce jointe choisie mais sans description → doit
+   être bloqué.
+4. Confirmer une transition sans aucune pièce jointe et sans description → doit fonctionner
+   normalement (pas de régression sur le cas sans pièce jointe).
+
+**Note pour le déploiement futur (o2switch, puis serveur DCC)** : aucune action de code à prévoir —
+seulement créer le dossier `uploads/` sur le nouveau serveur (permissions `755`, `.htaccess` avec
+`Options -Indexes` pour empêcher le listing public) et mettre à jour `PIECE_JOINTE_STORAGE_URL`
+dans le `.env` du nouvel environnement.

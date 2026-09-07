@@ -15,6 +15,7 @@ import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { cleanupUploadedFiles, uploadRoot } from "./lib/actionUploads";
 
 const app: Express = express();
 
@@ -78,13 +79,23 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.use("/uploads", express.static(uploadRoot, {
+  dotfiles: "deny",
+  index: false,
+  fallthrough: false,
+  maxAge: process.env.NODE_ENV === "production" ? "1h" : 0,
+}));
 app.use("/api", router);
 
-const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  if (files.length) void cleanupUploadedFiles(files);
   const message = error instanceof Error ? error.message : "";
   if (
     message.includes("CSV") ||
     message.includes("pièce jointe") ||
+    message.includes("PDF, JPEG") ||
+    message.includes("contenu du fichier") ||
     message.includes("File too large") ||
     message.includes("Unexpected field")
   ) {

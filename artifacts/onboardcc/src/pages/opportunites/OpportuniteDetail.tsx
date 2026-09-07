@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { opportunitesApi, type OpportunityAction, type OpportunityDetail, type OpportunityState } from '@/api/opportunites';
 import { candidatsApi } from '@/api/candidats';
 import { useQuery } from '@tanstack/react-query';
@@ -43,6 +44,12 @@ function getDetailActions(state: OpportunityState, mode: Props['mode']): Availab
     if (state === 'Affecté') return [
       { action: 'annuler-affectation', label: 'Annuler affectation', destructive: true },
     ];
+    if (state === 'Mise en lien') return [
+      { action: 'accord-de-principe', label: 'Faire pour le compte du candidat' },
+    ];
+    if (state === 'Accord de principe') return [
+      { action: 'accord-definitif', label: 'Faire pour le compte du candidat' },
+    ];
   } else if (mode === 'candidat') {
     if (state === 'Mise en lien') return [
       { action: 'accord-de-principe', label: 'Accord de principe' },
@@ -64,6 +71,8 @@ export default function OpportuniteDetail({ mode }: Props) {
   const [action, setAction] = useState<AvailableAction | null>(null);
   const [comment, setComment] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
+  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
+  const [attachmentDescription, setAttachmentDescription] = useState('');
   const [busy, setBusy] = useState(false);
 
   const { data: refs } = useQuery({
@@ -113,23 +122,27 @@ export default function OpportuniteDetail({ mode }: Props) {
 
   const isAcceptanceAction = action?.action === 'accord-de-principe' || action?.action === 'accord-definitif';
   const acknowledgementText = action?.action === 'accord-de-principe'
-    ? "J’ai contacté le chargé de mission et j’accepte de poursuivre ma candidature."
-    : "J’ai contacté le partenaire et j’accepte cette mission.";
+    ? "J'ai contacté le chargé de mission et il m'a expliqué le contexte et les principes de la mission et j'accepte de poursuivre ma candidature sur ce poste."
+    : "J'ai contacté le partenaire et nous avons pu aborder tous les aspects de la mission et j'accepte cette mission (la décision définitive revient à la DCC suite au retour du partenaire et vous sera communiquée au plus tôt).";
+  const canAttachFiles = ['mettre-en-lien', 'accord-de-principe', 'accord-definitif', 'decision-dcc'].includes(action?.action ?? '');
 
   const submitCandidateAction = async () => {
-    if (!action || (isAcceptanceAction ? !acknowledged : !comment.trim())) return;
+    if (!action || (isAcceptanceAction ? !acknowledged : !comment.trim()) || (attachmentFiles.length > 0 && !attachmentDescription.trim())) return;
     setBusy(true);
     try {
       await opportunitesApi.transition(
         detail.id_opportunite,
         action.action,
-        isAcceptanceAction ? acknowledgementText : comment.trim(),
+        isAcceptanceAction ? `${acknowledgementText}${mode === 'candidat' && comment.trim() ? `\n\nCommentaire du candidat : ${comment.trim()}` : ''}` : comment.trim(),
+        { files: attachmentFiles, description: attachmentDescription.trim() },
       );
       setDetail(await opportunitesApi.detail(detail.id_opportunite));
       setError('');
       setAction(null);
       setComment('');
       setAcknowledged(false);
+      setAttachmentFiles([]);
+      setAttachmentDescription('');
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Action impossible.');
     } finally {
@@ -225,7 +238,7 @@ export default function OpportuniteDetail({ mode }: Props) {
                   key={act.action}
                   variant={act.destructive ? 'destructive' : 'default'}
                    disabled={act.action === 'mettre-en-lien' && !candidateCanBeLinked}
-                   onClick={() => { setAction(act); setComment(''); setAcknowledged(false); }}
+                   onClick={() => { setAction(act); setComment(''); setAcknowledged(false); setAttachmentFiles([]); setAttachmentDescription(''); }}
                    title={act.action === 'mettre-en-lien' && !candidateCanBeLinked ? 'Le candidat doit être à l’état Attente affectation.' : undefined}
                   data-testid={`button-action-${act.action}`}
                 >
@@ -462,13 +475,16 @@ export default function OpportuniteDetail({ mode }: Props) {
           <DialogHeader>
             <DialogTitle>{action?.label}</DialogTitle>
              <DialogDescription>
-               {isAcceptanceAction
-                 ? 'Cette confirmation est obligatoire pour poursuivre votre candidature.'
+                {isAcceptanceAction
+                  ? mode === 'recruteur'
+                    ? 'Attention : vous allez effectuer cette action pour le compte du candidat. Votre identité sera enregistrée comme acteur réel.'
+                    : 'Cette confirmation est obligatoire pour poursuivre votre candidature.'
                  : "Cette action change l'état de l'opportunité. Votre commentaire sera conservé dans le suivi de votre candidature."}
              </DialogDescription>
           </DialogHeader>
            {isAcceptanceAction ? (
-             <div className="flex items-start gap-3 rounded-md border p-4">
+             <div className={`space-y-4 rounded-md border p-4 ${mode === 'recruteur' ? 'border-destructive bg-destructive/10 text-destructive' : ''}`}>
+              <div className="flex items-start gap-3">
                <Checkbox
                  id="candidate-acknowledgement"
                  checked={acknowledged}
@@ -476,10 +492,22 @@ export default function OpportuniteDetail({ mode }: Props) {
                  data-testid="checkbox-acknowledgement"
                />
                <Label htmlFor="candidate-acknowledgement" className="cursor-pointer text-sm leading-5">
-                 {action?.action === 'accord-de-principe'
-                   ? "J'ai contacté le chargé de mission et il m'a expliqué le contexte et les principes de la mission et j'accepte de poursuivre ma candidature sur ce poste."
-                   : "J'ai contacté le partenaire et nous avons pu aborder tous les aspects de la mission et j'accepte cette mission (la décision définitive revient à la DCC suite au retour du partenaire et vous sera communiquée au plus tôt)."}
+                  {mode === 'recruteur' ? `Je confirme effectuer pour le compte du candidat l’attestation suivante : « ${acknowledgementText} »` : acknowledgementText}
                </Label>
+              </div>
+              {mode === 'candidat' && (
+                <div className="space-y-1">
+                  <Label htmlFor="candidate-comment">Commentaire candidat (facultatif)</Label>
+                  <Textarea
+                    id="candidate-comment"
+                    value={comment}
+                    onChange={(event) => setComment(event.target.value.slice(0, 500))}
+                    placeholder="Ajouter un commentaire…"
+                    data-testid="textarea-candidate-comment"
+                  />
+                  <p className="text-right text-xs text-muted-foreground">{comment.length}/500</p>
+                </div>
+              )}
              </div>
            ) : (
              <>
@@ -492,9 +520,43 @@ export default function OpportuniteDetail({ mode }: Props) {
                <p className="text-right text-xs text-muted-foreground">{comment.length}/100</p>
              </>
            )}
+           {canAttachFiles && (
+             <div className="space-y-3">
+               <Input
+                 type="file"
+                 accept="application/pdf,image/jpeg,image/png"
+                 multiple
+                 onChange={(event) => {
+                   const selectedFiles = Array.from(event.target.files ?? []);
+                   if (selectedFiles.length > 2) {
+                     setError('Vous pouvez sélectionner au maximum deux pièces jointes.');
+                     event.target.value = '';
+                     setAttachmentFiles([]);
+                     return;
+                   }
+                   const files = selectedFiles;
+                   const invalid = files.find((file) => !['application/pdf', 'image/jpeg', 'image/png'].includes(file.type) || file.size > 5 * 1024 * 1024);
+                   if (invalid) {
+                     setError('Chaque pièce jointe doit être un PDF, JPEG ou PNG de 5 Mio maximum.');
+                     event.target.value = '';
+                     setAttachmentFiles([]);
+                     return;
+                   }
+                   setError('');
+                   setAttachmentFiles(files);
+                 }}
+               />
+               <p className="text-xs text-muted-foreground">{attachmentFiles.length}/2 fichier(s) sélectionné(s), 5 Mio maximum chacun.</p>
+               <Input
+                 value={attachmentDescription}
+                 onChange={(event) => setAttachmentDescription(event.target.value.slice(0, 100))}
+                 placeholder={attachmentFiles.length ? 'Description obligatoire des pièces jointes' : 'Description des pièces jointes (facultative)'}
+               />
+             </div>
+           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAction(null)} data-testid="button-cancel">Annuler</Button>
-             <Button disabled={(isAcceptanceAction ? !acknowledged : !comment.trim()) || busy} variant={action?.destructive ? 'destructive' : 'default'} onClick={() => void submitCandidateAction()} data-testid="button-confirm">
+             <Button variant="outline" onClick={() => { setAction(null); setAttachmentFiles([]); setAttachmentDescription(''); }} data-testid="button-cancel">Annuler</Button>
+              <Button disabled={(isAcceptanceAction ? !acknowledged : !comment.trim()) || (attachmentFiles.length > 0 && !attachmentDescription.trim()) || busy} variant={action?.destructive ? 'destructive' : 'default'} onClick={() => void submitCandidateAction()} data-testid="button-confirm">
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Confirmer
             </Button>
           </DialogFooter>
