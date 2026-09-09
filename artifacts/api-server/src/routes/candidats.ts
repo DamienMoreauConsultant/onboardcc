@@ -91,10 +91,10 @@ const mapRows = (rows: Array<{ crm_key?: string; designation?: string; id: numbe
   Object.fromEntries(rows.map(r => [(r.crm_key ?? r.designation)!, r.id]));
 async function refs(): Promise<Refs> {
   const [pays, duree, domaine, langue, niveau, notoriete] = await Promise.all([
-    pool.query('SELECT crm_key,id_pays id FROM pays'), pool.query("SELECT COALESCE(to_jsonb(d)->>'designation',d.periode) designation,id_duree id FROM duree d WHERE COALESCE(active,true)"),
-    pool.query('SELECT crm_key,id_domaine id FROM domaine'), pool.query('SELECT crm_key,id_langue id FROM langue'),
-    pool.query('SELECT crm_key,id_niveau_langue id FROM niveau_langue WHERE COALESCE(active,true)'),
-    pool.query('SELECT crm_key,id_notoriete_dcc id FROM notoriete_dcc WHERE COALESCE(active,true)'),
+    pool.query('SELECT crm_key,id_pays AS id FROM pays'), pool.query("SELECT COALESCE(to_jsonb(d)->>'designation',d.periode) AS designation,id_duree AS id FROM duree d WHERE COALESCE(active,true)"),
+    pool.query('SELECT crm_key,id_domaine AS id FROM domaine'), pool.query('SELECT crm_key,id_langue AS id FROM langue'),
+    pool.query('SELECT crm_key,id_niveau_langue AS id FROM niveau_langue WHERE COALESCE(active,true)'),
+    pool.query('SELECT crm_key,id_notoriete_dcc AS id FROM notoriete_dcc WHERE COALESCE(active,true)'),
   ]);
   return { pays: mapRows(pays.rows), duree: mapRows(duree.rows), domaine: mapRows(domaine.rows), langue: mapRows(langue.rows), niveau: mapRows(niveau.rows), notoriete: mapRows(notoriete.rows) };
 }
@@ -392,14 +392,14 @@ router.get('/filtres/:colonne', requireRole(RECRUITERS), async (req,res) => {
 router.get('/referentiels/voeux', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async (_req,res) => {
   try {
     const [durees, environnements, hebergements, competences, langues, niveauxLangue, regions, domaines, aides] = await Promise.all([
-      pool.query("SELECT id_duree id, periode label FROM duree WHERE COALESCE(active,true) ORDER BY periode"),
-      pool.query("SELECT id_environnement id, designation label FROM environnement WHERE COALESCE(active,true) ORDER BY designation"),
-      pool.query("SELECT id_hebergement id, designation label FROM hebergement WHERE COALESCE(active,true) ORDER BY designation"),
-      pool.query("SELECT id_competences id, designation label, id_domaine FROM competences WHERE COALESCE(active,true) ORDER BY designation"),
-      pool.query("SELECT id_langue id, designation label FROM langue WHERE COALESCE(active,true) ORDER BY designation"),
-      pool.query("SELECT id_niveau_langue id, designation label FROM niveau_langue WHERE COALESCE(active,true) ORDER BY ordre"),
-      pool.query("SELECT id_region id, designation label FROM region WHERE COALESCE(active,true) ORDER BY designation"),
-      pool.query("SELECT id_domaine id, designation label FROM domaine WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_duree AS id, periode AS label FROM duree WHERE COALESCE(active,true) ORDER BY periode"),
+      pool.query("SELECT id_environnement AS id, designation AS label FROM environnement WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_hebergement AS id, designation AS label FROM hebergement WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_competences AS id, designation AS label, id_domaine FROM competences WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_langue AS id, designation AS label FROM langue WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_niveau_langue AS id, designation AS label FROM niveau_langue WHERE COALESCE(active,true) ORDER BY ordre"),
+      pool.query("SELECT id_region AS id, designation AS label FROM region WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_domaine AS id, designation AS label FROM domaine WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT cle_champ, texte FROM aide_contextuelle WHERE active ORDER BY id_aide_contextuelle"),
     ]);
     res.json({
