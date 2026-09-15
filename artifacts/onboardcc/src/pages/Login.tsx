@@ -107,7 +107,7 @@ export default function Login() {
         
         <div className="relative z-10 flex items-center gap-3">
           <div className="h-12 w-12 bg-sidebar-primary rounded-lg flex items-center justify-center shadow-lg">
-            <span className="text-sidebar-primary-foreground font-display font-bold text-2xl tracking-wider">DCC</span>
+            <img src="/logo-dcc.png" alt="Logo DCC" className="h-8 w-8 object-contain" />
           </div>
           <div>
             <h1 className="font-display font-bold text-2xl tracking-wide">onboard<span className="text-sidebar-primary">cc</span></h1>

@@ -53,7 +53,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
       <aside className="hidden w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground shadow-xl z-10 md:flex">
         <div className="p-6 flex items-center gap-3">
           <div className="h-10 w-10 bg-sidebar-primary rounded-md flex items-center justify-center shadow-sm">
-            <span className="text-sidebar-primary-foreground font-display font-bold text-xl tracking-wider">DCC</span>
+            <img src="/logo-dcc.png" alt="Logo DCC" className="h-8 w-8 object-contain" />
           </div>
           <div>
             <h1 className="font-display font-bold text-lg leading-tight tracking-wide">onboard<span className="text-sidebar-primary">cc</span></h1>
@@ -97,7 +97,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
           <div className="flex h-14 items-center justify-between px-4">
             <div className="flex items-center gap-2.5">
               <div className="flex h-8 w-8 items-center justify-center rounded-md bg-sidebar-primary">
-                <span className="font-display text-sm font-bold text-sidebar-primary-foreground">DCC</span>
+                <img src="/logo-dcc.png" alt="Logo DCC" className="h-8 w-8 object-contain" />
               </div>
               <div>
                 <p className="font-display text-sm font-bold leading-none">onboard<span className="text-sidebar-primary">cc</span></p>
