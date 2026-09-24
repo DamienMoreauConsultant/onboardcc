@@ -242,7 +242,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
     <div className={`rounded-lg bg-muted/40 p-3 ${className}`} key={key}>
       <dt className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
-        {candidateMode && section === 'voeux' && <FieldHelp text={refs?.aides[key]} label={label} />}
+        {section === 'voeux' && <FieldHelp text={refs?.aides[key]} label={label} />}
       </dt>
       {renderEditor(key, label, forcedReadOnly)}
     </div>
@@ -306,7 +306,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
                   <div className="rounded-lg bg-muted/40 p-3">
                     <dt className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Destinations
-                      {candidateMode && <FieldHelp text={refs?.aides.regions} label="Destinations" />}
+                      <FieldHelp text={refs?.aides.regions} label="Destinations" />
                     </dt>
                     <div className="mt-2 space-y-2">
                       {regionValues.map((region) => (
@@ -328,7 +328,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
           </div>
 
           <section className="space-y-3">
-            <SectionHeading help={candidateMode ? <FieldHelp text={refs?.aides.competences} label="Compétences proposées" /> : undefined}>Compétences proposées</SectionHeading>
+            <SectionHeading help={<FieldHelp text={refs?.aides.competences} label="Compétences proposées" />}>Compétences proposées</SectionHeading>
             {refs ? <CompetencesProposees value={values.competences ?? []} refs={refs} editable={editable && canEdit} onChange={(value) => setValue('competences', value)} /> : <p className="text-sm text-muted-foreground">Chargement des référentiels…</p>}
             {fieldBlock('competences_a_developper', 'Compétences à développer')}
           </section>

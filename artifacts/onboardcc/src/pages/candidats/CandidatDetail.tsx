@@ -42,7 +42,8 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
   const [action, setAction] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [attachmentDescription, setAttachmentDescription] = useState('');
-  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
+  const [attachmentFiles, setAttachmentFiles] = useState<(File | null)[]>([null, null]);
+  const [fileError, setFileError] = useState('');
   const [submitDefinitive, setSubmitDefinitive] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [reviewDate, setReviewDate] = useState('');
@@ -144,12 +145,13 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     try {
       await candidatsApi.transition(detail.id_candidat, action as 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', comment, {
         description:attachmentDescription,
-        files:attachmentFiles,
+        files:attachmentFiles.filter((f): f is File => f !== null),
       });
       setAction(null);
       setComment('');
       setAttachmentDescription('');
-      setAttachmentFiles([]);
+      setAttachmentFiles([null, null]);
+      setFileError('');
       await reload(false);
     } catch (e: any) {
       setError(e.response?.data?.error ?? 'Action impossible.');
@@ -238,10 +240,10 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     }
   };
 
-  const status = detail?.etat_designation ?? '';
+  const statusCode = detail?.id_etat_candidat ?? '';
   const provisionalLocked = Boolean(detail?.flag_fiche_de_voeux_soumise || detail?.verrouille);
   const definitiveLocked = Boolean(detail?.date_voeux_definitifs || detail?.verrouille);
-  const candidateCanEditVoeux = (status === '2ème appel téléphonique' && !provisionalLocked) || (status === 'Session choisir' && !definitiveLocked);
+  const candidateCanEditVoeux = (statusCode === 'AP2' && !provisionalLocked) || (statusCode === 'CHO' && !definitiveLocked);
 
   if (loading) return <div className="flex h-[calc(100vh-4rem)] items-center justify-center"><Loader2 className="h-7 w-7 animate-spin text-primary" /></div>;
   if (!detail) return <div className="p-8 text-destructive">{error || 'Candidat introuvable.'}</div>;
@@ -348,13 +350,14 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
                         <strong className="text-sm font-semibold">{item.designation}</strong>
                         <span className="text-xs text-muted-foreground">{formatDateFR(item.date_evenement)}</span>
                       </div>
-                      <p className="mt-2 text-sm text-muted-foreground">{item.note_ecrite || '—'}</p>
+                      <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">{item.note_ecrite || '—'}</p>
                       {(item.url1_piece_jointe || item.url2_piece_jointe) && (
-                        <div className="mt-3 flex flex-wrap gap-3 text-xs">
+                        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
                           {[item.url1_piece_jointe, item.url2_piece_jointe].map((value,index) => {
                             const href=safeUrl(value);
                             return href ? <a key={href} href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-primary hover:underline"><ExternalLink className="h-3 w-3"/>Pièce jointe {index+1}</a> : null;
                           })}
+                          {item.pj_description && <span className="text-muted-foreground">({item.pj_description})</span>}
                         </div>
                       )}
                     </div>
@@ -381,36 +384,32 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
               placeholder="Commentaire obligatoire…" 
               className="min-h-[100px]"
             />
-            <Input
-              type="file"
-              accept="application/pdf,image/jpeg,image/png"
-              multiple
-              onChange={(event) => {
-                const selectedFiles = Array.from(event.target.files ?? []);
-                if (selectedFiles.length > 2) {
-                  setError('Vous pouvez sélectionner au maximum deux pièces jointes.');
-                  event.target.value = '';
-                  setAttachmentFiles([]);
-                  return;
-                }
-                const files = selectedFiles;
-                const invalid = files.find((file) => !['application/pdf', 'image/jpeg', 'image/png'].includes(file.type) || file.size > 5 * 1024 * 1024);
-                if (invalid) {
-                  setError('Chaque pièce jointe doit être un PDF, JPEG ou PNG de 5 Mio maximum.');
-                  event.target.value = '';
-                  setAttachmentFiles([]);
-                  return;
-                }
-                setError('');
-                setAttachmentFiles(files);
-              }}
-            />
-            <p className="text-xs text-muted-foreground">{attachmentFiles.length}/2 fichier(s) sélectionné(s)</p>
-            <Input value={attachmentDescription} onChange={(e) => setAttachmentDescription(e.target.value)} placeholder={attachmentFiles.length ? 'Description obligatoire des pièces jointes' : 'Description des pièces jointes (facultative)'} maxLength={50}/>
+            {[0, 1].map((slot) => (
+              <div key={slot} className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Pièce jointe {slot + 1}</label>
+                <Input
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    if (file && (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type) || file.size > 5 * 1024 * 1024)) {
+                      setFileError('Chaque pièce jointe doit être un PDF, JPEG ou PNG de 5 Mio maximum.');
+                      event.target.value = '';
+                      return;
+                    }
+                    setFileError('');
+                    setAttachmentFiles((prev) => prev.map((f, i) => (i === slot ? file : f)));
+                  }}
+                />
+                {attachmentFiles[slot] && <p className="text-xs text-muted-foreground">{attachmentFiles[slot]!.name}</p>}
+              </div>
+            ))}
+            {fileError && <p className="rounded bg-destructive/10 p-2 text-xs text-destructive">{fileError}</p>}
+            <Input value={attachmentDescription} onChange={(e) => setAttachmentDescription(e.target.value)} placeholder={attachmentFiles.some(Boolean) ? 'Description obligatoire des pièces jointes' : 'Description des pièces jointes (facultative)'} maxLength={50}/>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setAction(null); setAttachmentFiles([]); setAttachmentDescription(''); }}>Annuler</Button>
-            <Button disabled={!comment.trim() || (attachmentFiles.length > 0 && !attachmentDescription.trim()) || busy} onClick={() => void transition()}>
+            <Button variant="outline" onClick={() => { setAction(null); setAttachmentFiles([null, null]); setAttachmentDescription(''); setFileError(''); }}>Annuler</Button>
+            <Button disabled={!comment.trim() || (attachmentFiles.some(Boolean) && !attachmentDescription.trim()) || busy} onClick={() => void transition()}>
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Confirmer
             </Button>
@@ -434,7 +433,7 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
       <AlertDialog open={submitDefinitive !== null} onOpenChange={(open) => !open && setSubmitDefinitive(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{mode === 'recruteur' ? 'Faire pour le compte du candidat' : 'Soumettre la fiche de vœux'}</AlertDialogTitle>
+            <AlertDialogTitle>{mode === 'recruteur' ? (submitDefinitive ? 'Soumettre vœux définitifs pour le candidat' : 'Soumettre vœux provisoires pour le candidat') : 'Soumettre la fiche de vœux'}</AlertDialogTitle>
             <AlertDialogDescription className={mode === 'recruteur' ? 'text-destructive' : undefined}>
               {mode === 'recruteur'
                 ? `Vous confirmez agir pour le compte du candidat. La soumission ${submitDefinitive ? 'définitive' : 'provisoire'} sera verrouillée et votre identité sera inscrite dans l’historique.`

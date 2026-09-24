@@ -1,4 +1,30 @@
 -- ============================================================================
+-- ⚠️ OBSOLÈTE (archivé le 18/09/2026) — NE PLUS UTILISER pour initialiser une
+-- base, ni locale ni o2switch.
+--
+-- Ce fichier était le tout premier jet du schéma + données de démo, jamais
+-- mis à jour depuis. Le déploiement o2switch du 08/09/2026 est passé sur une
+-- approche différente et plus fiable : un pg_dump --schema-only de la base
+-- Replit (déjà à jour de toutes les migrations) + un seed séparé de
+-- référentiels validés DCC (seed_referentiels.sql, alors dans le dépôt
+-- "Projet Fil Rouge", désormais lui-même archivé — voir ci-dessous). Ce
+-- fichier-ci n'a donc plus servi depuis, et a fini par diverger du schéma réel
+-- — découvert le 18/09/2026 en tentant de l'utiliser pour recharger une base
+-- de dev locale : schéma manquant les 12 migrations (dont role_applicatif,
+-- indispensable), competences.crm_key resté en VARCHAR(20) au lieu de
+-- VARCHAR(40) (fait échouer l'import de 6 codes de compétences), et données
+-- de démo cassées (une adresse sans id_pays résolu).
+--
+-- Le remplaçant à jour est documentation/prompt_0_sql_versionAvantProd_20260918.sql
+-- (dans ce même dépôt de code, déplacé le 18/09/2026 depuis
+-- "Projet Fil Rouge"/Documents/3 - BDD/ pour rester synchronisé sur GitHub) —
+-- un seul fichier qui combine le dump de schéma cité ci-dessus et les
+-- référentiels validés DCC, prêt à charger tel quel sur une base vide.
+-- Conservé ici uniquement pour mémoire (traçabilité de l'historique du
+-- projet), voir aussi conception.md et l'échange avec Claude du 18/09/2026.
+-- ============================================================================
+
+-- ============================================================================
 -- PROMPT 0 — Schéma PostgreSQL complet + données de référence
 -- Envoyer EN PREMIER à Replit — AVANT tout autre prompt.
 -- Ne PAS laisser l'IA générer son propre modèle de données : exécuter ce script tel quel.

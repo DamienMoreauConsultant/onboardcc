@@ -11,6 +11,14 @@ import { useToast } from '@/hooks/use-toast';
 
 const FORGOT_PASSWORD_MESSAGE = 'Si un compte actif correspond à cet identifiant, un lien de réinitialisation sera envoyé.';
 
+/**
+ * Règle de mot de passe (Retour_25, 23/09/2026) — dupliquée du backend (routes/auth.ts) pour un
+ * retour immédiat à la saisie ; le backend revalide dans tous les cas, cette copie ne sert qu'à
+ * l'UX. Garder les deux synchronisées en cas de changement de règle.
+ */
+const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[-_.])[A-Za-z0-9\-_.]{12,}$/;
+const PASSWORD_RULE_MESSAGE = 'Au moins 12 caractères, avec une minuscule, une majuscule, un chiffre et un caractère parmi - _ . (aucun autre caractère spécial n’est autorisé).';
+
 export default function Login() {
   const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
@@ -71,7 +79,7 @@ export default function Login() {
   };
 
   const handleResetPassword = async () => {
-    if(!resetToken || newPassword.length<8 || newPassword!==newPasswordConfirmation) return;
+    if(!resetToken || !PASSWORD_RULE.test(newPassword) || newPassword!==newPasswordConfirmation) return;
     setResetSubmitting(true);
     try {
       const message=await authApi.resetPassword(resetToken,newPassword);
@@ -198,13 +206,14 @@ export default function Login() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Choisir un nouveau mot de passe</DialogTitle>
-            <DialogDescription>Votre nouveau mot de passe doit contenir au moins 8 caractères.</DialogDescription>
+            <DialogDescription>{PASSWORD_RULE_MESSAGE}</DialogDescription>
           </DialogHeader>
           <Input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Nouveau mot de passe" autoComplete="new-password"/>
+          {newPassword && !PASSWORD_RULE.test(newPassword) && <p className="text-sm text-destructive">Le mot de passe ne respecte pas encore les exigences ci-dessus.</p>}
           <Input type="password" value={newPasswordConfirmation} onChange={(event) => setNewPasswordConfirmation(event.target.value)} placeholder="Confirmer le mot de passe" autoComplete="new-password"/>
           {newPasswordConfirmation && newPassword!==newPasswordConfirmation && <p className="text-sm text-destructive">Les mots de passe ne correspondent pas.</p>}
           <DialogFooter>
-            <Button disabled={newPassword.length<8 || newPassword!==newPasswordConfirmation || resetSubmitting} onClick={() => void handleResetPassword()}>
+            <Button disabled={!PASSWORD_RULE.test(newPassword) || newPassword!==newPasswordConfirmation || resetSubmitting} onClick={() => void handleResetPassword()}>
               {resetSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>}Enregistrer
             </Button>
           </DialogFooter>

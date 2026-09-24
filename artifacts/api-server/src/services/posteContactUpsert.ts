@@ -14,7 +14,7 @@ export type PosteContactInput = {
     adresse2: string | null;
     codePostal: string | null;
     ville: string | null;
-    idPays: number;
+    pays: string | null;
   } | null;
 };
 
@@ -39,14 +39,14 @@ export async function upsertPosteContact(
   if (created) {
     if (input.adresse) {
       const address = await client.query(
-        `INSERT INTO adresse(adresse1,adresse2,code_postal,ville,id_pays)
+        `INSERT INTO adresse(adresse1,adresse2,code_postal,ville,pays)
          VALUES($1,$2,$3,$4,$5) RETURNING id_adresse`,
         [
           input.adresse.adresse1,
           input.adresse.adresse2,
           input.adresse.codePostal,
           input.adresse.ville,
-          input.adresse.idPays,
+          input.adresse.pays,
         ],
       );
       idAdresse = address.rows[0].id_adresse;
@@ -67,35 +67,35 @@ export async function upsertPosteContact(
       );
     } else {
       await client.query(
-        'UPDATE contact SET nom_contact=$1,prenom_contact=$2,role=$3 WHERE id_contact=$4',
-        [input.nom, input.prenom, input.role, idContact],
+        'UPDATE contact SET nom_contact=$1,prenom_contact=$2,role=$3,email_contact=$4 WHERE id_contact=$5',
+        [input.nom, input.prenom, input.role, input.email ?? null, idContact],
       );
     }
 
     if (input.adresse) {
       if (idAdresse) {
         await client.query(
-          `UPDATE adresse SET adresse1=$1,adresse2=$2,code_postal=$3,ville=$4,id_pays=$5
+          `UPDATE adresse SET adresse1=$1,adresse2=$2,code_postal=$3,ville=$4,pays=$5
            WHERE id_adresse=$6`,
           [
             input.adresse.adresse1,
             input.adresse.adresse2,
             input.adresse.codePostal,
             input.adresse.ville,
-            input.adresse.idPays,
+            input.adresse.pays,
             idAdresse,
           ],
         );
       } else {
         const address = await client.query(
-          `INSERT INTO adresse(adresse1,adresse2,code_postal,ville,id_pays)
+          `INSERT INTO adresse(adresse1,adresse2,code_postal,ville,pays)
            VALUES($1,$2,$3,$4,$5) RETURNING id_adresse`,
           [
             input.adresse.adresse1,
             input.adresse.adresse2,
             input.adresse.codePostal,
             input.adresse.ville,
-            input.adresse.idPays,
+            input.adresse.pays,
           ],
         );
         idAdresse = address.rows[0].id_adresse;

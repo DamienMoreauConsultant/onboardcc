@@ -58,7 +58,11 @@ export default function AdminReferentiels() {
   
   const { toast } = useToast();
 
-  const isReadOnly = selectedTable.id === 'etat_candidat';
+  /* Ces 3 référentiels pilotent des transitions codées en dur dans l'application (boutons
+     d'action, règles de workflow) — un ajout, un renommage ou une désactivation depuis cet écran
+     casserait le workflow en direct. Toute mise à jour se fait par script SQL. */
+  const READ_ONLY_TABLES = ['etat_candidat', 'etat_poste', 'etat_opportunite'];
+  const isReadOnly = READ_ONLY_TABLES.includes(selectedTable.id);
 
   const fetchData = async () => {
     setLoading(true);

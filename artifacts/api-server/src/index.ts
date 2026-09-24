@@ -1,3 +1,10 @@
+/* Doit rester le tout premier import : app.ts (et ses dépendances, ex. db-pg.ts)
+   lisent process.env dès leur chargement — dotenv doit avoir déjà rempli les
+   variables avant que ce module graph ne s'exécute. Sans effet en production
+   (cPanel injecte déjà les variables dans process.env ; dotenv ne les écrase
+   jamais). Root cause du 19/09/2026 : ce fichier ne chargeait jamais .env,
+   contrairement aux scripts utilitaires (checkSeed.ts, hashTestPasswords.ts). */
+import 'dotenv/config';
 import app from "./app";
 import { logger } from "./lib/logger";
 

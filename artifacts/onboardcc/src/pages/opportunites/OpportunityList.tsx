@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { opportunitesApi, type Opportunity } from '@/api/opportunites';
 import { WarningScore } from './WarningScore';
+import { EtatBadge, EtatLegend, opportuniteActionCote } from '@/components/EtatBadge';
 import { ListSearch } from '@/components/data-table/ListSearch';
 import { ColumnFilter } from '@/components/data-table/ColumnFilter';
 
@@ -170,6 +171,7 @@ export function OpportunityList({ mode, postId, candidateId, approvalFilter, ref
         )}
       </div>
 
+      <EtatLegend />
       <div className="flex flex-wrap items-center gap-2" data-testid="compact-filter-area">
         <span className="text-sm font-medium text-muted-foreground mr-1">Filtres :</span>
         {isCandidateOriented ? (
@@ -282,9 +284,7 @@ export function OpportunityList({ mode, postId, candidateId, approvalFilter, ref
                         <TableCell className="py-2.5 whitespace-nowrap">{item.pays_designation}</TableCell>
                         <TableCell className="py-2.5 max-w-[150px] truncate" title={item.ong || ''}>{item.ong || '—'}</TableCell>
                         <TableCell className="py-2.5 whitespace-nowrap">
-                          <Badge variant={item.etat_designation.includes('Rejet') || item.etat_designation.includes('Refus') ? 'destructive' : 'outline'}>
-                            {item.etat_designation}
-                          </Badge>
+                          <EtatBadge label={item.etat_designation} cote={opportuniteActionCote(item.etat_designation)} destructive={item.etat_designation.includes('Rejet') || item.etat_designation.includes('Refus')} />
                         </TableCell>
                         <TableCell className="py-2.5 font-semibold text-center">{item.note_mission ?? '—'}</TableCell>
                         <TableCell className="py-2.5 font-semibold text-center">{item.note_contexte ?? '—'}</TableCell>
@@ -298,9 +298,7 @@ export function OpportunityList({ mode, postId, candidateId, approvalFilter, ref
                         <TableCell className="py-2.5 max-w-[200px] truncate" title={item.competences_candidat || ''}>{item.competences_candidat || '—'}</TableCell>
                         <TableCell className="py-2.5 whitespace-nowrap">{item.langues_candidat || '—'}</TableCell>
                         <TableCell className="py-2.5 whitespace-nowrap">
-                          <Badge variant={item.etat_designation.includes('Rejet') || item.etat_designation.includes('Refus') ? 'destructive' : 'outline'}>
-                            {item.etat_designation}
-                          </Badge>
+                          <EtatBadge label={item.etat_designation} cote={opportuniteActionCote(item.etat_designation)} destructive={item.etat_designation.includes('Rejet') || item.etat_designation.includes('Refus')} />
                         </TableCell>
                         <TableCell className="py-2.5 font-semibold text-center">{item.note_mission ?? '—'}</TableCell>
                         <TableCell className="py-2.5 font-semibold text-center">{item.note_contexte ?? '—'}</TableCell>

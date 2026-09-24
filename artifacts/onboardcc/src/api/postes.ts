@@ -59,7 +59,7 @@ export const postesApi = {
   executeImport: async (file: File) => {
     const form = new FormData();
     form.append('file', file);
-    return (await api.post<{ message: string; nb_postes: number; ids_postes: number[] }>(
+    return (await api.post<{ message: string; nb_postes: number; ids_postes: number[]; nouveaux_comptes_cm: Array<{ nom: string; prenom: string }> }>(
       '/postes/import/executer', form, { headers: { 'Content-Type': 'multipart/form-data' } },
     )).data;
   },

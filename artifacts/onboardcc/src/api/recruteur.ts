@@ -2,8 +2,10 @@ import { api } from './client';
 
 export type RecruiterCockpit = {
   kpis: {
-    candidats_en_ata: number;
-    candidats_acceptes: number;
+    candidats_a_inviter_session_choisir: number;
+    candidats_a_qualifier: number;
+    candidats_a_mettre_en_lien: number;
+    candidats_a_affecter: number;
   };
   alertes: Array<{
     id_candidat: number;

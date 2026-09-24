@@ -13,7 +13,7 @@ const BASE_SELECT = `
   SELECT
     o.id_opportunite,o.id_poste,o.id_fiche_de_voeux,
     o.note_contexte,o.note_mission,o.note_warning,
-    o.appreciation_recruteur,o.commentaire_charge_mission,
+    o.historique,
     o.flag_opportunite_proposee_a_cm,o.flag_opportunite_retenue,
     o.flag_opportunite_non_retenu,o.flag_opportunite_obsolete,
     eo.designation AS etat_designation,
@@ -74,13 +74,7 @@ const BASE_SELECT = `
       JOIN contact cm ON cm.id_contact=gp.id_contact
       WHERE gp.id_poste=o.id_poste AND cm.role IN ('CM1','CM2')
       ORDER BY CASE cm.role WHEN 'CM1' THEN 1 ELSE 2 END
-      LIMIT 1) AS cm_contact_json,
-     (SELECT e.note_ecrite FROM etape e
-     WHERE e.id_candidat=cand.id_candidat AND e.id_etat_candidat='ACC'
-     ORDER BY e.date_evenement DESC,e.id_historique DESC LIMIT 1) AS commentaire_candidat,
-    (SELECT e.note_ecrite FROM etape e
-     WHERE e.id_candidat=cand.id_candidat AND e.id_etat_candidat='AFF'
-     ORDER BY e.date_evenement DESC,e.id_historique DESC LIMIT 1) AS commentaire_validation_recruteur
+      LIMIT 1) AS cm_contact_json
   FROM opportunite o
   JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite
   JOIN fiche_de_voeux fdv ON fdv.id_fiche_de_voeux=o.id_fiche_de_voeux
@@ -240,19 +234,24 @@ const transitionRules: Record<TransitionName, {
   roles: string[];
   from: string[];
   to: string;
-  commentField?: 'appreciation_recruteur' | 'commentaire_charge_mission';
 }> = {
-  proposer_cm: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Non qualifié'], to: 'Proposée au CM', commentField: 'appreciation_recruteur' },
-  approuver: { roles: ['CM'], from: ['Proposée au CM'], to: 'Approuvé CM', commentField: 'commentaire_charge_mission' },
-  rejeter_cm: { roles: ['CM'], from: ['Proposée au CM'], to: 'Rejeté CM', commentField: 'commentaire_charge_mission' },
-  rejeter_recruteur: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Non qualifié'], to: 'Rejeté recruteur', commentField: 'appreciation_recruteur' },
-  mettre_en_lien: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Approuvé CM'], to: 'Mise en lien', commentField: 'appreciation_recruteur' },
+  // 'Rejeté système' ajouté au 'from' le 23/09/2026 (Retour_26) : cet état était un cul-de-sac
+  // (déclenché automatiquement par le scoring, aucune transition n'en sortait) — décision de
+  // Damien : le recruteur doit pouvoir proposer au CM une opportunité rejetée par le système
+  // (ex. départ en couple, compétences différentes mais utiles), exactement comme depuis
+  // 'Non qualifié'. Reste masqué par défaut dans les listes (OpportunityList.tsx, filtre
+  // note_mission < 5), révélé par le toggle "Tout afficher" déjà existant.
+  proposer_cm: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Non qualifié', 'Rejeté système'], to: 'Proposée au CM' },
+  approuver: { roles: ['CM'], from: ['Proposée au CM'], to: 'Approuvé CM' },
+  rejeter_cm: { roles: ['CM'], from: ['Proposée au CM'], to: 'Rejeté CM' },
+  rejeter_recruteur: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Non qualifié'], to: 'Rejeté recruteur' },
+  mettre_en_lien: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Approuvé CM'], to: 'Mise en lien' },
   accord_de_principe: { roles: ['CANDIDAT', 'RECRUTEUR', 'ADMIN'], from: ['Mise en lien'], to: 'Accord de principe' },
   accord_definitif: { roles: ['CANDIDAT', 'RECRUTEUR', 'ADMIN'], from: ['Accord de principe'], to: 'Accepté' },
-  decision_dcc: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Accepté'], to: 'Affecté', commentField: 'appreciation_recruteur' },
+  decision_dcc: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Accepté'], to: 'Affecté' },
   refuser_candidat: { roles: ['CANDIDAT'], from: ['Mise en lien', 'Accord de principe'], to: 'Refus candidat' },
-  refuser_partenaire: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Accepté'], to: 'Refus partenaire', commentField: 'appreciation_recruteur' },
-  annuler_affectation: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Affecté'], to: 'Rejet après affectation', commentField: 'appreciation_recruteur' },
+  refuser_partenaire: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Accepté'], to: 'Refus partenaire' },
+  annuler_affectation: { roles: ['RECRUTEUR', 'ADMIN'], from: ['Affecté'], to: 'Rejet après affectation' },
 };
 
 router.post('/:id/recalculer', requireRole(['RECRUTEUR', 'ADMIN']), async (req, res) => {
@@ -376,10 +375,20 @@ router.post('/:id/:action', requireRole(ALL_ROLES), opportunityActionUpload.arra
     }
     const updates = ['id_etat_opportunite=$1'];
     const values: unknown[] = [state.rows[0].id_etat_opportunite];
-    if (rule.commentField) {
-      values.push(comment);
-      updates.push(`${rule.commentField}=$${values.length}`);
-    }
+    /* Historique unique (Retour_19, 19/09/2026) : remplace les anciennes colonnes
+       appreciation_recruteur/commentaire_charge_mission (réécrites à chaque étape,
+       donc perdant l'historique) — chaque transition, sans exception, enrichit ce
+       journal plutôt qu'un champ dédié par rôle. Pas de pièce jointe ici : elles
+       restent sur etape (candidat), voir plus bas. */
+    const historiqueEntry = JSON.stringify([{
+      role: req.user!.role_applicatif,
+      nom: `${req.user!.prenom} ${req.user!.nom}`,
+      date: new Date().toISOString(),
+      etat: rule.to,
+      commentaire: comment,
+    }]);
+    values.push(historiqueEntry);
+    updates.push(`historique=historique || $${values.length}::jsonb`);
     if (action === 'proposer_cm') updates.push('flag_opportunite_proposee_a_cm=true');
     if (action === 'approuver') updates.push('flag_opportunite_retenue=true');
     if (action === 'annuler_affectation') {

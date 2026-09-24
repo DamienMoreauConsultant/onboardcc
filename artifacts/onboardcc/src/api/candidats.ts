@@ -1,10 +1,11 @@
 import { api } from './client';
 
-export type EtatCandidat = { id_etat_candidat: number; designation: string; delais_de_reponse?: number | null };
+export type EtatCandidat = { id_etat_candidat: string; designation: string; delais_de_reponse?: number | null };
 export type ImportLine = { ligne: number; statut: 'ok' | 'erreur'; message: string };
 export type CandidatRow = {
   id_candidat: number; nom_contact: string; prenom_contact: string; email_contact?: string;
-  etat_designation: string; id_etat_candidat: number; date_revue?: string | null;
+  etat_designation: string; id_etat_candidat: string; date_revue?: string | null;
+  etat_calcule?: string; etat_action_cote?: 'recruteur' | 'autre' | 'aucune';
   domaines?: string | null; regions?: string | null; duree?: string | null; langues?: string | null;
   opportunites_a_qualifier?: number; opportunites_approuvees?: number; opportunites_affectation?: number;
   flag_candidat_deja_mis_en_lien?: boolean;
@@ -54,7 +55,7 @@ export const candidatsApi = {
     form.append('commentaire', commentaire);
     if (attachments.description) form.append('pj_description', attachments.description);
     attachments.files?.slice(0, 2).forEach((file) => form.append('pieces_jointes', file));
-    return (await api.post(`/candidats/${id}/${action}`, form)).data;
+    return (await api.post(`/candidats/${id}/${action}`, form, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
   },
   reviseReviewDate: async (id: number, date_revue: string | null) => (await api.patch(`/candidats/${id}/date-revue`, { date_revue })).data,
   submitVoeux: async (id: number, definitive: boolean) => (await api.post(`/candidats/${id}/${definitive ? 'soumettre-voeux-definitifs' : 'soumettre-voeux-provisoire'}`)).data,

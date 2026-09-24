@@ -28,6 +28,18 @@ const router = Router();
 const FORGOT_PASSWORD_MESSAGE = 'Si un compte actif correspond à cet identifiant, un lien de réinitialisation sera envoyé.';
 
 /**
+ * Règle de mot de passe (Retour_25, 23/09/2026, décision Damien) : liste FERMÉE de caractères
+ * autorisés — lettres, chiffres et les 3 spéciaux `-` `_` `.` uniquement, rien d'autre (évite
+ * d'avoir à maintenir une liste séparée de caractères interdits, ex. `& @ / % ! $ '`, déjà connus
+ * comme problématiques dans des contextes shell/URL). Minimum 12 caractères, au moins une
+ * minuscule, une majuscule, un chiffre et un des 3 caractères spéciaux. Dupliquée côté front
+ * (Login.tsx) pour un retour immédiat à la saisie — garder les deux synchronisées en cas de
+ * changement de règle.
+ */
+const PASSWORD_RULE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[-_.])[A-Za-z0-9\-_.]{12,}$/;
+const PASSWORD_RULE_MESSAGE = 'Le mot de passe doit contenir au moins 12 caractères, avec une minuscule, une majuscule, un chiffre et un caractère parmi - _ . (aucun autre caractère spécial n’est autorisé).';
+
+/**
  * POST /api/auth/login
  *
  * Corps attendu : { login: string, password: string }
@@ -195,7 +207,8 @@ router.post('/mot-de-passe-oublie', async (req, res) => {
 router.post('/reinitialiser-password', async (req,res) => {
   const token=typeof req.body?.token==='string'?req.body.token:'';
   const newPassword=typeof req.body?.nouveau_password==='string'?req.body.nouveau_password:'';
-  if(!token || newPassword.length<8) return void res.status(400).json({error:'Lien invalide ou mot de passe de moins de 8 caractères.'});
+  if(!token) return void res.status(400).json({error:'Lien invalide.'});
+  if(!PASSWORD_RULE.test(newPassword)) return void res.status(400).json({error:PASSWORD_RULE_MESSAGE});
   try {
     const secret=getJwtSecret();
     const payload=jwt.verify(token,secret) as jwt.JwtPayload & {purpose?:string;nonce?:string};
@@ -237,8 +250,8 @@ router.post('/changer-password', requireRole([]), async (req, res) => {
     return;
   }
 
-  if (nouveau_password.length < 8) {
-    res.status(400).json({ error: 'Le nouveau mot de passe doit contenir au moins 8 caractères.' });
+  if (!PASSWORD_RULE.test(nouveau_password)) {
+    res.status(400).json({ error: PASSWORD_RULE_MESSAGE });
     return;
   }
 

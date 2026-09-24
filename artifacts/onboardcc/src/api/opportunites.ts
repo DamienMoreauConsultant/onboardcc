@@ -46,10 +46,13 @@ export type Opportunity = {
   langues_candidat: string | null;
   nb_candidats: number;
   nb_postes: number;
-  commentaire_candidat?: string | null;
-  commentaire_validation_recruteur?: string | null;
-  appreciation_recruteur?: string | null;
-  commentaire_charge_mission?: string | null;
+  historique: Array<{
+    role: string;
+    nom: string;
+    date: string;
+    etat: string;
+    commentaire: string;
+  }>;
   flag_opportunite_obsolete: boolean;
   flag_opportunite_non_retenu: boolean;
 };
@@ -101,7 +104,7 @@ export const opportunitesApi = {
     form.append('commentaire', commentaire);
     if (attachments.description) form.append('pj_description', attachments.description);
     attachments.files?.slice(0, 2).forEach((file) => form.append('pieces_jointes', file));
-    return (await api.post(`/opportunites/${id}/${action}`, form)).data;
+    return (await api.post(`/opportunites/${id}/${action}`, form, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
   },
   recalculate: async (id: number) =>
     (await api.post(`/opportunites/${id}/recalculer`)).data,

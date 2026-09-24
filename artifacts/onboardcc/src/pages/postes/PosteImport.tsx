@@ -4,9 +4,11 @@ import { ArrowLeft, CheckCircle2, Download, FileUp, Loader2, UploadCloud, XCircl
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { postesApi, type ImportLine } from '@/api/postes';
+import { useToast } from '@/hooks/use-toast';
 
 export default function PosteImport() {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [report, setReport] = useState<ImportLine[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,7 +27,14 @@ export default function PosteImport() {
     if (!file || !allValid) return;
     setBusy(true); setError('');
     try {
-      await postesApi.executeImport(file);
+      const result = await postesApi.executeImport(file);
+      if (result.nouveaux_comptes_cm.length) {
+        const noms = result.nouveaux_comptes_cm.map((cm) => `${cm.prenom} ${cm.nom}`).join(', ');
+        toast({
+          title: result.nouveaux_comptes_cm.length > 1 ? 'Nouveaux comptes chargé de mission créés' : 'Nouveau compte chargé de mission créé',
+          description: `${noms} — le compte a été créé automatiquement et l’invitation envoyée par email.`,
+        });
+      }
       navigate('/recruteur/postes');
     } catch (err: any) { setError(err?.response?.data?.error ?? 'L’import a échoué. Aucune donnée n’a été enregistrée.'); }
     finally { setBusy(false); }
@@ -36,7 +45,7 @@ export default function PosteImport() {
     <div className="mb-6"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Flux CRM</p><h1 className="text-3xl font-display font-bold">Importer des postes</h1><p className="mt-2 text-sm text-muted-foreground">L’import est le seul canal de création et de mise à jour des fiches de poste.</p></div>
     <div className="grid gap-6 lg:grid-cols-[1fr_1.3fr]">
       <Card>
-        <CardHeader><CardTitle className="flex items-center gap-2"><FileUp className="h-5 w-5 text-primary" />1. Choisir le fichier</CardTitle><CardDescription>CSV UTF-8, 5 Mo maximum, 66 colonnes contractuelles.</CardDescription></CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-2"><FileUp className="h-5 w-5 text-primary" />1. Choisir le fichier</CardTitle><CardDescription>CSV UTF-8, 5 Mo maximum, 69 colonnes contractuelles.</CardDescription></CardHeader>
         <CardContent className="space-y-5">
           <a href="/api/postes/import/template" download="template_postes_dcc.csv"><Button variant="outline" className="w-full"><Download className="mr-2 h-4 w-4" />Télécharger le template CSV</Button></a>
           <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-primary/25 bg-primary/[0.03] p-6 text-center hover:bg-primary/[0.06]">

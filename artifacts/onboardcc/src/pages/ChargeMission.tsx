@@ -67,7 +67,7 @@ export default function ChargeMission() {
           testId="cm-opportunites-a-approuver"
         />
         <DashboardCard
-          title="Toutes mes opportunités à approuver"
+          title="Toutes mes opportunités"
           description="Opportunités proposées, y compris celles déjà traitées"
           value={kpis?.toutes_opportunites_a_approuver}
           href="/cm/postes?opportunites=proposee-au-cm-historique"

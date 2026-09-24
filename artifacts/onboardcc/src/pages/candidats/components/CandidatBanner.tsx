@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Link } from 'wouter';
 import { ArrowLeft, Check, Loader2, Send, CalendarDays } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { EtatBadge, type ActionCote } from '@/components/EtatBadge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -93,20 +94,22 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
               <ArrowLeft className="h-4 w-4" />
             </Link>
             <h1 className="truncate font-display text-2xl font-bold text-foreground">{detail.nom_contact} {detail.prenom_contact}</h1>
-            <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">{status}</Badge>
+            {mode === 'candidat' || !detail.etat_calcule
+              ? <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">{status}</Badge>
+              : <EtatBadge label={detail.etat_calcule} cote={(detail.etat_action_cote as ActionCote) ?? 'aucune'} />}
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {mode === 'recruteur' ? (
               <>
                 {detail.verrouille && <Button size="sm" variant="outline" disabled={busy} onClick={() => onSave('voeux', { verrouille: false })}>Déverrouiller les vœux</Button>}
                 {actions.map(([key, label]) => (
-                  <Button key={key} size="sm" variant="outline" disabled={busy || (key === 'valider_appel2' && !detail.flag_fiche_de_voeux_soumise && !detail.date_voeux_provisoires)} onClick={() => onAction(key)}>{label}</Button>
+                  <Button key={key} size="sm" variant="outline" disabled={busy || (key === 'valider_appel2' && !detail.flag_fiche_de_voeux_soumise && !detail.date_voeux_provisoires) || (key === 'valider_session_choisir' && !detail.date_voeux_definitifs)} onClick={() => onAction(key)}>{label}</Button>
                 ))}
                 {status === '2ème appel téléphonique' && !detail.flag_fiche_de_voeux_soumise && !detail.date_voeux_provisoires && (
-                  <Button size="sm" variant="outline" onClick={() => onSubmit(false)} disabled={busy}><Send className="mr-2 h-4 w-4" />Faire pour le compte du candidat</Button>
+                  <Button size="sm" variant="outline" onClick={() => onSubmit(false)} disabled={busy}><Send className="mr-2 h-4 w-4" />Soumettre Vœux provisoires pour le candidat</Button>
                 )}
                 {status === 'Session choisir' && !definitiveLocked && (
-                  <Button size="sm" variant="outline" onClick={() => onSubmit(true)} disabled={busy}><Send className="mr-2 h-4 w-4" />Faire pour le compte du candidat</Button>
+                  <Button size="sm" variant="outline" onClick={() => onSubmit(true)} disabled={busy}><Send className="mr-2 h-4 w-4" />Soumettre Vœux définitifs pour le candidat</Button>
                 )}
               </>
             ) : mode === 'candidat' ? (

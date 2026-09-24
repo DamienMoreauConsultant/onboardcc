@@ -14,13 +14,22 @@ import { candidatsApi } from '@/api/candidats';
 import { useQuery } from '@tanstack/react-query';
 import { FieldHelp } from '@/pages/candidats/components/FieldHelp';
 import { WarningScore } from './WarningScore';
+import { EtatBadge, opportuniteActionCote } from '@/components/EtatBadge';
+import { SkillsMatchTable } from './SkillsMatchTable';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { formatDateFR } from '@/lib/date';
+import { formatDateFR, formatMonthYearFR } from '@/lib/date';
 import { useAuth } from '@/contexts/AuthContext';
 
 type Props = { mode: 'recruteur' | 'cm' | 'candidat' };
 
 type AvailableAction = { action: OpportunityAction; label: string; destructive?: boolean };
+
+const HISTORIQUE_ROLE_LABELS: Record<string, string> = {
+  RECRUTEUR: 'Recruteur',
+  CM: 'Chargé de mission',
+  CANDIDAT: 'Candidat',
+  ADMIN: 'Admin',
+};
 
 function getDetailActions(state: OpportunityState, mode: Props['mode']): AvailableAction[] {
   if (mode === 'cm') {
@@ -32,6 +41,13 @@ function getDetailActions(state: OpportunityState, mode: Props['mode']): Availab
     if (state === 'Non qualifié') return [
       { action: 'proposer-cm', label: 'Proposer au CM' },
       { action: 'rejeter-recruteur', label: 'Rejeter', destructive: true },
+    ];
+    // 'Rejeté système' (Retour_26, 23/09/2026) : même action que depuis 'Non qualifié' — le
+    // recruteur peut proposer au CM une opportunité rejetée automatiquement par le scoring
+    // (ex. départ en couple, compétences différentes mais utiles au partenaire). Pas de "Rejeter"
+    // ici : l'opportunité est déjà rejetée, rien à confirmer.
+    if (state === 'Rejeté système') return [
+      { action: 'proposer-cm', label: 'Proposer au CM' },
     ];
     if (state === 'Approuvé CM') return [
       { action: 'mettre-en-lien', label: 'Mettre en lien' },
@@ -71,8 +87,9 @@ export default function OpportuniteDetail({ mode }: Props) {
   const [action, setAction] = useState<AvailableAction | null>(null);
   const [comment, setComment] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
-  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
+  const [attachmentFiles, setAttachmentFiles] = useState<(File | null)[]>([null, null]);
   const [attachmentDescription, setAttachmentDescription] = useState('');
+  const [fileError, setFileError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const { data: refs } = useQuery({
@@ -127,22 +144,23 @@ export default function OpportuniteDetail({ mode }: Props) {
   const canAttachFiles = ['mettre-en-lien', 'accord-de-principe', 'accord-definitif', 'decision-dcc'].includes(action?.action ?? '');
 
   const submitCandidateAction = async () => {
-    if (!action || (isAcceptanceAction ? !acknowledged : !comment.trim()) || (attachmentFiles.length > 0 && !attachmentDescription.trim())) return;
+    if (!action || (isAcceptanceAction ? !acknowledged : !comment.trim()) || (attachmentFiles.some(Boolean) && !attachmentDescription.trim())) return;
     setBusy(true);
     try {
       await opportunitesApi.transition(
         detail.id_opportunite,
         action.action,
         isAcceptanceAction ? `${acknowledgementText}${mode === 'candidat' && comment.trim() ? `\n\nCommentaire du candidat : ${comment.trim()}` : ''}` : comment.trim(),
-        { files: attachmentFiles, description: attachmentDescription.trim() },
+        { files: attachmentFiles.filter((f): f is File => f !== null), description: attachmentDescription.trim() },
       );
       setDetail(await opportunitesApi.detail(detail.id_opportunite));
       setError('');
       setAction(null);
       setComment('');
       setAcknowledged(false);
-      setAttachmentFiles([]);
+      setAttachmentFiles([null, null]);
       setAttachmentDescription('');
+      setFileError('');
     } catch (err: any) {
       setError(err?.response?.data?.error ?? 'Action impossible.');
     } finally {
@@ -156,7 +174,7 @@ export default function OpportuniteDetail({ mode }: Props) {
   const cmName = [detail.cm_contact_json?.prenom, detail.cm_contact_json?.nom].filter(Boolean).join(' ') || 'votre chargé de mission';
 
   const displayCriterionValue = (criterion: OpportunityDetail['criteres_detailles'][number], value: string | null) => {
-    if (criterion.critere === 'Date de départ' && value) return formatDateFR(value);
+    if (criterion.critere === 'Date de départ' && value) return formatMonthYearFR(value);
     return value || '—';
   };
 
@@ -227,9 +245,7 @@ export default function OpportuniteDetail({ mode }: Props) {
           <div className="bg-muted/30 border-t p-4 flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium">État de l'opportunité :</span>
-              <Badge variant={detail.etat_designation.includes('Rejet') || detail.etat_designation.includes('Refus') ? 'destructive' : 'default'} className="text-sm px-3 py-1" data-testid="badge-status">
-                {detail.etat_designation}
-              </Badge>
+              <EtatBadge label={detail.etat_designation} cote={opportuniteActionCote(detail.etat_designation)} destructive={detail.etat_designation.includes('Rejet') || detail.etat_designation.includes('Refus')} className="text-sm px-3 py-1" />
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -288,44 +304,27 @@ export default function OpportuniteDetail({ mode }: Props) {
       )}
 
       {mode !== 'candidat' && (
-        <div className="grid gap-2 md:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] items-center" data-testid="comments-flow">
-          <Card className="h-full">
-            <CardContent className="p-4 flex flex-col h-full">
-              <p className="text-xs font-semibold uppercase text-muted-foreground mb-2">Recruteur</p>
-              <p className="text-sm text-foreground flex-1 break-words">{detail.appreciation_recruteur || '—'}</p>
-            </CardContent>
-          </Card>
-
-          <ArrowRight className="hidden md:block h-5 w-5 text-muted-foreground/50" />
-          <div className="md:hidden flex justify-center py-2"><ArrowRight className="h-5 w-5 text-muted-foreground/50 rotate-90" /></div>
-
-          <Card className="h-full">
-            <CardContent className="p-4 flex flex-col h-full">
-              <p className="text-xs font-semibold uppercase text-muted-foreground mb-2">Chargé de mission</p>
-              <p className="text-sm text-foreground flex-1 break-words">{detail.commentaire_charge_mission || '—'}</p>
-            </CardContent>
-          </Card>
-
-          <ArrowRight className="hidden md:block h-5 w-5 text-muted-foreground/50" />
-          <div className="md:hidden flex justify-center py-2"><ArrowRight className="h-5 w-5 text-muted-foreground/50 rotate-90" /></div>
-
-          <Card className="h-full">
-            <CardContent className="p-4 flex flex-col h-full">
-              <p className="text-xs font-semibold uppercase text-muted-foreground mb-2">Candidat</p>
-              <p className="text-sm text-foreground flex-1 break-words">{detail.commentaire_candidat || '—'}</p>
-            </CardContent>
-          </Card>
-
-          <ArrowRight className="hidden md:block h-5 w-5 text-muted-foreground/50" />
-          <div className="md:hidden flex justify-center py-2"><ArrowRight className="h-5 w-5 text-muted-foreground/50 rotate-90" /></div>
-
-          <Card className="h-full">
-            <CardContent className="p-4 flex flex-col h-full">
-              <p className="text-xs font-semibold uppercase text-muted-foreground mb-2">Validation Recruteur</p>
-              <p className="text-sm text-foreground flex-1 break-words">{detail.commentaire_validation_recruteur || '—'}</p>
-            </CardContent>
-          </Card>
-        </div>
+        <Card data-testid="opportunity-history">
+          <CardContent className="p-4 space-y-3">
+            <p className="text-xs font-semibold uppercase text-muted-foreground">Historique de l’opportunité</p>
+            {detail.historique.length ? (
+              detail.historique.map((entry, index) => (
+                <div key={index} className="rounded-lg border bg-card p-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">
+                      {HISTORIQUE_ROLE_LABELS[entry.role] ?? entry.role} · {entry.nom}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{formatDateFR(entry.date)}</span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-line text-sm text-foreground break-words">{entry.commentaire || '—'}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">→ {entry.etat}</p>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">Aucun historique pour le moment.</p>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {mode !== 'candidat' && <div className="space-y-6">
@@ -343,35 +342,11 @@ export default function OpportuniteDetail({ mode }: Props) {
               <p className="text-5xl font-bold font-display">{detail.note_mission ?? '—'}</p>
             </div>
             <div className="flex-1 p-0 overflow-x-auto">
-              <Table>
-                <TableHeader className="bg-transparent">
-                  <TableRow className="hover:bg-transparent border-b-0">
-                    <TableHead className="w-1/4">Critère</TableHead>
-                    <TableHead className="w-1/4">Poste</TableHead>
-                    <TableHead className="w-1/4">Candidat</TableHead>
-                    <TableHead className="w-1/4 text-right">Note</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {criteriaSections.mission.length > 0 ? criteriaSections.mission.map((crit) => (
-                    <TableRow key={crit.id_criteres_detailles}>
-                      <TableCell className="font-medium">
-                        <div className="flex items-center gap-1">
-                          {crit.critere}
-                          <div data-testid={`help-criterion-${getCriterionKey(crit.critere)}`}>
-                            <FieldHelp text={refs?.aides?.[getCriterionKey(crit.critere)]} label={`Aide ${crit.critere}`} />
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_poste)}</TableCell>
-                      <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_candidat)}</TableCell>
-                      <TableCell className="text-right font-semibold">{crit.note_obtenue ?? '—'}</TableCell>
-                    </TableRow>
-                  )) : (
-                    <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground h-16">Aucun critère de mission évalué.</TableCell></TableRow>
-                  )}
-                </TableBody>
-              </Table>
+              {criteriaSections.mission.length > 0 ? (
+                <SkillsMatchTable criterion={criteriaSections.mission[0]} />
+              ) : (
+                <p className="p-6 text-center text-sm text-muted-foreground">Aucun critère de mission évalué.</p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -458,7 +433,7 @@ export default function OpportuniteDetail({ mode }: Props) {
                       </TableCell>
                       <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_poste)}</TableCell>
                       <TableCell className="text-muted-foreground">{displayCriterionValue(crit, crit.valeur_candidat)}</TableCell>
-                      <TableCell className="text-right font-semibold">{crit.note_obtenue ?? '—'}</TableCell>
+                      <TableCell className="text-right"><div className="flex justify-end"><WarningScore value={crit.note_obtenue} /></div></TableCell>
                     </TableRow>
                   )) : (
                     <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground h-16">Aucun critère d'alerte évalué.</TableCell></TableRow>
@@ -522,41 +497,37 @@ export default function OpportuniteDetail({ mode }: Props) {
            )}
            {canAttachFiles && (
              <div className="space-y-3">
-               <Input
-                 type="file"
-                 accept="application/pdf,image/jpeg,image/png"
-                 multiple
-                 onChange={(event) => {
-                   const selectedFiles = Array.from(event.target.files ?? []);
-                   if (selectedFiles.length > 2) {
-                     setError('Vous pouvez sélectionner au maximum deux pièces jointes.');
-                     event.target.value = '';
-                     setAttachmentFiles([]);
-                     return;
-                   }
-                   const files = selectedFiles;
-                   const invalid = files.find((file) => !['application/pdf', 'image/jpeg', 'image/png'].includes(file.type) || file.size > 5 * 1024 * 1024);
-                   if (invalid) {
-                     setError('Chaque pièce jointe doit être un PDF, JPEG ou PNG de 5 Mio maximum.');
-                     event.target.value = '';
-                     setAttachmentFiles([]);
-                     return;
-                   }
-                   setError('');
-                   setAttachmentFiles(files);
-                 }}
-               />
-               <p className="text-xs text-muted-foreground">{attachmentFiles.length}/2 fichier(s) sélectionné(s), 5 Mio maximum chacun.</p>
+               {[0, 1].map((slot) => (
+                 <div key={slot} className="space-y-1">
+                   <label className="text-xs font-medium text-muted-foreground">Pièce jointe {slot + 1}</label>
+                   <Input
+                     type="file"
+                     accept="application/pdf,image/jpeg,image/png"
+                     onChange={(event) => {
+                       const file = event.target.files?.[0] ?? null;
+                       if (file && (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type) || file.size > 5 * 1024 * 1024)) {
+                         setFileError('Chaque pièce jointe doit être un PDF, JPEG ou PNG de 5 Mio maximum.');
+                         event.target.value = '';
+                         return;
+                       }
+                       setFileError('');
+                       setAttachmentFiles((prev) => prev.map((f, i) => (i === slot ? file : f)));
+                     }}
+                   />
+                   {attachmentFiles[slot] && <p className="text-xs text-muted-foreground">{attachmentFiles[slot]!.name}</p>}
+                 </div>
+               ))}
+               {fileError && <p className="rounded bg-destructive/10 p-2 text-xs text-destructive">{fileError}</p>}
                <Input
                  value={attachmentDescription}
                  onChange={(event) => setAttachmentDescription(event.target.value.slice(0, 100))}
-                 placeholder={attachmentFiles.length ? 'Description obligatoire des pièces jointes' : 'Description des pièces jointes (facultative)'}
+                 placeholder={attachmentFiles.some(Boolean) ? 'Description obligatoire des pièces jointes' : 'Description des pièces jointes (facultative)'}
                />
              </div>
            )}
           <DialogFooter>
-             <Button variant="outline" onClick={() => { setAction(null); setAttachmentFiles([]); setAttachmentDescription(''); }} data-testid="button-cancel">Annuler</Button>
-              <Button disabled={(isAcceptanceAction ? !acknowledged : !comment.trim()) || (attachmentFiles.length > 0 && !attachmentDescription.trim()) || busy} variant={action?.destructive ? 'destructive' : 'default'} onClick={() => void submitCandidateAction()} data-testid="button-confirm">
+             <Button variant="outline" onClick={() => { setAction(null); setAttachmentFiles([null, null]); setAttachmentDescription(''); setFileError(''); }} data-testid="button-cancel">Annuler</Button>
+              <Button disabled={(isAcceptanceAction ? !acknowledged : !comment.trim()) || (attachmentFiles.some(Boolean) && !attachmentDescription.trim()) || busy} variant={action?.destructive ? 'destructive' : 'default'} onClick={() => void submitCandidateAction()} data-testid="button-confirm">
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Confirmer
             </Button>
           </DialogFooter>

@@ -24,8 +24,8 @@ export type UserAccount = {
 };
 
 export type CreateUserAccountInput = {
-  role_applicatif: 'ADMIN' | 'RECRUTEUR' | 'CM';
-  role_contact: 'ADMIN' | 'REC' | 'CHZ' | 'CM1' | 'CM2';
+  role_applicatif: 'ADMIN' | 'RECRUTEUR';
+  role_contact: 'ADMIN' | 'REC' | 'CHZ';
   nom: string;
   prenom: string;
   email: string;

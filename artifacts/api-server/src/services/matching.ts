@@ -30,9 +30,12 @@ const SCORE_KEYS = [
   'MATCH_SCORE_REGION_OUI',
   'MATCH_SCORE_EXACT',
   'MATCH_SCORE_ADJACENT',
+  'MATCH_SCORE_DURATION_SAME_LEVEL',
   'MATCH_SCORE_HOUSING_PARTNER',
   'MATCH_SCORE_HOUSING_NEARBY',
-  'MATCH_SCORE_LANGUAGE_DIFFERENT_LEVEL',
+  'MATCH_SCORE_LANGUAGE_MINUS_1',
+  'MATCH_SCORE_LANGUAGE_MINUS_2',
+  'MATCH_SCORE_LANGUAGE_MINUS_3',
   'MATCH_SCORE_LANGUAGE_NEW',
   'MATCH_SCORE_SKILLS_ALL',
   'MATCH_SCORE_SKILLS_SOME',
@@ -67,10 +70,25 @@ function scoreConfig(): Record<ScoreKey, number> {
   return config;
 }
 
+/**
+ * Convertit une valeur de critère en texte à stocker. Ne tronque plus (colonnes TEXT depuis la
+ * migration 015 — auparavant coupé à 50 caractères sans avertissement, ce qui perdait
+ * silencieusement la fin des listes un peu longues, ex. compétences — voir Retour_09).
+ * Un `Date` (colonne `date` PostgreSQL) est formaté en ISO (YYYY-MM-DD) plutôt que via le
+ * `Date.prototype.toString()` par défaut de JavaScript, illisible une fois stocké et jamais
+ * rattrapable côté affichage (`formatDateFR` ne reconnaît que l'ISO ou le format français) — voir
+ * Retour_10 et Retour_24.
+ */
 function short(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null;
-  const rendered = Array.isArray(value) ? value.join(', ') : String(value);
-  return rendered.slice(0, 50);
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const year = value.getUTCFullYear();
+    const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(value.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return Array.isArray(value) ? value.join(', ') : String(value);
 }
 
 async function stateId(client: DbClient, designation: string): Promise<number> {
@@ -127,8 +145,8 @@ async function fetchOpportunityData(client: DbClient, idOpportunity: number) {
     ['durations', `SELECT d.id_duree,d.periode,d.niveau FROM veut_partir_pour v JOIN duree d ON d.id_duree=v.id_duree WHERE v.id_fiche_de_voeux=$1`, [ficheId]],
     ['candidateLanguages', `SELECT p.id_langue,l.designation,p.id_niveau_langue,n.designation AS niveau,n.ordre FROM parle p JOIN langue l ON l.id_langue=p.id_langue LEFT JOIN niveau_langue n ON n.id_niveau_langue=p.id_niveau_langue WHERE p.id_fiche_de_voeux=$1`, [ficheId]],
     ['postLanguage', `SELECT p.id_langue,l.designation,p.id_niveau_langue,n.designation AS niveau,n.ordre FROM langue_poste p JOIN langue l ON l.id_langue=p.id_langue LEFT JOIN niveau_langue n ON n.id_niveau_langue=p.id_niveau_langue WHERE p.id_poste=$1`, [postId]],
-    ['candidateSkills', `SELECT c.id_competences,c.designation FROM a_la_competence_de a JOIN competences c ON c.id_competences=a.id_competences WHERE a.id_fiche_de_voeux=$1`, [ficheId]],
-    ['postSkills', `SELECT c.id_competences,c.id_domaine,c.designation FROM recherche r JOIN competences c ON c.id_competences=r.id_competences WHERE r.id_poste=$1`, [postId]],
+    ['candidateSkills', `SELECT c.id_competences,c.id_domaine,dom.designation AS domaine,c.designation,a.niveau FROM a_la_competence_de a JOIN competences c ON c.id_competences=a.id_competences JOIN domaine dom ON dom.id_domaine=c.id_domaine WHERE a.id_fiche_de_voeux=$1`, [ficheId]],
+    ['postSkills', `SELECT c.id_competences,c.id_domaine,dom.designation AS domaine,c.designation FROM recherche r JOIN competences c ON c.id_competences=r.id_competences JOIN domaine dom ON dom.id_domaine=c.id_domaine WHERE r.id_poste=$1`, [postId]],
     ['education', `SELECT d.id_domaine,d.designation FROM a_etudie_dans a JOIN domaine d ON d.id_domaine=a.id_domaine WHERE a.id_fiche_de_voeux=$1`, [ficheId]],
     ['experience', `SELECT d.id_domaine,d.designation FROM a_travaille_dans a JOIN domaine d ON d.id_domaine=a.id_domaine WHERE a.id_fiche_de_voeux=$1`, [ficheId]],
   ];
@@ -136,12 +154,23 @@ async function fetchOpportunityData(client: DbClient, idOpportunity: number) {
   return { row, relations };
 }
 
+/**
+ * Une seule ligne par couple (opportunité, critère) — jamais un historique. Un premier calcul
+ * insère, un recalcul met à jour la ligne existante (UPSERT via la contrainte UNIQUE ajoutée en
+ * migration 016). Décision prise avec Damien le 19/09/2026 (Retour_10) : la DCC n'a besoin que de
+ * l'état courant, pas d'un empilement de lignes périmées.
+ */
 async function insertDetails(client: DbClient, opportunityId: number, details: Criterion[]) {
   for (const detail of details) {
     await client.query(
       `INSERT INTO criteres_detailles
        (date_evaluation,critere,valeur_poste,valeur_candidat,note_obtenue,id_opportunite)
-       VALUES(CURRENT_DATE,$1,$2,$3,$4,$5)`,
+       VALUES(CURRENT_DATE,$1,$2,$3,$4,$5)
+       ON CONFLICT (id_opportunite,critere) DO UPDATE SET
+         date_evaluation=CURRENT_DATE,
+         valeur_poste=EXCLUDED.valeur_poste,
+         valeur_candidat=EXCLUDED.valeur_candidat,
+         note_obtenue=EXCLUDED.note_obtenue`,
       [short(detail.critere), short(detail.valeurPoste), short(detail.valeurCandidat), detail.note, opportunityId],
     );
   }
@@ -187,15 +216,24 @@ async function scoreOpportunity(client: DbClient, idOpportunity: number): Promis
         : 0;
   add('Logement / couple', row.hebergement_designation, row.part_seul ? relations.housing.rows.map((item) => item.designation) : 'Départ en couple/famille', housingScore, 'contexte');
 
+  // Le référentiel Durée utilise des niveaux à mi-chemin (2.5 pour "1 an renouvelable" et
+  // "18 mois", volontairement entre "1 an"=2 et "2 ans"=3) : un simple écart === 1 ratait donc
+  // les paires de même niveau mais d'identifiant différent (écart 0) et les paires à 0.5 d'écart
+  // — voir Retour_11, 19/09/2026.
   let durationScore = 0;
   const postDuration = await client.query('SELECT niveau FROM duree WHERE id_duree=$1', [row.id_duree]);
   for (const duration of relations.durations.rows) {
+    const postLevel = postDuration.rows[0]?.niveau;
+    const levelGap = duration.niveau !== null && postLevel !== null
+      ? Math.abs(Number(duration.niveau) - Number(postLevel))
+      : null;
     const pairScore = duration.id_duree === row.id_duree
       ? cfg.MATCH_SCORE_EXACT
-      : duration.niveau !== null && postDuration.rows[0]?.niveau !== null
-        && Math.abs(Number(duration.niveau) - Number(postDuration.rows[0].niveau)) === 1
-        ? cfg.MATCH_SCORE_ADJACENT
-        : 0;
+      : levelGap === 0
+        ? cfg.MATCH_SCORE_DURATION_SAME_LEVEL
+        : levelGap !== null && levelGap <= 1
+          ? cfg.MATCH_SCORE_ADJACENT
+          : 0;
     durationScore = Math.max(durationScore, pairScore);
   }
   add('Durée', row.duree_designation, relations.durations.rows.map((item) => item.periode), durationScore, 'contexte');
@@ -219,12 +257,27 @@ async function scoreOpportunity(client: DbClient, idOpportunity: number): Promis
           : cfg.MATCH_SCORE_DATE_OTHER;
   add('Date de départ', row.date_arrivee_souhaitee, departureDate, departureScore, 'contexte');
 
+  // Niveau candidat >= niveau requis (Notions < Parlé < Courant < Natif, via niveau_langue.ordre)
+  // => match plein, même si le niveau exact diffère (ex. Natif alors que Courant est demandé) :
+  // un niveau supérieur au besoin ne doit jamais être pénalisé. En dessous, barème dégressif par
+  // écart de niveau plutôt qu'un score plat unique — voir Retour_12, 19/09/2026.
   const requiredLanguage = relations.postLanguage.rows[0];
   let languageScore = cfg.MATCH_SCORE_EXACT;
   if (requiredLanguage) {
     const spoken = relations.candidateLanguages.rows.find((item) => item.id_langue === requiredLanguage.id_langue);
+    const gap = spoken?.ordre !== null && spoken?.ordre !== undefined && requiredLanguage.ordre !== null
+      ? Number(requiredLanguage.ordre) - Number(spoken.ordre)
+      : null;
     languageScore = spoken
-      ? (spoken.id_niveau_langue === requiredLanguage.id_niveau_langue ? cfg.MATCH_SCORE_EXACT : cfg.MATCH_SCORE_LANGUAGE_DIFFERENT_LEVEL)
+      ? (gap !== null && gap <= 0
+          ? cfg.MATCH_SCORE_EXACT
+          : gap === 1
+            ? cfg.MATCH_SCORE_LANGUAGE_MINUS_1
+            : gap === 2
+              ? cfg.MATCH_SCORE_LANGUAGE_MINUS_2
+              : gap !== null && gap >= 3
+                ? cfg.MATCH_SCORE_LANGUAGE_MINUS_3
+                : 0)
       : row.nouvelle_langue
         ? cfg.MATCH_SCORE_LANGUAGE_NEW
         : 0;
@@ -245,7 +298,12 @@ async function scoreOpportunity(client: DbClient, idOpportunity: number): Promis
       : domainCovered
         ? cfg.MATCH_SCORE_SKILLS_DOMAIN
         : 0;
-  add('Compétences', postSkills.map((item) => item.designation), relations.candidateSkills.rows.map((item) => item.designation), skillsScore, 'mission');
+  // Stocké en JSON structuré (domaine + compétence, + niveau côté candidat) pour permettre un
+  // affichage en tableau détaillé — un simple join(', ') tronqué à 50 caractères faisait perdre
+  // silencieusement la fin de la liste (retour de test Damien, Retour_09, 18/09/2026).
+  const postSkillsJson = JSON.stringify(postSkills.map((item) => ({ domaine: item.domaine, competence: item.designation })));
+  const candidateSkillsJson = JSON.stringify(relations.candidateSkills.rows.map((item) => ({ domaine: item.domaine, competence: item.designation, niveau: item.niveau })));
+  add('Compétences', postSkillsJson, candidateSkillsJson, skillsScore, 'mission');
 
   const zoneOrangeScore = !row.flag_zone_orange
     ? cfg.MATCH_SCORE_WARNING_OK

@@ -15,13 +15,17 @@
 import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import Papa from 'papaparse';
-import bcrypt from 'bcryptjs';
-import { randomBytes } from 'node:crypto';
 import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
 import { nullableDate, parseFrenchDate } from '../lib/frenchDate';
-import { sendCandidateInvitations, smtpIsConfigured, type CandidateInvitation } from '../lib/candidateInvitations';
+import { smtpIsConfigured } from '../lib/candidateInvitations';
+import {
+  createAccountForContactIfMissing,
+  sendPendingAccountInvitations,
+  type PendingAccountInvitation,
+} from '../services/accountCreation';
 import { Opportunite } from '../services/matching';
+import { ETAT_CALCULE_SQL, ETAT_ACTION_COTE_SQL } from '../services/candidatEtatCalcule';
 import { actionUpload, cleanupUploadedFiles, uploadedFileUrls, verifyUploadedFiles } from '../lib/actionUploads';
 
 const router = Router();
@@ -46,7 +50,7 @@ const CSV_COLUMNS = [
   'administration_tutelle','experience_engagement','experience_engagement_detail','info_complementaire','disponibilites_contact',
   'sessions_choisir_preference','enfant_consolide',
 ];
-type Refs = Record<'pays'|'duree'|'domaine'|'langue'|'niveau'|'notoriete', Record<string, number>>;
+type Refs = Record<'duree'|'domaine'|'langue'|'niveau'|'notoriete', Record<string, number>>;
 const bool = (v?: string) => ['true', '1', 'oui', 'yes'].includes((v ?? '').trim().toLowerCase());
 const validBool = (v?: string) => ['true','false','oui','non','yes','no','1','0'].includes((v ?? '').trim().toLowerCase());
 const entries = (v?: string) => (v ?? '').split(';').map(x => x.trim()).filter(Boolean);
@@ -66,6 +70,7 @@ const CSV_LENGTH_RULES: CsvLengthRule[] = [
   { field: 'adresse2', target: 'adresse.adresse2', max: 50 },
   { field: 'code_postal', target: 'adresse.code_postal', max: 50 },
   { field: 'ville', target: 'adresse.ville', max: 50 },
+  { field: 'pays', target: 'adresse.pays', max: 50 },
   { field: 'etat_de_vie', target: 'candidat.perso_etat_de_vie', max: 20 },
   { field: 'nom_prenom_conjoint', target: 'candidat.perso_nom_prenom_conjoint', max: 50 },
   { field: 'duree_precision_si_autre', target: 'veut_partir_pour.projet_duree_specifique', max: 50 },
@@ -90,13 +95,15 @@ const CSV_LENGTH_RULES: CsvLengthRule[] = [
 const mapRows = (rows: Array<{ crm_key?: string; designation?: string; id: number }>) =>
   Object.fromEntries(rows.map(r => [(r.crm_key ?? r.designation)!, r.id]));
 async function refs(): Promise<Refs> {
-  const [pays, duree, domaine, langue, niveau, notoriete] = await Promise.all([
-    pool.query('SELECT crm_key,id_pays AS id FROM pays'), pool.query("SELECT COALESCE(to_jsonb(d)->>'designation',d.periode) AS designation,id_duree AS id FROM duree d WHERE COALESCE(active,true)"),
-    pool.query('SELECT crm_key,id_domaine AS id FROM domaine'), pool.query('SELECT crm_key,id_langue AS id FROM langue'),
+  // Un crm_key désactivé (active=false) doit être refusé à l'import comme un crm_key
+  // inconnu, uniformément pour tous les référentiels (aligné sur postes.ts le 19/09/2026).
+  const [duree, domaine, langue, niveau, notoriete] = await Promise.all([
+    pool.query("SELECT COALESCE(to_jsonb(d)->>'designation',d.periode) AS designation,id_duree AS id FROM duree d WHERE COALESCE(active,true)"),
+    pool.query('SELECT crm_key,id_domaine AS id FROM domaine WHERE COALESCE(active,true)'), pool.query('SELECT crm_key,id_langue AS id FROM langue WHERE COALESCE(active,true)'),
     pool.query('SELECT crm_key,id_niveau_langue AS id FROM niveau_langue WHERE COALESCE(active,true)'),
     pool.query('SELECT crm_key,id_notoriete_dcc AS id FROM notoriete_dcc WHERE COALESCE(active,true)'),
   ]);
-  return { pays: mapRows(pays.rows), duree: mapRows(duree.rows), domaine: mapRows(domaine.rows), langue: mapRows(langue.rows), niveau: mapRows(niveau.rows), notoriete: mapRows(notoriete.rows) };
+  return { duree: mapRows(duree.rows), domaine: mapRows(domaine.rows), langue: mapRows(langue.rows), niveau: mapRows(niveau.rows), notoriete: mapRows(notoriete.rows) };
 }
 function headers(fields?: string[]): string | null {
   const actual = (fields ?? []).map(x => x.trim());
@@ -120,7 +127,6 @@ function validate(row: Record<string,string>, line: number, r: Refs) {
     const [, niveau] = item.split(':').map(x => x.trim());
     if (niveau && niveau.length > 20) errors.push(`Ligne ${line}, colonne 'langues' : niveau de langue de ${niveau.length} caractères, maximum autorisé 20.`);
   }
-  if (row.pays?.trim() && !r.pays[row.pays.trim()]) errors.push(`Pays inconnu : crm_key=${row.pays.trim()} — créez-le d'abord`);
   for (const f of ['domaines_formation','domaines_experience_pro']) for (const k of entries(row[f])) if (!r.domaine[k]) errors.push(`Domaine inconnu : crm_key=${k} — créez-le d'abord`);
   for (const item of entries(row.langues)) {
     const [langueKey, niveauKey] = item.split(':').map(x => x.trim());
@@ -138,7 +144,7 @@ function validate(row: Record<string,string>, line: number, r: Refs) {
   return { ligne: line, statut: errors.length ? 'erreur' as const : 'ok' as const, message: errors.length ? errors.join(' | ') : '✓' };
 }
 function parsed(req: any) {
-  const result = Papa.parse<Record<string,string>>(req.file.buffer.toString('utf8'), { header: true, skipEmptyLines: true, transformHeader: h => h.trim() });
+  const result = Papa.parse<Record<string,string>>(req.file.buffer.toString('utf8').replace(/^\uFEFF/, ''), { header: true, skipEmptyLines: true, transformHeader: h => h.trim() });
   if (result.data.length > 5000) throw new Error('Le fichier CSV dépasse la limite de 5 000 lignes.');
   return result;
 }
@@ -152,7 +158,14 @@ async function existingCandidateWebKeys(rows: Record<string,string>[]) {
   return new Set(existing.rows.map(row => row.web_key));
 }
 
-function validateAll(rows: Record<string,string>[], r: Refs, existingWebKeys: Set<string>) {
+async function existingUserLogins(rows: Record<string,string>[]) {
+  const emails = [...new Set(rows.map(row => row.email?.trim()).filter(Boolean))];
+  if (!emails.length) return new Set<string>();
+  const existing = await pool.query<{ login: string }>('SELECT login FROM user_ WHERE login = ANY($1::text[])', [emails]);
+  return new Set(existing.rows.map(row => row.login));
+}
+
+function validateAll(rows: Record<string,string>[], r: Refs, existingWebKeys: Set<string>, existingLogins: Set<string>) {
   const web = new Set<string>(), emails = new Set<string>();
   return rows.map((row,i) => {
     const result=validate(row,i+2,r);
@@ -165,6 +178,12 @@ function validateAll(rows: Record<string,string>[], r: Refs, existingWebKeys: Se
     const webKey = row.ref_candidat?.trim();
     if (webKey && existingWebKeys.has(webKey)) {
       const message = `Candidat déjà importé : ref_candidat=${webKey} — un candidat déjà en base ne doit jamais être réenvoyé, toute correction se fait depuis l'écran Recruteur.`;
+      result.statut = 'erreur';
+      result.message = result.message === '✓' ? message : `${result.message} | ${message}`;
+    }
+    const email = row.email?.trim();
+    if (email && existingLogins.has(email)) {
+      const message = `Email déjà utilisé comme identifiant d'un compte existant : ${email} — un même email ne peut pas servir à la fois pour un candidat et pour un autre compte (recruteur, CM, admin ou autre candidat).`;
       result.statut = 'erreur';
       result.message = result.message === '✓' ? message : `${result.message} | ${message}`;
     }
@@ -203,8 +222,19 @@ const optionalText = (value: unknown) => typeof value === 'string' && value.trim
 type FilterSpec = { valuesSql: string; conditionSql: string };
 const CANDIDATE_FILTERS: Record<string, FilterSpec> = {
   etat: {
-    valuesSql: `SELECT DISTINCT ec.designation AS value FROM candidat c JOIN etat_candidat ec ON ec.id_etat_candidat=c.id_etat_candidat WHERE ec.designation IS NOT NULL ORDER BY value`,
-    conditionSql: 'ec.designation = ANY($VALUE::text[])',
+    /* Filtre sur l'état CALCULÉ (Retour_30) et non sur l'état réel : c'est ce que voit le recruteur. */
+    valuesSql: `SELECT DISTINCT ${ETAT_CALCULE_SQL} AS value FROM candidat c JOIN etat_candidat ec ON ec.id_etat_candidat=c.id_etat_candidat LEFT JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat ORDER BY value`,
+    conditionSql: `(${ETAT_CALCULE_SQL}) = ANY($VALUE::text[])`,
+  },
+  /* Filtre "suivi" (Retour_30) : mêmes définitions que les 4 cartes du cockpit recruteur
+     (routes/recruteur.ts) — utilisé par les liens des cartes vers cette liste, pas par un en-tête
+     de colonne. Plusieurs valeurs = OU. */
+  suivi: {
+    valuesSql: `SELECT unnest(ARRAY['À qualifier','À mettre en lien','À affecter']) AS value`,
+    conditionSql: `(
+      ('À qualifier' = ANY($VALUE::text[]) AND EXISTS (SELECT 1 FROM opportunite o JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite JOIN fiche_de_voeux fx ON fx.id_fiche_de_voeux=o.id_fiche_de_voeux WHERE fx.id_candidat=c.id_candidat AND eo.designation='Non qualifié' AND NOT COALESCE(o.flag_opportunite_obsolete,false)))
+      OR ('À mettre en lien' = ANY($VALUE::text[]) AND EXISTS (SELECT 1 FROM opportunite o JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite JOIN fiche_de_voeux fx ON fx.id_fiche_de_voeux=o.id_fiche_de_voeux WHERE fx.id_candidat=c.id_candidat AND eo.designation='Approuvé CM' AND NOT COALESCE(fx.flag_candidat_deja_mis_en_lien,false)))
+      OR ('À affecter' = ANY($VALUE::text[]) AND EXISTS (SELECT 1 FROM opportunite o JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite JOIN fiche_de_voeux fx ON fx.id_fiche_de_voeux=o.id_fiche_de_voeux WHERE fx.id_candidat=c.id_candidat AND eo.designation='Accepté')))`,
   },
   domaine: {
     valuesSql: `SELECT DISTINCT d.designation AS value FROM a_etudie_dans ae JOIN domaine d ON d.id_domaine=ae.id_domaine ORDER BY value`,
@@ -240,7 +270,7 @@ function candidateFilterSql(filters: Record<string, string[]>, startIndex: numbe
   let index = startIndex;
   for (const [key, values] of Object.entries(filters)) {
     if (!values.length) continue;
-    clauses.push(CANDIDATE_FILTERS[key].conditionSql.replace('$VALUE', `$${index}`));
+    clauses.push(CANDIDATE_FILTERS[key].conditionSql.replaceAll('$VALUE', `$${index}`));
     params.push(values);
     index += 1;
   }
@@ -255,7 +285,7 @@ async function transition(client: any, id: string, state: string, actor: string,
 router.get('/import/template', requireRole(RECRUITERS), (_req,res) => { res.type('text/csv').attachment('template_candidats_dcc.csv').send(`${CSV_COLUMNS.join(',')}\n`); });
 router.post('/import/verifier', requireRole(RECRUITERS), upload.single('file'), async (req,res) => {
   if (!req.file) return void res.status(400).json({ error: 'Aucun fichier reçu.' });
-  try { const p = parsed(req); const h = headers(p.meta.fields); if (h) return void res.status(400).json({error:h}); if (p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`}); const [r, existingWebKeys]=await Promise.all([refs(),existingCandidateWebKeys(p.data)]); res.json({ lignes:validateAll(p.data,r,existingWebKeys) }); } catch (e) { console.error(e); res.status(500).json({error:'Erreur interne du serveur.'}); }
+  try { const p = parsed(req); const h = headers(p.meta.fields); if (h) return void res.status(400).json({error:h}); if (p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`}); const [r, existingWebKeys, existingLogins]=await Promise.all([refs(),existingCandidateWebKeys(p.data),existingUserLogins(p.data)]); res.json({ lignes:validateAll(p.data,r,existingWebKeys,existingLogins) }); } catch (e) { console.error(e); res.status(500).json({error:'Erreur interne du serveur.'}); }
 });
 
 /**
@@ -269,13 +299,13 @@ router.post('/import/executer', requireRole(RECRUITERS), upload.single('file'), 
   try {
     const p=parsed(req), h=headers(p.meta.fields); if(h) return void res.status(400).json({error:h});
     if(p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`});
-    const [r, existingWebKeys]=await Promise.all([refs(),existingCandidateWebKeys(p.data)]);
-    const bad=validateAll(p.data,r,existingWebKeys).filter(x=>x.statut==='erreur');
+    const [r, existingWebKeys, existingLogins]=await Promise.all([refs(),existingCandidateWebKeys(p.data),existingUserLogins(p.data)]);
+    const bad=validateAll(p.data,r,existingWebKeys,existingLogins).filter(x=>x.statut==='erreur');
     if(bad.length) return void res.status(422).json({error:'Des erreurs de validation ont été détectées — import annulé.',lignes_en_erreur:bad});
-    await client.query('BEGIN'); const ids:number[]=[]; const invitations: CandidateInvitation[]=[];
+    await client.query('BEGIN'); const ids:number[]=[]; const invitations: PendingAccountInvitation[]=[];
     for(const row of p.data) {
       const birth=parseFrenchDate(row.date_naissance).iso, marriage=parseFrenchDate(row.date_mariage).iso, available=parseFrenchDate(row.date_disponibilite).iso;
-      const a=await client.query('INSERT INTO adresse(adresse1,adresse2,code_postal,ville,id_pays) VALUES($1,$2,$3,$4,$5) RETURNING id_adresse',[text(row.adresse1),text(row.adresse2),text(row.code_postal),text(row.ville),r.pays[row.pays.trim()]]);
+      const a=await client.query('INSERT INTO adresse(adresse1,adresse2,code_postal,ville,pays) VALUES($1,$2,$3,$4,$5) RETURNING id_adresse',[text(row.adresse1),text(row.adresse2),text(row.code_postal),text(row.ville),text(row.pays)]);
       const idAddress:number=a.rows[0].id_adresse;
       const c=await client.query(`INSERT INTO contact(crm_key,role,genre,nom_contact,nom_naissance,prenom_contact,tel_contact,email_contact,date_naissance,lieu_naissance,nationalite,id_adresse) VALUES($1,'CAN',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id_contact`,[row.ref_candidat.trim(),text(row.genre),text(row.nom),text(row.nom_naissance),text(row.prenom),text(row.telephone),text(row.email),birth,text(row.lieu_naissance),text(row.nationalite),idAddress]);
       const idContact:number=c.rows[0].id_contact;
@@ -298,16 +328,13 @@ router.post('/import/executer', requireRole(RECRUITERS), upload.single('file'), 
       for(const k of entries(row.domaines_experience_pro)) await client.query('INSERT INTO a_travaille_dans VALUES($1,$2)',[idF,r.domaine[k]]);
       for(const item of entries(row.langues)){const [k,n]=item.split(':').map(x=>x.trim());await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,id_niveau_langue) VALUES($1,$2,$3)',[idF,r.langue[k],r.niveau[n]]);}
       for(const k of entries(row.connait_dcc_par)) await client.query('INSERT INTO connait_la_dcc_par(id_candidat,id_notoriete_dcc,detail,autre_designation) VALUES($1,$2,$3,$4)',[idCandidate,r.notoriete[k],text(row.connait_dcc_detail),text(row.connait_dcc_detail)]);
-      const has=await client.query('SELECT 1 FROM user_ WHERE id_contact=$1',[idContact]);
-      if(!has.rows.length) {
-        const temporaryPassword = `Dcc-${randomBytes(12).toString('base64url')}`;
-        await client.query(`INSERT INTO user_(login,password,id_contact,role_applicatif)
-          VALUES($1,$2,$3,'CANDIDAT')`,[row.email.trim(),await bcrypt.hash(temporaryPassword,12),idContact]);
-        invitations.push({ email: row.email.trim(), prenom: text(row.prenom), temporaryPassword });
-      }
+      const invitation=await createAccountForContactIfMissing(client,{
+        idContact,email:row.email.trim(),prenom:text(row.prenom),roleApplicatif:'CANDIDAT',active:true,emailMode:'candidat',
+      });
+      if(invitation) invitations.push(invitation);
     }
-    if(invitations.length && smtpIsConfigured()) await sendCandidateInvitations(invitations);
     await client.query('COMMIT');
+    await sendPendingAccountInvitations(invitations);
     res.json({message:`Import réussi. ${ids.length} candidat(s) traité(s).`,nb_candidats:ids.length,ids_candidats:ids,invitations:invitations.length?(smtpIsConfigured()?'sent':'pending_smtp_configuration'):'not_required'});
   } catch(e) { await client.query('ROLLBACK'); console.error('Import candidats rollback',e); res.status(500).json({error:'Erreur interne — rollback complet effectué. Aucune donnée modifiée.'}); } finally { client.release(); }
 });
@@ -317,7 +344,11 @@ router.get('/', requireRole(RECRUITERS), async (req, res) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const filters = parseFilterQuery(req.query.filtres, CANDIDATE_FILTERS);
     const legacyStates = typeof req.query.etats === 'string' ? req.query.etats.split(',').map(x=>x.trim()).filter(Boolean) : [];
-    const states = filters.etat?.length ? filters.etat : legacyStates;
+    /* Le filtre "état" porte sur l'état calculé (traité par candidateFilterSql) ; `states` ne sert
+       plus qu'au paramètre historique `etats` (désignations réelles). Un filtre d'état actif lève
+       l'exclusion par défaut des états Non éligible / Non candidat, pour pouvoir les afficher. */
+    const states = legacyStates;
+    const etatFilterActive = (filters.etat?.length ?? 0) > 0;
     const generatedFilters = candidateFilterSql(filters, 2);
     const search = typeof req.query.recherche === 'string' ? req.query.recherche.trim() : '';
     const searchIndex = 2 + generatedFilters.params.length;
@@ -331,6 +362,8 @@ router.get('/', requireRole(RECRUITERS), async (req, res) => {
         co.prenom_contact,
         co.email_contact,
         ec.designation AS etat_designation,
+        ${ETAT_CALCULE_SQL} AS etat_calcule,
+        ${ETAT_ACTION_COTE_SQL} AS etat_action_cote,
         c.id_etat_candidat, c.date_revue, f.flag_candidat_deja_mis_en_lien,
         (c.date_revue IS NOT NULL AND c.date_revue <= CURRENT_DATE) AS alerte_revue,
         COALESCE((SELECT string_agg(DISTINCT d.designation, ', ') FROM a_etudie_dans ae JOIN domaine d ON d.id_domaine=ae.id_domaine JOIN fiche_de_voeux f ON f.id_fiche_de_voeux=ae.id_fiche_de_voeux WHERE f.id_candidat=c.id_candidat),'') AS domaines,
@@ -344,14 +377,14 @@ router.get('/', requireRole(RECRUITERS), async (req, res) => {
         JOIN contact co ON co.id_contact = c.id_contact
         JOIN etat_candidat ec ON ec.id_etat_candidat = c.id_etat_candidat
         LEFT JOIN fiche_de_voeux f ON f.id_candidat = c.id_candidat
-        WHERE ((cardinality($1::text[])=0 AND ec.id_etat_candidat NOT IN ('NEL','NCA'))
+        WHERE ((cardinality($1::text[])=0 AND (${etatFilterActive ? 'TRUE' : 'FALSE'} OR ec.id_etat_candidat NOT IN ('NEL','NCA')))
            OR ec.designation=ANY($1::text[]))${generatedFilters.sql}
       ),
       matching_candidates AS (
         SELECT *
         FROM visible_candidates
         WHERE $${searchIndex}::text = '' OR concat_ws(' ',
-          nom_contact, prenom_contact, domaines, regions, duree, langues, etat_designation,
+          nom_contact, prenom_contact, domaines, regions, duree, langues, etat_designation, etat_calcule,
           to_char(date_revue, 'DD/MM/YYYY'),
           opportunites_a_qualifier::text, opportunites_approuvees::text, opportunites_affectation::text,
           CASE WHEN flag_candidat_deja_mis_en_lien THEN 'Oui' ELSE 'Non' END
@@ -432,8 +465,10 @@ router.get('/:id', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async 
       `SELECT c.*, co.nom_contact, co.prenom_contact, co.email_contact, co.tel_contact,
                co.genre, co.date_naissance, co.nationalite,
                 co.nom_naissance,co.lieu_naissance, co.id_adresse,
-                 a.adresse1,a.adresse2,a.code_postal,a.ville,a.id_pays,pays.designation AS pays_designation,
+                 a.adresse1,a.adresse2,a.code_postal,a.ville,a.pays AS pays_designation,
                 ec.designation AS etat_designation,
+                ${ETAT_CALCULE_SQL} AS etat_calcule,
+                ${ETAT_ACTION_COTE_SQL} AS etat_action_cote,
                 f.id_fiche_de_voeux,f.flag_fiche_de_voeux_soumise,
                 f.flag_candidat_deja_mis_en_lien,f.part_seul,f.zone_orange,
                 f.conditions_spartiates,f.hopital_proche,f.fonctionnaire_dispo_demandee,
@@ -458,7 +493,6 @@ router.get('/:id', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async 
        JOIN contact co ON co.id_contact = c.id_contact
        JOIN etat_candidat ec ON ec.id_etat_candidat = c.id_etat_candidat
         LEFT JOIN adresse a ON a.id_adresse=co.id_adresse
-        LEFT JOIN pays ON pays.id_pays=a.id_pays
        LEFT JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat
        WHERE c.id_candidat = $1`,
       [req.params.id]
@@ -478,7 +512,7 @@ router.get('/:id', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async 
 router.patch('/:id/etat-civil', requireRole(RECRUITERS), async (req,res) => {
   const contactFields=['genre','nom_contact','nom_naissance','prenom_contact','tel_contact','email_contact','date_naissance','lieu_naissance','nationalite'];
   const candidateFields=['perso_depart_en_couple','perso_nom_prenom_conjoint','perso_etat_de_vie','perso_date_mariage','perso_est_parent','perso_pars_avec_enfants'];
-  const addressFields=['adresse1','adresse2','code_postal','ville','id_pays'];
+  const addressFields=['adresse1','adresse2','code_postal','ville','pays'];
   const contacts=contactFields.filter(k=>k in req.body), candidates=candidateFields.filter(k=>k in req.body), addresses=addressFields.filter(k=>k in req.body);
   if(!contacts.length&&!candidates.length&&!addresses.length) return void res.status(400).json({error:'Aucun champ modifiable.'});
   const client=await pool.connect();
@@ -488,7 +522,7 @@ router.patch('/:id/etat-civil', requireRole(RECRUITERS), async (req,res) => {
     if(!row.rows.length){await client.query('ROLLBACK');return void res.status(404).json({error:'Candidat non trouvé.'});}
     if(contacts.length) await client.query(`UPDATE contact SET ${contacts.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_contact=$${contacts.length+1}`,[...contacts.map(k=>formValue(k, req.body[k]) || null),row.rows[0].id_contact]);
     let idAdresse=row.rows[0].id_adresse;
-    if(addresses.length&&!idAdresse){const created=await client.query("INSERT INTO adresse(id_pays) VALUES((SELECT id_pays FROM pays ORDER BY id_pays LIMIT 1)) RETURNING id_adresse");idAdresse=created.rows[0].id_adresse;await client.query('UPDATE contact SET id_adresse=$1 WHERE id_contact=$2',[idAdresse,row.rows[0].id_contact]);}
+    if(addresses.length&&!idAdresse){const created=await client.query("INSERT INTO adresse DEFAULT VALUES RETURNING id_adresse");idAdresse=created.rows[0].id_adresse;await client.query('UPDATE contact SET id_adresse=$1 WHERE id_contact=$2',[idAdresse,row.rows[0].id_contact]);}
     if(addresses.length) await client.query(`UPDATE adresse SET ${addresses.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_adresse=$${addresses.length+1}`,[...addresses.map(k=>req.body[k]||null),idAdresse]);
     if(candidates.length) await client.query(`UPDATE candidat SET ${candidates.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_candidat=$${candidates.length+1}`,[...candidates.map(k=>formValue(k, req.body[k])),req.params.id]);
     await client.query('COMMIT');res.json({message:'État civil mis à jour.'});

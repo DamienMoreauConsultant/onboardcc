@@ -14,7 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 
-const applicationRoles = ['ADMIN', 'RECRUTEUR', 'CM'] as const;
+/* CM est créé automatiquement à l'import des postes (jamais depuis ce module — voir routes/postes.ts). */
+const applicationRoles = ['ADMIN', 'RECRUTEUR'] as const;
 type ApplicationRole = typeof applicationRoles[number];
 
 const userSchema = z.object({
@@ -23,7 +24,7 @@ const userSchema = z.object({
   email: z.string().trim().email('Saisissez une adresse e-mail valide.'),
   telephone: z.string().trim().min(1, 'Le téléphone est obligatoire.'),
   genre: z.string().trim().min(1, 'Le genre est obligatoire.'),
-  role_contact: z.enum(['ADMIN', 'REC', 'CHZ', 'CM1', 'CM2']),
+  role_contact: z.enum(['ADMIN', 'REC', 'CHZ']),
 });
 type UserFormValues = z.infer<typeof userSchema>;
 
@@ -31,7 +32,6 @@ const emptyForm: UserFormValues = { nom: '', prenom: '', email: '', telephone: '
 
 function contactRoleOptions(role: ApplicationRole) {
   if (role === 'RECRUTEUR') return [['REC', 'REC — Recruteur'], ['CHZ', 'CHZ — Chargé de zone']] as const;
-  if (role === 'CM') return [['CM1', 'CM1'], ['CM2', 'CM2']] as const;
   return [['ADMIN', 'ADMIN']] as const;
 }
 
@@ -71,7 +71,7 @@ export default function AdminUtilisateurs() {
 
   const chooseRole = (role: ApplicationRole) => {
     setSelectedRole(role);
-    form.setValue('role_contact', role === 'ADMIN' ? 'ADMIN' : role === 'RECRUTEUR' ? 'REC' : 'CM1');
+    form.setValue('role_contact', role === 'ADMIN' ? 'ADMIN' : 'REC');
     setStep(2);
   };
 
@@ -153,7 +153,7 @@ export default function AdminUtilisateurs() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader><DialogTitle>{step === 1 ? 'Ajouter un utilisateur' : `Nouvel utilisateur ${selectedRole}`}</DialogTitle><DialogDescription>{step === 1 ? 'Étape 1 sur 2 — Choisissez son rôle applicatif.' : 'Étape 2 sur 2 — Renseignez ses coordonnées. Les champs sont obligatoires.'}</DialogDescription></DialogHeader>
           {step === 1 ? <div className="grid gap-3 py-4">
-            {applicationRoles.map((role) => <Button key={role} variant="outline" className="h-auto justify-start p-4 text-left" onClick={() => chooseRole(role)} data-testid={`button-role-${role}`}><span><strong>{role}</strong><span className="mt-1 block text-xs font-normal text-muted-foreground">{role === 'ADMIN' ? 'Administration de l’application.' : role === 'RECRUTEUR' ? 'Accès complet aux écrans recruteur.' : 'Accès aux écrans chargé de mission.'}</span></span></Button>)}
+            {applicationRoles.map((role) => <Button key={role} variant="outline" className="h-auto justify-start p-4 text-left" onClick={() => chooseRole(role)} data-testid={`button-role-${role}`}><span><strong>{role}</strong><span className="mt-1 block text-xs font-normal text-muted-foreground">{role === 'ADMIN' ? 'Administration de l’application.' : 'Accès complet aux écrans recruteur.'}</span></span></Button>)}
           </div> : <Form {...form}><form onSubmit={form.handleSubmit(createAccount)} className="space-y-4 py-2">
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField control={form.control} name="nom" render={({ field }) => <FormItem><FormLabel>Nom</FormLabel><FormControl><Input {...field} data-testid="input-user-nom" /></FormControl><FormMessage /></FormItem>} />

@@ -20,6 +20,7 @@ import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
 import { parseFrenchDate } from '../lib/frenchDate';
 import { Opportunite } from '../services/matching';
+import { createAccountForContactIfMissing, sendPendingAccountInvitations, type PendingAccountInvitation } from '../services/accountCreation';
 import {
   linkPosteContact,
   type PosteContactRole,
@@ -69,9 +70,9 @@ const CSV_COLUMNS = [
   'deuxieme_poste_alentour', 'nouveau_poste', 'nom_ancien_volontaire', 'odd_lie',
   'contexte_mission', 'objectifs_mission', 'taches', 'detail_competences',
   'dimension_ecclesiale',
-  'cm1_crmkey', 'cm1_nom', 'cm1_prenom',
-  'cm2_crmkey', 'cm2_nom', 'cm2_prenom',
-  'cz_crmkey', 'cz_nom', 'cz_prenom',
+  'cm1_crmkey', 'cm1_nom', 'cm1_prenom', 'cm1_email',
+  'cm2_crmkey', 'cm2_nom', 'cm2_prenom', 'cm2_email',
+  'cz_crmkey', 'cz_nom', 'cz_prenom', 'cz_email',
   'mis_crmkey', 'mis_nom', 'mis_prenom', 'mis_telephone', 'mis_email',
   'mis_adresse1', 'mis_adresse2', 'mis_code_postal', 'mis_ville', 'mis_pays',
   'par_crmkey', 'par_nom', 'par_prenom', 'par_telephone', 'par_email',
@@ -100,15 +101,18 @@ type RefData = {
  * Évite les N+1 queries pendant la validation ligne par ligne.
  */
 async function loadRefData(): Promise<RefData> {
+  /* Un crm_key désactivé (active=false) doit être refusé à l'import comme un
+     crm_key inconnu, uniformément pour tous les référentiels — retour de test
+     du 19/09/2026 (seuls niveau_langue et type_billet_avion filtraient déjà). */
   const [pays, hebergement, duree, domaine, competences, environnement, langue, niveauLangue, billetAvion] =
     await Promise.all([
-      pool.query('SELECT crm_key, id_pays        AS id FROM pays'),
-      pool.query('SELECT crm_key, id_hebergement AS id FROM hebergement'),
-      pool.query('SELECT crm_key, id_duree       AS id FROM duree'),
-      pool.query('SELECT crm_key, id_domaine     AS id FROM domaine'),
-      pool.query('SELECT crm_key, id_competences AS id FROM competences'),
-      pool.query('SELECT crm_key, id_environnement AS id FROM environnement'),
-      pool.query('SELECT crm_key, id_langue      AS id FROM langue'),
+      pool.query('SELECT crm_key, id_pays        AS id FROM pays WHERE COALESCE(active,true)'),
+      pool.query('SELECT crm_key, id_hebergement AS id FROM hebergement WHERE COALESCE(active,true)'),
+      pool.query('SELECT crm_key, id_duree       AS id FROM duree WHERE COALESCE(active,true)'),
+      pool.query('SELECT crm_key, id_domaine     AS id FROM domaine WHERE COALESCE(active,true)'),
+      pool.query('SELECT crm_key, id_competences AS id FROM competences WHERE COALESCE(active,true)'),
+      pool.query('SELECT crm_key, id_environnement AS id FROM environnement WHERE COALESCE(active,true)'),
+      pool.query('SELECT crm_key, id_langue      AS id FROM langue WHERE COALESCE(active,true)'),
       pool.query('SELECT crm_key, id_niveau_langue AS id FROM niveau_langue WHERE COALESCE(active,true)'),
       pool.query('SELECT crm_key, id_type_billet_avion AS id FROM type_billet_avion WHERE COALESCE(active,true)'),
     ]);
@@ -128,6 +132,46 @@ async function loadRefData(): Promise<RefData> {
     billetAvion: toMap(billetAvion.rows),
   };
 }
+
+/**
+ * Longueurs maximales des colonnes CSV correspondant à des VARCHAR(n) en base
+ * (fiche_de_poste, contact, adresse — voir prompt_0_sql_versionAvantProd).
+ * Sans ce contrôle, une valeur trop longue passe /import/verifier ("ok") puis
+ * fait échouer /import/executer avec une erreur PostgreSQL brute au lieu d'un
+ * message de validation clair ligne par ligne (retour de test du 19/09/2026).
+ */
+type CsvLengthRule = { field: string; target: string; max: number };
+const CSV_LENGTH_RULES: CsvLengthRule[] = [
+  { field: 'ref_poste', target: 'fiche_de_poste.crm_key', max: 40 },
+  { field: 'statut_volontaire', target: 'fiche_de_poste.statut_volontaire', max: 20 },
+  { field: 'priorite', target: 'fiche_de_poste.priorite', max: 20 },
+  { field: 'partenaire_ong', target: 'fiche_de_poste.ong', max: 50 },
+  { field: 'nom_candidat_preaffecte', target: 'fiche_de_poste.nom_candidat', max: 50 },
+  { field: 'fonction', target: 'fiche_de_poste.fonction', max: 100 },
+  { field: 'gite_et_couvert', target: 'fiche_de_poste.gite_et_couvert', max: 50 },
+  { field: 'preference_genre', target: 'fiche_de_poste.preference_genre', max: 50 },
+  { field: 'nom_ancien_volontaire', target: 'fiche_de_poste.nom_ancien_volontaire', max: 50 },
+  { field: 'odd_lie', target: 'fiche_de_poste.odd_lie', max: 50 },
+  ...['cm1', 'cm2', 'cz', 'mis', 'par'].flatMap((prefix) => [
+    { field: `${prefix}_crmkey`, target: 'contact.crm_key', max: 50 },
+    { field: `${prefix}_nom`, target: 'contact.nom_contact', max: 50 },
+    { field: `${prefix}_prenom`, target: 'contact.prenom_contact', max: 50 },
+  ]),
+  { field: 'cm1_email', target: 'contact.email_contact', max: 50 },
+  { field: 'cm2_email', target: 'contact.email_contact', max: 50 },
+  { field: 'cz_email', target: 'contact.email_contact', max: 50 },
+  { field: 'mis_email', target: 'contact.email_contact', max: 50 },
+  { field: 'par_email', target: 'contact.email_contact', max: 50 },
+  { field: 'mis_telephone', target: 'contact.tel_contact', max: 50 },
+  { field: 'par_telephone', target: 'contact.tel_contact', max: 50 },
+  ...['mis', 'par'].flatMap((prefix) => [
+    { field: `${prefix}_adresse1`, target: 'adresse.adresse1', max: 50 },
+    { field: `${prefix}_adresse2`, target: 'adresse.adresse2', max: 50 },
+    { field: `${prefix}_code_postal`, target: 'adresse.code_postal', max: 50 },
+    { field: `${prefix}_ville`, target: 'adresse.ville', max: 50 },
+    { field: `${prefix}_pays`, target: 'adresse.pays', max: 50 },
+  ]),
+];
 
 /** Interprète une valeur CSV comme booléen sans confondre une cellule vide avec NON. */
 function parseBool(val: string | undefined | null): boolean | null {
@@ -172,7 +216,7 @@ function validateRow(
     'ref_poste', 'date_demarrage', 'statut_volontaire', 'partenaire_ong',
     'candidat_preaffecte', 'fonction', 'pays', 'hebergement', 'duree_mission', 'domaine',
     'competences_recherchees', 'environnement', 'zone_orange', 'conditions_spartiates',
-    'hopital_proche', 'deuxieme_poste_partenaire', 'deuxieme_poste_alentour',
+    'hopital_proche', 'deuxieme_poste_partenaire', 'deuxieme_poste_alentour', 'cm1_crmkey',
   ];
   const mandatoryLabels: Record<string, string> = {
     duree_mission: 'Durée de mission manquante',
@@ -183,6 +227,7 @@ function validateRow(
     hopital_proche: 'Hôpital proche manquant',
     deuxieme_poste_partenaire: 'Deuxième poste partenaire manquant',
     deuxieme_poste_alentour: 'Deuxième poste alentour manquant',
+    cm1_crmkey: 'Chargé de Mission (CM1) manquant — le crm_key du CM1 est obligatoire',
   };
   for (const col of mandatoryFields) {
     if (!row[col]?.trim()) {
@@ -196,6 +241,23 @@ function validateRow(
   ]) {
     if (row[col]?.trim() && parseBool(row[col]) === null) {
       errors.push(`Booléen invalide : ${col}="${row[col].trim()}" — valeurs acceptées TRUE/FALSE, OUI/NON ou 1/0`);
+    }
+  }
+
+  for (const rule of CSV_LENGTH_RULES) {
+    const length = (row[rule.field] ?? '').trim().length;
+    if (length > rule.max) {
+      errors.push(`Ligne ${lineNum}, colonne '${rule.field}' : ${length} caractères, maximum autorisé ${rule.max} (cible ${rule.target}).`);
+    }
+  }
+
+  /* Sans ce contrôle, une valeur non numérique était silencieusement convertie
+     en NULL à l'écriture (parseIntOrNull) au lieu d'être rejetée — retour de
+     test du 19/09/2026. Entier positif uniquement : ce sont des montants en euros. */
+  for (const col of ['indemnite_mensuelle_partenaire', 'indemnite_mensuelle_dcc']) {
+    const raw = row[col]?.trim();
+    if (raw && !/^\d+$/.test(raw)) {
+      errors.push(`${col} doit être un nombre entier positif (montant en euros) : valeur reçue "${raw}"`);
     }
   }
 
@@ -238,29 +300,47 @@ function validateRow(
       errors.push(`Environnement inconnu : crm_key=${key} — créez-le d'abord`);
   }
 
+  /* email obligatoire pour CM1/CM2/CZ : sert de login au compte créé automatiquement
+     à l'import (voir plus bas) — optionnel pour MIS/PAR, qui ne se connectent pas. */
   const contactGroups = [
-    { prefix: 'cm1', withAddress: false },
-    { prefix: 'cm2', withAddress: false },
-    { prefix: 'cz', withAddress: false },
-    { prefix: 'mis', withAddress: true },
-    { prefix: 'par', withAddress: true },
+    { prefix: 'cm1', withAddress: false, requiredExtra: ['email'] },
+    { prefix: 'cm2', withAddress: false, requiredExtra: ['email'] },
+    { prefix: 'cz', withAddress: false, requiredExtra: ['email'] },
+    { prefix: 'mis', withAddress: true, requiredExtra: [] },
+    { prefix: 'par', withAddress: true, requiredExtra: [] },
   ];
   for (const group of contactGroups) {
     const crmKeyColumn = `${group.prefix}_crmkey`;
     if (row[crmKeyColumn]?.trim()) {
-      for (const required of ['nom', 'prenom']) {
+      for (const required of ['nom', 'prenom', ...group.requiredExtra]) {
         const column = `${group.prefix}_${required}`;
         if (!row[column]?.trim()) errors.push(`${column} obligatoire si ${crmKeyColumn} renseigné`);
       }
-      if (group.withAddress && row[`${group.prefix}_adresse1`]?.trim() && !row[`${group.prefix}_pays`]?.trim()) {
-        errors.push(`${group.prefix}_pays obligatoire si ${group.prefix}_adresse1 renseigné`);
-      }
     }
-    if (group.withAddress) {
-      const country = row[`${group.prefix}_pays`]?.trim();
-      if (country && !refs.pays[country]) {
-        errors.push(`Pays inconnu : crm_key=${country} pour ${group.prefix}_pays`);
-      }
+    /* Règle indépendante du crm_key (contrat : "obligatoire si une des 4 colonnes
+       d'adresse est renseignée") — retour de test du 19/09/2026 : imbriquée dans le
+       bloc crm_key ci-dessus, elle ne se déclenchait jamais quand adresse1 était
+       rempli sans crm_key (cas COND06 du fichier de test champs conditionnels). */
+    if (group.withAddress && row[`${group.prefix}_adresse1`]?.trim() && !row[`${group.prefix}_pays`]?.trim()) {
+      errors.push(`${group.prefix}_pays obligatoire si ${group.prefix}_adresse1 renseigné`);
+    }
+    /* mis_pays / par_pays : texte libre, non contrôlé contre le référentiel pays (réservé aux pays de
+       mission) — donnée dont le système source reste garant (Retour_29, 24/09/2026). */
+  }
+
+  /* Un même crm_key doit toujours désigner la même personne ET le même rôle
+     (contrat d'interface postes, "Règle de qualité de données"). Sans ce
+     contrôle, réutiliser un crm_key entre deux groupes (ex. cm1 et mis) fait
+     écraser silencieusement un contact par un autre à l'import suivant. */
+  const seenCrmKeys = new Map<string, string>();
+  for (const group of contactGroups) {
+    const value = row[`${group.prefix}_crmkey`]?.trim();
+    if (!value) continue;
+    const firstSeenIn = seenCrmKeys.get(value);
+    if (firstSeenIn) {
+      errors.push(`crm_key réutilisé pour 2 rôles différents dans la même ligne : "${value}" apparaît à la fois dans ${firstSeenIn}_crmkey et ${group.prefix}_crmkey — un crm_key doit toujours désigner la même personne et le même rôle`);
+    } else {
+      seenCrmKeys.set(value, group.prefix);
     }
   }
 
@@ -272,6 +352,77 @@ function validateRow(
     return { ligne: lineNum, statut: 'erreur', message: errors.join(' | ') };
   }
   return { ligne: lineNum, statut: 'ok', message: '✓' };
+}
+
+/**
+ * Valide toutes les lignes d'un fichier, PUIS détecte les ref_poste dupliqués
+ * au sein du même fichier (contrairement à candidats.ts, aucun contrôle
+ * n'existait ici — un doublon écrasait silencieusement la ligne précédente
+ * à l'exécution, sans avertissement. Retour de test du 19/09/2026).
+ */
+/* Comptes créés à l'import : CM1/CM2/CZ avec un crm_key encore inconnu en base. Leur email sert de
+   login (user_.login UNIQUE) — un email déjà pris par un autre compte fait échouer l'import à la
+   confirmation (erreur 500) alors que la vérification affichait OK. */
+const ACCOUNT_PREFIXES = ['cm1', 'cm2', 'cz'] as const;
+
+async function loadExistingContactState(rows: Record<string, string>[]) {
+  const crmKeys = new Set<string>();
+  const emails = new Set<string>();
+  for (const row of rows) {
+    for (const prefix of ACCOUNT_PREFIXES) {
+      const crmKey = row[`${prefix}_crmkey`]?.trim();
+      const email = row[`${prefix}_email`]?.trim();
+      if (crmKey) crmKeys.add(crmKey);
+      if (email) emails.add(email);
+    }
+  }
+  const [contacts, logins] = await Promise.all([
+    crmKeys.size ? pool.query<{ crm_key: string }>('SELECT crm_key FROM contact WHERE crm_key = ANY($1::text[])', [[...crmKeys]]) : { rows: [] },
+    emails.size ? pool.query<{ login: string }>('SELECT login FROM user_ WHERE login = ANY($1::text[])', [[...emails]]) : { rows: [] },
+  ]);
+  return {
+    existingCrmKeys: new Set(contacts.rows.map((r) => r.crm_key)),
+    existingLogins: new Set(logins.rows.map((r) => r.login)),
+  };
+}
+
+function validateAllRows(
+  rows: Record<string, string>[],
+  refs: RefData,
+  existing: { existingCrmKeys: Set<string>; existingLogins: Set<string> },
+): Array<{ ligne: number; statut: 'ok' | 'erreur'; message: string }> {
+  const occurrences = new Map<string, number>();
+  for (const row of rows) {
+    const key = row.ref_poste?.trim();
+    if (key) occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+  }
+  const newAccountEmails = new Map<string, string>();
+  return rows.map((row, i) => {
+    const result = validateRow(row, i + 2, refs);
+    const addError = (message: string) => {
+      result.statut = 'erreur';
+      result.message = result.message === '✓' ? message : `${result.message} | ${message}`;
+    };
+    const key = row.ref_poste?.trim();
+    if (key && (occurrences.get(key) ?? 0) > 1) {
+      addError(`Doublon dans le CSV : ref_poste=${key} — chaque poste doit avoir une référence unique dans le fichier`);
+    }
+    for (const prefix of ACCOUNT_PREFIXES) {
+      const crmKey = row[`${prefix}_crmkey`]?.trim();
+      const email = row[`${prefix}_email`]?.trim();
+      if (!crmKey || !email || existing.existingCrmKeys.has(crmKey)) continue;
+      if (existing.existingLogins.has(email)) {
+        addError(`${prefix}_email : "${email}" est déjà l'identifiant d'un compte existant, alors que ${prefix}_crmkey "${crmKey}" est un nouveau contact — un même email ne peut pas servir à deux comptes (réutilisez le crm_key du contact existant, ou changez l'email)`);
+      }
+      const firstCrmKey = newAccountEmails.get(email);
+      if (firstCrmKey && firstCrmKey !== crmKey) {
+        addError(`${prefix}_email : "${email}" est utilisé pour deux crm_key différents dans ce fichier ("${firstCrmKey}" et "${crmKey}") — un email = un seul compte`);
+      } else if (!firstCrmKey) {
+        newAccountEmails.set(email, crmKey);
+      }
+    }
+    return result;
+  });
 }
 
 /** Vérifie que la ligne contient exactement le contrat CSV attendu. */
@@ -353,7 +504,7 @@ function posteFilterSql(filters: Record<string, string[]>, startIndex: number) {
 
 /* ─────────────────────────────────────────────────────────────────────
    GET /api/postes/import/template
-   Retourne un fichier CSV vide avec les 66 colonnes en en-tête.
+   Retourne un fichier CSV vide avec les colonnes du contrat en en-tête.
 ───────────────────────────────────────────────────────────────────── */
 router.get(
   '/import/template',
@@ -430,7 +581,7 @@ router.post(
       return;
     }
     try {
-      const csvText = req.file.buffer.toString('utf-8');
+      const csvText = req.file.buffer.toString('utf8').replace(/^\uFEFF/, '');
       const parsed = Papa.parse<Record<string, string>>(csvText, {
         header: true,
         skipEmptyLines: true,
@@ -451,7 +602,7 @@ router.post(
       }
 
       const refs = await loadRefData();
-      const lignes = parsed.data.map((row, i) => validateRow(row, i + 2, refs));
+      const lignes = validateAllRows(parsed.data, refs, await loadExistingContactState(parsed.data));
       res.json({ lignes });
     } catch (err) {
       console.error('Erreur /postes/import/verifier :', err);
@@ -477,7 +628,7 @@ router.post(
 
     const client = await pool.connect();
     try {
-      const csvText = req.file.buffer.toString('utf-8');
+      const csvText = req.file.buffer.toString('utf8').replace(/^\uFEFF/, '');
       const parsed = Papa.parse<Record<string, string>>(csvText, {
         header: true,
         skipEmptyLines: true,
@@ -500,9 +651,7 @@ router.post(
       const refs = await loadRefData();
 
       // Défense en profondeur : on revalide avant d'écrire, même si le front a déjà validé
-      const erreurs = parsed.data
-        .map((row, i) => validateRow(row, i + 2, refs))
-        .filter((r) => r.statut === 'erreur');
+      const erreurs = validateAllRows(parsed.data, refs, await loadExistingContactState(parsed.data)).filter((r) => r.statut === 'erreur');
 
       if (erreurs.length > 0) {
         res.status(422).json({
@@ -514,6 +663,8 @@ router.post(
 
       await client.query('BEGIN');
       const postesAffectes: number[] = [];
+      const invitations: PendingAccountInvitation[] = [];
+      const newCmAccounts: Array<{ nom: string; prenom: string }> = [];
 
       for (const row of parsed.data) {
         const isPreaffecte = parseBool(row.candidat_preaffecte) === true;
@@ -690,26 +841,47 @@ router.post(
         for (const group of contactGroups) {
           const crmKey = row[`${group.prefix}_crmkey`]?.trim();
           if (!crmKey) continue;
+          const nom = row[`${group.prefix}_nom`].trim();
+          const prenom = row[`${group.prefix}_prenom`].trim();
+          const email = row[`${group.prefix}_email`]?.trim() || null;
           const address1 = group.withDetails ? row[`${group.prefix}_adresse1`]?.trim() : '';
           const countryKey = group.withDetails ? row[`${group.prefix}_pays`]?.trim() : '';
           const contact = await upsertPosteContact(client, {
             crmKey,
-            nom: row[`${group.prefix}_nom`].trim(),
-            prenom: row[`${group.prefix}_prenom`].trim(),
+            nom,
+            prenom,
             role: group.role,
             telephone: group.withDetails ? row[`${group.prefix}_telephone`]?.trim() || null : null,
-            email: group.withDetails ? row[`${group.prefix}_email`]?.trim() || null : null,
+            email,
             adresse: address1
               ? {
                   adresse1: address1,
                   adresse2: row[`${group.prefix}_adresse2`]?.trim() || null,
                   codePostal: row[`${group.prefix}_code_postal`]?.trim() || null,
                   ville: row[`${group.prefix}_ville`]?.trim() || null,
-                  idPays: refs.pays[countryKey],
+                  pays: countryKey || null,
                 }
               : null,
           });
           await linkPosteContact(client, idPoste, contact.idContact);
+
+          /* Compte applicatif créé uniquement à la première apparition du contact
+             (contact.created), jamais pour MIS/PAR. CM1/CM2 → compte CM actif +
+             invitation ; CHZ → compte RECRUTEUR inactif, pas d'invitation
+             (conception.md — chantier CM/CHZ à l'import des postes, 18/09/2026). */
+          if (contact.created && email) {
+            if (group.role === 'CM1' || group.role === 'CM2') {
+              const invitation = await createAccountForContactIfMissing(client, {
+                idContact: contact.idContact, email, prenom, roleApplicatif: 'CM', active: true, emailMode: 'generique',
+              });
+              if (invitation) { invitations.push(invitation); newCmAccounts.push({ nom, prenom }); }
+            } else if (group.role === 'CHZ') {
+              const invitation = await createAccountForContactIfMissing(client, {
+                idContact: contact.idContact, email, prenom, roleApplicatif: 'RECRUTEUR', active: false, emailMode: 'aucun',
+              });
+              if (invitation) invitations.push(invitation);
+            }
+          }
         }
       }
 
@@ -717,6 +889,7 @@ router.post(
         await Opportunite.synchroniserPoste(idPoste, client);
       }
       await client.query('COMMIT');
+      await sendPendingAccountInvitations(invitations);
 
       console.log(`[import] Terminé — ${postesAffectes.length} poste(s) traité(s) : ids=${postesAffectes.join(',')}`);
 
@@ -724,6 +897,7 @@ router.post(
         message: `Import réussi. ${parsed.data.length} poste(s) traité(s).`,
         nb_postes: parsed.data.length,
         ids_postes: postesAffectes,
+        nouveaux_comptes_cm: newCmAccounts,
       });
     } catch (err) {
       await client.query('ROLLBACK');

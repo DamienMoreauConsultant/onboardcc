@@ -8,8 +8,34 @@ router.get('/cockpit', requireRole(['RECRUTEUR']), async (_req, res): Promise<vo
   try {
     const result = await pool.query(
       `SELECT
-         (SELECT COUNT(*)::int FROM candidat WHERE id_etat_candidat = 'ATA') AS candidats_en_ata,
-         (SELECT COUNT(*)::int FROM candidat WHERE id_etat_candidat = 'ACC') AS candidats_acceptes,
+         (SELECT COUNT(*)::int FROM candidat c
+          JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat
+          WHERE c.id_etat_candidat='AP2'
+            AND (COALESCE(f.flag_fiche_de_voeux_soumise,false) OR f.date_voeux_provisoires IS NOT NULL)
+         ) AS candidats_a_inviter_session_choisir,
+         (SELECT COUNT(DISTINCT cand.id_candidat)::int
+          FROM opportunite o
+          JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite
+          JOIN fiche_de_voeux fdv ON fdv.id_fiche_de_voeux=o.id_fiche_de_voeux
+          JOIN candidat cand ON cand.id_candidat=fdv.id_candidat
+          WHERE eo.designation='Non qualifié'
+            AND NOT COALESCE(o.flag_opportunite_obsolete,false)
+         ) AS candidats_a_qualifier,
+         (SELECT COUNT(DISTINCT cand.id_candidat)::int
+          FROM opportunite o
+          JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite
+          JOIN fiche_de_voeux fdv ON fdv.id_fiche_de_voeux=o.id_fiche_de_voeux
+          JOIN candidat cand ON cand.id_candidat=fdv.id_candidat
+          WHERE eo.designation='Approuvé CM'
+            AND NOT COALESCE(fdv.flag_candidat_deja_mis_en_lien,false)
+         ) AS candidats_a_mettre_en_lien,
+         (SELECT COUNT(DISTINCT cand.id_candidat)::int
+          FROM opportunite o
+          JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite
+          JOIN fiche_de_voeux fdv ON fdv.id_fiche_de_voeux=o.id_fiche_de_voeux
+          JOIN candidat cand ON cand.id_candidat=fdv.id_candidat
+          WHERE eo.designation='Accepté'
+         ) AS candidats_a_affecter,
          COALESCE((
            SELECT json_agg(alert_row ORDER BY alert_row.jours_ecoules DESC, alert_row.id_candidat DESC)
            FROM (
@@ -39,8 +65,10 @@ router.get('/cockpit', requireRole(['RECRUTEUR']), async (_req, res): Promise<vo
     const cockpit = result.rows[0];
     res.json({
       kpis: {
-        candidats_en_ata: cockpit.candidats_en_ata,
-        candidats_acceptes: cockpit.candidats_acceptes,
+        candidats_a_inviter_session_choisir: cockpit.candidats_a_inviter_session_choisir,
+        candidats_a_qualifier: cockpit.candidats_a_qualifier,
+        candidats_a_mettre_en_lien: cockpit.candidats_a_mettre_en_lien,
+        candidats_a_affecter: cockpit.candidats_a_affecter,
       },
       alertes: cockpit.alertes,
     });

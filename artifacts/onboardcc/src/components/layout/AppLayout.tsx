@@ -16,13 +16,13 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     switch (user.role_applicatif) {
       case 'RECRUTEUR':
         return [
-          { label: 'Home', href: '/recruteur', icon: LayoutDashboard },
+          { label: 'Accueil', href: '/recruteur', icon: LayoutDashboard },
           { label: 'Candidats', href: '/recruteur/candidats', icon: Users },
           { label: 'Postes', href: '/recruteur/postes', icon: Briefcase },
         ];
       case 'CM':
         return [
-          { label: 'Missions', href: '/cm', icon: Briefcase },
+          { label: 'Accueil', href: '/cm', icon: Briefcase },
           { label: 'Mes postes', href: '/cm/postes', icon: Briefcase },
         ];
       case 'CANDIDAT':
@@ -41,6 +41,15 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   };
 
   const navItems = getNavItems();
+
+  /**
+   * Plusieurs hrefs sont imbriqués (ex. "/recruteur" est un préfixe de
+   * "/recruteur/postes") : on ne retient comme actif que le lien dont le href
+   * correspond le plus précisément à l'URL actuelle, jamais plusieurs à la fois.
+   */
+  const activeHref = navItems
+    .filter((item) => location === item.href || location.startsWith(`${item.href}/`))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 
   const getInitials = (firstName?: string, lastName?: string) => {
     if (!firstName && !lastName) return 'U';
@@ -65,7 +74,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         
         <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
           {navItems.map((item) => (
-            <Link key={item.href} href={item.href} className={`flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors font-medium text-sm ${location.startsWith(item.href) ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm' : 'text-sidebar-foreground/80 hover:bg-sidebar-border hover:text-sidebar-foreground'}`}>
+            <Link key={item.href} href={item.href} className={`flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors font-medium text-sm ${item.href === activeHref ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm' : 'text-sidebar-foreground/80 hover:bg-sidebar-border hover:text-sidebar-foreground'}`}>
               <item.icon className="h-4 w-4" />
               <span>{item.label}</span>
             </Link>
@@ -110,7 +119,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
           </div>
           <nav className="flex gap-1 overflow-x-auto px-3 pb-2">
             {navItems.map((item) => (
-              <Link key={item.href} href={item.href} className={`inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-xs font-medium ${location.startsWith(item.href) ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground/75 hover:bg-sidebar-border hover:text-sidebar-foreground'}`}>
+              <Link key={item.href} href={item.href} className={`inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-xs font-medium ${item.href === activeHref ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground/75 hover:bg-sidebar-border hover:text-sidebar-foreground'}`}>
                 <item.icon className="h-3.5 w-3.5" />
                 <span>{item.label}</span>
               </Link>

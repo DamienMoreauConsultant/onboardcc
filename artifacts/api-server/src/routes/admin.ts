@@ -27,12 +27,12 @@ import { requireRole } from '../middleware/requireRole';
 import { sendUserInvitation, smtpIsConfigured } from '../lib/candidateInvitations';
 
 const router = Router();
-const USER_ROLES = ['ADMIN', 'RECRUTEUR', 'CM'] as const;
+/* CM est créé automatiquement à l'import des postes (routes/postes.ts), jamais depuis ce module. */
+const USER_ROLES = ['ADMIN', 'RECRUTEUR'] as const;
 type UserRole = typeof USER_ROLES[number];
 const CONTACT_ROLES: Record<UserRole, readonly string[]> = {
   ADMIN: ['ADMIN'],
   RECRUTEUR: ['REC', 'CHZ'],
-  CM: ['CM1', 'CM2'],
 };
 
 function validUserPayload(body: unknown): { value?: { nom: string; prenom: string; email: string; telephone: string; genre: string; role_applicatif: UserRole; role_contact: string }; error?: string } {
@@ -149,18 +149,25 @@ const TABLES_CONFIG: Record<string, {
   competences:       { pk: 'id_competences',    label: 'Compétences',     editableFields: ['crm_key','designation','active','id_domaine'] },
   notoriete_dcc:     { pk: 'id_notoriete_dcc',  label: 'Notoriété DCC',   editableFields: ['crm_key','designation','active'] },
   type_billet_avion: { pk: 'id_type_billet_avion', label: 'Type de billet d’avion', editableFields: ['crm_key','designation','active'] },
-  etat_poste:        { pk: 'id_etat_poste',     label: 'États de poste',  editableFields: ['designation','active'] },
-  etat_opportunite:  { pk: 'id_etat_opportunite',label: 'États d\'opportunité', editableFields: ['designation','active'] },
+  // etat_poste / etat_opportunite : LECTURE SEULE (18/09/2026) — les transitions de poste et
+  // d'opportunité sont pilotées par du texte codé en dur (ETATS_FERMABLES, transitionRules), pas
+  // par un identifiant stable : renommer ou désactiver un état casserait le workflow en direct.
+  // Ajouter un état ne servirait à rien non plus (jamais ciblé par un bouton d'action). Toute
+  // mise à jour se fait donc par script SQL, jamais depuis cet écran — voir conception.md.
+  etat_poste:        { pk: 'id_etat_poste',     label: 'États de poste',  editableFields: [], restricted: true, restrictedFields: [] },
+  etat_opportunite:  { pk: 'id_etat_opportunite',label: 'États d\'opportunité', editableFields: [], restricted: true, restrictedFields: [] },
   niveau_langue:     { pk: 'id_niveau_langue',  label: 'Niveaux de langue',editableFields: ['crm_key','designation','ordre','active'] },
   stages:            { pk: 'id_stages',         label: 'Sessions Choisir',editableFields: ['type_stage','date_debut','date_fin','active','voeux_definitif_ouvert'] },
   aide_contextuelle: { pk: 'id_aide_contextuelle', label: 'Aides contextuelles', editableFields: ['cle_champ','texte','active'] },
-  // etat_candidat : LECTURE + modification limitée seulement (pas d'ajout ni de suppression)
+  // etat_candidat : LECTURE SEULE (aligné le 18/09/2026 sur etat_poste/etat_opportunite — voir
+  // note ci-dessus). Le front bloquait déjà toute édition ; le backend l'autorisait encore
+  // techniquement (designation/delais_de_reponse) via un appel API direct — incohérence corrigée.
   etat_candidat:     {
     pk: 'id_etat_candidat',
     label: 'États candidat',
-    editableFields: ['designation','delais_de_reponse'],
+    editableFields: [],
     restricted: true,
-    restrictedFields: ['designation','delais_de_reponse'],
+    restrictedFields: [],
   },
 };
 
@@ -258,7 +265,7 @@ router.post('/referentiels/:table', requireRole(['ADMIN']), async (req, res) => 
  * PATCH /api/admin/referentiels/:table/:id
  *
  * Modifie une ligne existante.
- * Pour etat_candidat, seuls designation et delais_de_reponse sont modifiables.
+ * Pour les tables en lecture seule (etat_candidat, etat_poste, etat_opportunite), interdit.
  *
  * CONVENTION de désactivation :
  *   On ne supprime JAMAIS physiquement un référentiel (il peut être référencé par
@@ -268,6 +275,13 @@ router.patch('/referentiels/:table/:id', requireRole(['ADMIN']), async (req, res
   const config = getTableConfig(req.params.table as string);
   if (!config) {
     res.status(400).json({ error: `Table '${req.params.table}' non autorisée.` });
+    return;
+  }
+
+  if (config.restricted && config.restrictedFields!.length === 0) {
+    res.status(403).json({
+      error: `'${req.params.table}' est en lecture seule — aucune modification n'est possible depuis cet écran.`,
+    });
     return;
   }
 
