@@ -14,7 +14,7 @@ export type CandidatRow = {
 export type CandidatDetail = CandidatRow & Record<string, any>;
 export type CandidatsPage = { items: CandidatRow[]; total: number; page: number; pageSize: number };
 type CandidatsApiPage = { candidats: CandidatRow[]; total: number; page: number; page_size: number };
-export type ReferenceOption = { id: number; label: string; id_domaine?: number | null };
+export type ReferenceOption = { id: number; label: string; id_domaine?: number | null; crm_key?: string };
 export type VoeuxReferences = {
   durees: ReferenceOption[];
   environnements: ReferenceOption[];
@@ -25,6 +25,7 @@ export type VoeuxReferences = {
   regions: ReferenceOption[];
   domaines: ReferenceOption[];
   aides: Record<string, string>;
+  statuts: Array<ReferenceOption & { crm_key: string }>;
 };
 
 export const candidatsApi = {
@@ -50,7 +51,7 @@ export const candidatsApi = {
     return (await api.post('/candidats/import/executer', form, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
   },
   save: async (id: number, section: 'etat-civil' | 'projet' | 'voeux', values: Record<string, unknown>) => (await api.patch(`/candidats/${id}/${section}`, values)).data,
-  transition: async (id: number, action: 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', commentaire: string, attachments: {description?: string; files?: File[]} = {}) => {
+  transition: async (id: number, action: 'rejeter' | 'valider_appel1' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', commentaire: string, attachments: {description?: string; files?: File[]} = {}) => {
     const form = new FormData();
     form.append('commentaire', commentaire);
     if (attachments.description) form.append('pj_description', attachments.description);
@@ -58,6 +59,8 @@ export const candidatsApi = {
     return (await api.post(`/candidats/${id}/${action}`, form, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
   },
   reviseReviewDate: async (id: number, date_revue: string | null) => (await api.patch(`/candidats/${id}/date-revue`, { date_revue })).data,
-  submitVoeux: async (id: number, definitive: boolean) => (await api.post(`/candidats/${id}/${definitive ? 'soumettre-voeux-definitifs' : 'soumettre-voeux-provisoire'}`)).data,
+  submitVoeux: async (id: number, definitive: boolean, confirmeSansFrancais = false) =>
+    (await api.post(`/candidats/${id}/${definitive ? 'soumettre-voeux-definitifs' : 'soumettre-voeux-provisoire'}`, confirmeSansFrancais ? { confirme_sans_francais: true } : {})).data,
+  resendInvitation: async (id: number) => (await api.post<{ invitation: 'sent' | 'pending_smtp_configuration' | 'failed' }>(`/candidats/${id}/renvoyer-invitation`)).data,
   attachmentConfiguration: async () => (await api.get<{storageUrl:string|null}>('/candidats/configuration/pieces-jointes')).data,
 };

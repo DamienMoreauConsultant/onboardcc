@@ -11,6 +11,7 @@ const PROVISOIRE_SOUMIS = `(COALESCE(f.flag_fiche_de_voeux_soumise,false) OR f.d
 const DEFINITIF_SOUMIS = `(f.date_voeux_definitifs IS NOT NULL)`;
 
 export const ETAT_CALCULE_SQL = `CASE
+  WHEN c.id_etat_candidat='AP1' THEN '1er appel'
   WHEN c.id_etat_candidat='AP2' THEN CASE WHEN ${PROVISOIRE_SOUMIS}
     THEN '2ème appel — À passer en Session choisir' ELSE '2ème appel — Attente vœux candidat' END
   WHEN c.id_etat_candidat='CHO' THEN CASE WHEN ${DEFINITIF_SOUMIS}

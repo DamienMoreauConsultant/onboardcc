@@ -12,6 +12,7 @@ import ChargeMission from '@/pages/ChargeMission';
 import Candidate from '@/pages/Candidate';
 import AdminReferentiels from '@/pages/admin/AdminReferentiels';
 import AdminUtilisateurs from '@/pages/admin/AdminUtilisateurs';
+import AdminModelesEmail from '@/pages/admin/AdminModelesEmail';
 import PostesList from '@/pages/postes/PostesList';
 import PosteImport from '@/pages/postes/PosteImport';
 import PosteDetail from '@/pages/postes/PosteDetail';
@@ -118,6 +119,14 @@ function Router() {
         <RoleGuard allowedRoles={['ADMIN']}>
           <AppLayout>
             <AdminUtilisateurs />
+          </AppLayout>
+        </RoleGuard>
+      </Route>
+
+      <Route path="/admin/modeles-email">
+        <RoleGuard allowedRoles={['ADMIN']}>
+          <AppLayout>
+            <AdminModelesEmail />
           </AppLayout>
         </RoleGuard>
       </Route>

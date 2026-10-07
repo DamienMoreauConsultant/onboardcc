@@ -3,6 +3,7 @@ import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
 import { Opportunite } from '../services/matching';
 import { actionUpload, cleanupUploadedFiles, uploadedFileUrls, verifyUploadedFiles } from '../lib/actionUploads';
+import { createCmNotifications, eventForAction, flushInstantNotifications } from '../services/notificationsCm';
 
 const router = Router();
 const ALL_ROLES = ['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT'];
@@ -343,7 +344,9 @@ router.post('/:id/:action', requireRole(ALL_ROLES), opportunityActionUpload.arra
     if (action === 'proposer_cm' && (
       opportunity.flag_opportunite_proposee_a_cm
       || opportunity.flag_opportunite_retenue
-      || opportunity.flag_opportunite_non_retenu
+      // Une opportunité « Rejeté système » porte toujours le drapeau « non retenu » (posé par le scoring) : ce
+      // drapeau ne doit pas la verrouiller, sinon la proposition au CM décidée au Retour_26 serait impossible.
+      || (opportunity.flag_opportunite_non_retenu && opportunity.etat_designation !== 'Rejeté système')
       || opportunity.flag_opportunite_obsolete
     )) throw new Error('LOCKED');
     if (action === 'mettre_en_lien') {
@@ -389,7 +392,7 @@ router.post('/:id/:action', requireRole(ALL_ROLES), opportunityActionUpload.arra
     }]);
     values.push(historiqueEntry);
     updates.push(`historique=historique || $${values.length}::jsonb`);
-    if (action === 'proposer_cm') updates.push('flag_opportunite_proposee_a_cm=true');
+    if (action === 'proposer_cm') updates.push('flag_opportunite_proposee_a_cm=true', 'flag_opportunite_non_retenu=false');
     if (action === 'approuver') updates.push('flag_opportunite_retenue=true');
     if (action === 'annuler_affectation') {
       // Les opportunités sœurs sont rouvertes, mais l'opportunité annulée reste
@@ -501,7 +504,14 @@ router.post('/:id/:action', requireRole(ALL_ROLES), opportunityActionUpload.arra
       );
     }
 
+    // Notifications des CM du poste (UAT-06) : créées dans la même transaction que l'action, envoyées après.
+    const notificationEvent = eventForAction(action, opportunity.etat_designation);
+    const notifiedContacts = notificationEvent
+      ? await createCmNotifications(client, opportunity.id_opportunite, notificationEvent, req.user!.id_contact)
+      : [];
+
     await client.query('COMMIT');
+    await flushInstantNotifications(notifiedContacts);
     res.json({ message: 'Transition effectuée.', etat: rule.to });
   } catch (err: any) {
     await client.query('ROLLBACK');

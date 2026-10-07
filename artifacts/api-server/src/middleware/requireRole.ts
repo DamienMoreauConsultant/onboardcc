@@ -21,6 +21,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../lib/jwtConfig';
+import pool from '../db-pg';
 
 /** Structure du payload stocké dans le JWT */
 export interface JwtPayload {
@@ -54,7 +55,7 @@ declare global {
  *   - Appelle next() si tout est correct, en attachant req.user.
  */
 export function requireRole(allowedRoles: string[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Récupère le JWT depuis le cookie HttpOnly posé par /api/auth/login
     const token = req.cookies?.token as string | undefined;
 
@@ -93,6 +94,28 @@ export function requireRole(allowedRoles: string[]) {
     // Si allowedRoles est vide, tout utilisateur authentifié passe.
     if (allowedRoles.length > 0 && !allowedRoles.includes(decoded.role_applicatif)) {
       res.status(403).json({ error: `Accès refusé — rôle '${decoded.role_applicatif}' non autorisé pour cette ressource.` });
+      return;
+    }
+
+    // Désactivation IMMÉDIATE (UAT-02 D6, 07/10/2026) : le jeton seul ne suffit pas, on relit l'état du
+    // compte en base à chaque requête. Un compte désactivé ou supprimé perd ses accès dès sa prochaine
+    // action, sans attendre l'expiration de la session (JWT_EXPIRE_HOURS). Le rôle est aussi relu : un
+    // rôle modifié en base depuis l'émission du jeton invalide la session.
+    try {
+      const account = await pool.query('SELECT active,role_applicatif FROM user_ WHERE id_user=$1', [decoded.id_user]);
+      const row = account.rows[0];
+      if (!row || row.active === false || row.role_applicatif !== decoded.role_applicatif) {
+        res.cookie('token', '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', expires: new Date(0) });
+        res.status(401).json({
+          error: row && row.active === false
+            ? 'Votre compte a été désactivé : vos accès à Passerelle sont retirés.'
+            : 'Session expirée ou token invalide — veuillez vous reconnecter.',
+        });
+        return;
+      }
+    } catch (error) {
+      console.error('Vérification de l’état du compte impossible :', error);
+      res.status(500).json({ error: 'Erreur interne du serveur.' });
       return;
     }
 

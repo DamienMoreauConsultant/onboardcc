@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Link } from 'wouter';
-import { ArrowLeft, Check, Loader2, Send, CalendarDays } from 'lucide-react';
+import { ArrowLeft, Check, Loader2, Send, CalendarDays, Mail } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { EtatBadge, type ActionCote } from '@/components/EtatBadge';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,7 @@ type Props = {
   onAction: (action: string) => void;
   onEditVoeux: () => void;
   onSubmit: (definitive: boolean) => void;
+  onResendInvitation: () => void;
   refs?: VoeuxReferences;
 };
 
@@ -72,13 +73,14 @@ const readStr = (value: unknown, key: string, refs?: VoeuxReferences, detail?: a
   return values.map((item: any) => typeof item === 'object' && item !== null ? (item.designation ?? item.periode ?? item.type_stage ?? item.crm_key ?? '—') : String(item)).join(', ') || '—';
 };
 
-export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, onReviseReview, onSave, onAction, onEditVoeux, onSubmit, refs }: Props) {
+export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, onReviseReview, onSave, onAction, onEditVoeux, onSubmit, onResendInvitation, refs }: Props) {
   const status = detail.etat_designation ?? '';
   const provisionalLocked = Boolean(detail.flag_fiche_de_voeux_soumise || detail.verrouille);
   const definitiveLocked = Boolean(detail.date_voeux_definitifs || detail.verrouille);
   const candidateCanEdit = (status === '2ème appel téléphonique' && !provisionalLocked) || (status === 'Session choisir' && !definitiveLocked);
 
   const actions = useMemo(() => {
+    if (status === '1er appel téléphonique') return [['valider_appel1', 'Valider 1er appel téléphonique'], ['rejeter', 'Rejeter le candidat']];
     if (status === '2ème appel téléphonique') return [['rejeter', 'Rejeter'], ['valider_appel2', 'Valider l’appel 2']];
     if (status === 'Session choisir') return [['valider_session_choisir', 'Valider la session Choisir'], ['annulerCandidature', 'Annuler la candidature']];
     if (status === 'Attente affectation') return [['annulerCandidature', 'Annuler la candidature']];
@@ -102,6 +104,7 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
             {mode === 'recruteur' ? (
               <>
                 {detail.verrouille && <Button size="sm" variant="outline" disabled={busy} onClick={() => onSave('voeux', { verrouille: false })}>Déverrouiller les vœux</Button>}
+                {detail.compte_actif === true && <Button size="sm" variant="outline" disabled={busy} onClick={onResendInvitation} data-testid="button-resend-invitation"><Mail className="mr-2 h-4 w-4" />Renvoyer invitation</Button>}
                 {actions.map(([key, label]) => (
                   <Button key={key} size="sm" variant="outline" disabled={busy || (key === 'valider_appel2' && !detail.flag_fiche_de_voeux_soumise && !detail.date_voeux_provisoires) || (key === 'valider_session_choisir' && !detail.date_voeux_definitifs)} onClick={() => onAction(key)}>{label}</Button>
                 ))}
@@ -154,6 +157,9 @@ export function CandidatBanner({ detail, mode, busy, reviewDate, setReviewDate, 
             </div>
           )}
         </div>
+        {mode === 'recruteur' && status === '1er appel téléphonique' && (
+          <p className="pl-7 text-xs text-muted-foreground" data-testid="info-premier-appel">Le compte du candidat n’existe pas encore : il est créé, avec l’envoi de l’email d’invitation, à la validation du 1er appel téléphonique.</p>
+        )}
         {mode === 'recruteur' && status === '2ème appel téléphonique' && !detail.flag_fiche_de_voeux_soumise && !detail.date_voeux_provisoires && (
           <p className="pl-7 text-xs text-muted-foreground">La fiche de vœux provisoire doit être soumise avant de valider cet appel.</p>
         )}

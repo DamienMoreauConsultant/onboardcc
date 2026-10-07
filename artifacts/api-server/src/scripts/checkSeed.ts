@@ -27,7 +27,9 @@ const { Pool } = pg;
 // depuis : type_billet_avion (migration 005), aide_contextuelle (migration 010), et
 // historique_poste (créée à la volée par l'appli — voir ensurePosteHistory() dans
 // routes/postes.ts — dès qu'un poste est fermé/réouvert pour la première fois).
-const EXPECTED_TABLE_COUNT = 42;
+// 07/10/2026 : +3 tables (recette DCC) — statut_professionnel (migration 020), notification_cm (021)
+// et email_template (022) : 45 tables.
+const EXPECTED_TABLE_COUNT = 45;
 
 async function checkSeed() {
   if (!process.env.DATABASE_URL) {

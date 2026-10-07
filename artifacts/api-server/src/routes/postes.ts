@@ -19,6 +19,8 @@ import Papa from 'papaparse';
 import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
 import { parseFrenchDate } from '../lib/frenchDate';
+import { EmailConflictError, findEmailOwners, normalizeEmail } from '../lib/emailRules';
+import { sendEmailChangeNotices, type EmailChangeNotice } from '../services/emailChange';
 import { Opportunite } from '../services/matching';
 import { createAccountForContactIfMissing, sendPendingAccountInvitations, type PendingAccountInvitation } from '../services/accountCreation';
 import {
@@ -360,43 +362,55 @@ function validateRow(
  * n'existait ici — un doublon écrasait silencieusement la ligne précédente
  * à l'exécution, sans avertissement. Retour de test du 19/09/2026).
  */
-/* Comptes créés à l'import : CM1/CM2/CZ avec un crm_key encore inconnu en base. Leur email sert de
-   login (user_.login UNIQUE) — un email déjà pris par un autre compte fait échouer l'import à la
-   confirmation (erreur 500) alors que la vérification affichait OK. */
+/* Règle d'unicité des emails (UAT-02 D5, 07/10/2026) : l'email d'un CM (CM1 ou CM2) ou d'un CZ sert d'identifiant
+   de connexion. Qu'il s'agisse d'une CRÉATION (crm_key inconnu) ou d'une MODIFICATION (crm_key connu dont l'email
+   change, ou dont le login ne correspond plus à l'email), il ne doit exister dans AUCUN login ni dans AUCUN email
+   de contact rattaché à un compte. Sinon la vérification, puis l'exécution, refusent le fichier avec un message
+   clair. Les contacts sans compte (MIS, PAR) ne sont pas concernés. */
 const ACCOUNT_PREFIXES = ['cm1', 'cm2', 'cz'] as const;
 
-async function loadExistingContactState(rows: Record<string, string>[]) {
+type ExistingContact = { idContact: number; email: string; hasUser: boolean; login: string };
+type ExistingContactState = { contacts: Map<string, ExistingContact>; emailOwners: Map<string, Set<number>> };
+
+async function loadExistingContactState(rows: Record<string, string>[]): Promise<ExistingContactState> {
   const crmKeys = new Set<string>();
   const emails = new Set<string>();
   for (const row of rows) {
     for (const prefix of ACCOUNT_PREFIXES) {
       const crmKey = row[`${prefix}_crmkey`]?.trim();
-      const email = row[`${prefix}_email`]?.trim();
+      const email = normalizeEmail(row[`${prefix}_email`]);
       if (crmKey) crmKeys.add(crmKey);
       if (email) emails.add(email);
     }
   }
-  const [contacts, logins] = await Promise.all([
-    crmKeys.size ? pool.query<{ crm_key: string }>('SELECT crm_key FROM contact WHERE crm_key = ANY($1::text[])', [[...crmKeys]]) : { rows: [] },
-    emails.size ? pool.query<{ login: string }>('SELECT login FROM user_ WHERE login = ANY($1::text[])', [[...emails]]) : { rows: [] },
+  const [contacts, emailOwners] = await Promise.all([
+    crmKeys.size
+      ? pool.query<{ crm_key: string; id_contact: number; email_contact: string | null; id_user: number | null; login: string | null }>(
+          `SELECT c.crm_key,c.id_contact,c.email_contact,u.id_user,u.login
+             FROM contact c LEFT JOIN user_ u ON u.id_contact=c.id_contact
+            WHERE c.crm_key = ANY($1::text[])`,
+          [[...crmKeys]],
+        )
+      : { rows: [] as Array<{ crm_key: string; id_contact: number; email_contact: string | null; id_user: number | null; login: string | null }> },
+    findEmailOwners(pool, [...emails]),
   ]);
   return {
-    existingCrmKeys: new Set(contacts.rows.map((r) => r.crm_key)),
-    existingLogins: new Set(logins.rows.map((r) => r.login)),
+    contacts: new Map(contacts.rows.map((r) => [r.crm_key, { idContact: r.id_contact, email: normalizeEmail(r.email_contact), hasUser: r.id_user !== null, login: normalizeEmail(r.login) }])),
+    emailOwners,
   };
 }
 
 function validateAllRows(
   rows: Record<string, string>[],
   refs: RefData,
-  existing: { existingCrmKeys: Set<string>; existingLogins: Set<string> },
+  existing: ExistingContactState,
 ): Array<{ ligne: number; statut: 'ok' | 'erreur'; message: string }> {
   const occurrences = new Map<string, number>();
   for (const row of rows) {
     const key = row.ref_poste?.trim();
     if (key) occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
   }
-  const newAccountEmails = new Map<string, string>();
+  const emailsInFile = new Map<string, string>();
   return rows.map((row, i) => {
     const result = validateRow(row, i + 2, refs);
     const addError = (message: string) => {
@@ -409,16 +423,24 @@ function validateAllRows(
     }
     for (const prefix of ACCOUNT_PREFIXES) {
       const crmKey = row[`${prefix}_crmkey`]?.trim();
-      const email = row[`${prefix}_email`]?.trim();
-      if (!crmKey || !email || existing.existingCrmKeys.has(crmKey)) continue;
-      if (existing.existingLogins.has(email)) {
-        addError(`${prefix}_email : "${email}" est déjà l'identifiant d'un compte existant, alors que ${prefix}_crmkey "${crmKey}" est un nouveau contact — un même email ne peut pas servir à deux comptes (réutilisez le crm_key du contact existant, ou changez l'email)`);
+      const email = normalizeEmail(row[`${prefix}_email`]);
+      if (!crmKey || !email) continue;
+      const own = existing.contacts.get(crmKey);
+      // Un contact existant sans compte (ex. ancien MIS) n'est pas concerné ; sinon on contrôle si l'adresse
+      // est nouvelle, ou si le login du compte n'est plus aligné sur elle (il sera réaligné à l'exécution).
+      const concerned = !own || (own.hasUser && (own.email !== email || own.login !== email));
+      if (concerned) {
+        const owners = existing.emailOwners.get(email);
+        const taken = owners ? [...owners].some((idContact) => idContact !== own?.idContact) : false;
+        if (taken) {
+          addError(`${prefix}_email : "${email}" est déjà utilisé comme identifiant ou comme email d'un autre compte — ${own ? 'modification impossible' : 'création impossible'} pour ${prefix}_crmkey "${crmKey}" (un même email ne peut pas servir à deux comptes : corrigez l'adresse dans le CRM ou dans Passerelle)`);
+        }
       }
-      const firstCrmKey = newAccountEmails.get(email);
+      const firstCrmKey = emailsInFile.get(email);
       if (firstCrmKey && firstCrmKey !== crmKey) {
         addError(`${prefix}_email : "${email}" est utilisé pour deux crm_key différents dans ce fichier ("${firstCrmKey}" et "${crmKey}") — un email = un seul compte`);
       } else if (!firstCrmKey) {
-        newAccountEmails.set(email, crmKey);
+        emailsInFile.set(email, crmKey);
       }
     }
     return result;
@@ -664,6 +686,7 @@ router.post(
       await client.query('BEGIN');
       const postesAffectes: number[] = [];
       const invitations: PendingAccountInvitation[] = [];
+      const emailNotices: EmailChangeNotice[] = [];
       const newCmAccounts: Array<{ nom: string; prenom: string }> = [];
 
       for (const row of parsed.data) {
@@ -843,7 +866,7 @@ router.post(
           if (!crmKey) continue;
           const nom = row[`${group.prefix}_nom`].trim();
           const prenom = row[`${group.prefix}_prenom`].trim();
-          const email = row[`${group.prefix}_email`]?.trim() || null;
+          const email = normalizeEmail(row[`${group.prefix}_email`]) || null;
           const address1 = group.withDetails ? row[`${group.prefix}_adresse1`]?.trim() : '';
           const countryKey = group.withDetails ? row[`${group.prefix}_pays`]?.trim() : '';
           const contact = await upsertPosteContact(client, {
@@ -863,6 +886,7 @@ router.post(
                 }
               : null,
           });
+          if (contact.emailNotice) emailNotices.push(contact.emailNotice);
           await linkPosteContact(client, idPoste, contact.idContact);
 
           /* Compte applicatif créé uniquement à la première apparition du contact
@@ -872,7 +896,7 @@ router.post(
           if (contact.created && email) {
             if (group.role === 'CM1' || group.role === 'CM2') {
               const invitation = await createAccountForContactIfMissing(client, {
-                idContact: contact.idContact, email, prenom, roleApplicatif: 'CM', active: true, emailMode: 'generique',
+                idContact: contact.idContact, email, prenom, roleApplicatif: 'CM', active: true, emailMode: 'cm',
               });
               if (invitation) { invitations.push(invitation); newCmAccounts.push({ nom, prenom }); }
             } else if (group.role === 'CHZ') {
@@ -889,7 +913,8 @@ router.post(
         await Opportunite.synchroniserPoste(idPoste, client);
       }
       await client.query('COMMIT');
-      await sendPendingAccountInvitations(invitations);
+      await sendPendingAccountInvitations(pool, invitations);
+      await sendEmailChangeNotices(pool, emailNotices);
 
       console.log(`[import] Terminé — ${postesAffectes.length} poste(s) traité(s) : ids=${postesAffectes.join(',')}`);
 
@@ -900,7 +925,11 @@ router.post(
         nouveaux_comptes_cm: newCmAccounts,
       });
     } catch (err) {
-      await client.query('ROLLBACK');
+      try { await client.query('ROLLBACK'); } catch { /* transaction déjà terminée */ }
+      if (err instanceof EmailConflictError) {
+        res.status(409).json({ error: `Import annulé, aucune donnée modifiée. ${err.message}` });
+        return;
+      }
       console.error('Erreur /postes/import/executer — ROLLBACK complet :', err);
       res.status(500).json({ error: 'Erreur interne — rollback complet effectué. Aucune donnée modifiée.' });
     } finally {

@@ -13,6 +13,7 @@ router.get('/cockpit', requireRole(['RECRUTEUR']), async (_req, res): Promise<vo
           WHERE c.id_etat_candidat='AP2'
             AND (COALESCE(f.flag_fiche_de_voeux_soumise,false) OR f.date_voeux_provisoires IS NOT NULL)
          ) AS candidats_a_inviter_session_choisir,
+         (SELECT COUNT(*)::int FROM candidat c WHERE c.id_etat_candidat='AP1') AS candidats_a_creer,
          (SELECT COUNT(DISTINCT cand.id_candidat)::int
           FROM opportunite o
           JOIN etat_opportunite eo ON eo.id_etat_opportunite=o.id_etat_opportunite
@@ -65,6 +66,7 @@ router.get('/cockpit', requireRole(['RECRUTEUR']), async (_req, res): Promise<vo
     const cockpit = result.rows[0];
     res.json({
       kpis: {
+        candidats_a_creer: cockpit.candidats_a_creer,
         candidats_a_inviter_session_choisir: cockpit.candidats_a_inviter_session_choisir,
         candidats_a_qualifier: cockpit.candidats_a_qualifier,
         candidats_a_mettre_en_lien: cockpit.candidats_a_mettre_en_lien,

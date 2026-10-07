@@ -3,6 +3,7 @@ import { Link } from 'wouter';
 import { BriefcaseBusiness, CheckCircle2, History, Loader2 } from 'lucide-react';
 import { postesApi, type CmDashboardKpis } from '@/api/postes';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { NotificationsPanel } from './NotificationsPanel';
 
 type DashboardCardProps = {
   title: string;
@@ -75,6 +76,8 @@ export default function ChargeMission() {
           testId="cm-toutes-opportunites-a-approuver"
         />
       </div>
+
+      <NotificationsPanel />
     </div>
   );
 }

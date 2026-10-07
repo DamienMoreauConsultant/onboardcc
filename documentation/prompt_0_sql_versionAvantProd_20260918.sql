@@ -35,6 +35,13 @@
 -- seule colonne opportunite.historique (JSONB), enrichie à chaque transition —
 -- retour de test Damien Retour_19.
 --
+-- 07/10/2026 — migrations 020, 021 et 022 intégrées (recette DCC, tickets UAT) :
+--   020_statut_professionnel.sql : nouveau référentiel statut_professionnel (6 valeurs) et lien
+--     candidat.id_statut_professionnel, qui remplace candidat.profil_statut (texte libre, 20 car.) ;
+--   021_notification_cm.sql : table notification_cm (notifications des chargés de mission) ;
+--   022_email_template.sql : table email_template (textes des emails, modifiables dans l'Admin)
+--     avec les 6 modèles. Le schéma compte désormais 45 tables.
+--
 -- 24/09/2026 — migration 019_adresse_pays_texte.sql intégrée : adresse.id_pays (clé étrangère
 -- vers le référentiel pays, NOT NULL) remplacé par adresse.pays VARCHAR(50), texte importé tel
 -- quel. Le référentiel pays ne contient plus que les pays de mission — retour de test Damien
@@ -261,7 +268,7 @@ CREATE TABLE public.candidat (
     projet_attente_de_la_dcc character varying(250),
     projet_lien_avec_une_autre_structure boolean,
     projet_lien_avec_une_autre_structure_detail character varying(250),
-    profil_statut character varying(20),
+    id_statut_professionnel integer,
     profil_statut_administration_de_tutelle character varying(50),
     profil_experience_engagement boolean,
     profil_experience_engagement_detail character varying(1000),
@@ -2650,6 +2657,100 @@ ALTER TABLE ONLY public.veut_vivre_dans
 
 
 
+--
+-- Migrations 020, 021 et 022 (07/10/2026)
+--
+
+CREATE TABLE public.statut_professionnel (
+    id_statut_professionnel integer NOT NULL,
+    crm_key character varying(40) NOT NULL,
+    designation character varying(50) NOT NULL,
+    active boolean DEFAULT true NOT NULL
+);
+
+ALTER TABLE public.statut_professionnel OWNER TO postgres;
+
+CREATE SEQUENCE public.statut_professionnel_id_statut_professionnel_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.statut_professionnel_id_statut_professionnel_seq OWNER TO postgres;
+
+ALTER SEQUENCE public.statut_professionnel_id_statut_professionnel_seq OWNED BY public.statut_professionnel.id_statut_professionnel;
+
+ALTER TABLE ONLY public.statut_professionnel ALTER COLUMN id_statut_professionnel SET DEFAULT nextval('public.statut_professionnel_id_statut_professionnel_seq'::regclass);
+
+ALTER TABLE ONLY public.statut_professionnel
+    ADD CONSTRAINT statut_professionnel_pkey PRIMARY KEY (id_statut_professionnel);
+
+ALTER TABLE ONLY public.statut_professionnel
+    ADD CONSTRAINT statut_professionnel_crm_key_key UNIQUE (crm_key);
+
+ALTER TABLE ONLY public.statut_professionnel
+    ADD CONSTRAINT statut_professionnel_designation_key UNIQUE (designation);
+
+ALTER TABLE ONLY public.candidat
+    ADD CONSTRAINT candidat_id_statut_professionnel_fkey FOREIGN KEY (id_statut_professionnel) REFERENCES public.statut_professionnel(id_statut_professionnel);
+
+CREATE TABLE public.notification_cm (
+    id_notification integer NOT NULL,
+    id_contact integer NOT NULL,
+    id_opportunite integer NOT NULL,
+    type_evenement character varying(40) NOT NULL,
+    date_evenement timestamp without time zone DEFAULT now() NOT NULL,
+    consulte boolean DEFAULT false NOT NULL,
+    date_consultation timestamp without time zone,
+    date_envoi_mail timestamp without time zone
+);
+
+ALTER TABLE public.notification_cm OWNER TO postgres;
+
+CREATE SEQUENCE public.notification_cm_id_notification_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.notification_cm_id_notification_seq OWNER TO postgres;
+
+ALTER SEQUENCE public.notification_cm_id_notification_seq OWNED BY public.notification_cm.id_notification;
+
+ALTER TABLE ONLY public.notification_cm ALTER COLUMN id_notification SET DEFAULT nextval('public.notification_cm_id_notification_seq'::regclass);
+
+ALTER TABLE ONLY public.notification_cm
+    ADD CONSTRAINT notification_cm_pkey PRIMARY KEY (id_notification);
+
+ALTER TABLE ONLY public.notification_cm
+    ADD CONSTRAINT notification_cm_id_contact_fkey FOREIGN KEY (id_contact) REFERENCES public.contact(id_contact) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.notification_cm
+    ADD CONSTRAINT notification_cm_id_opportunite_fkey FOREIGN KEY (id_opportunite) REFERENCES public.opportunite(id_opportunite) ON DELETE CASCADE;
+
+CREATE INDEX idx_notification_cm_contact ON public.notification_cm USING btree (id_contact, date_evenement DESC);
+
+CREATE INDEX idx_notification_cm_a_envoyer ON public.notification_cm USING btree (id_contact) WHERE (date_envoi_mail IS NULL);
+
+CREATE TABLE public.email_template (
+    email_type character varying(40) NOT NULL,
+    libelle character varying(100) NOT NULL,
+    objet character varying(150) NOT NULL,
+    contenu character varying(3000) NOT NULL,
+    frequence_heures integer DEFAULT 0 NOT NULL,
+    CONSTRAINT email_template_frequence_heures_check CHECK (((frequence_heures >= 0) AND (frequence_heures <= 168)))
+);
+
+ALTER TABLE public.email_template OWNER TO postgres;
+
+ALTER TABLE ONLY public.email_template
+    ADD CONSTRAINT email_template_pkey PRIMARY KEY (email_type);
+
+
 -- ============================================================================
 -- PARTIE 2 — RÉFÉRENTIELS (source : seed_referentiels.sql)
 -- ============================================================================
@@ -2951,5 +3052,69 @@ INSERT INTO public.aide_contextuelle (cle_champ, texte, active) VALUES
   ('score_hopital_proche', 'Signale si le candidat a besoin d''être proche d''un hôpital pour des raisons de santé, et si le poste répond ou non à ce besoin.', TRUE),
   ('score_conditions_spartiates', 'Signale si le poste implique des conditions de vie sommaires, et si le candidat a accepté ou non cette condition.', TRUE)
 ON CONFLICT (cle_champ) DO UPDATE SET texte = EXCLUDED.texte, active = EXCLUDED.active;
+
+
+-- Statut professionnel (source : migration 020_statut_professionnel.sql, 07/10/2026 — UAT-01)
+INSERT INTO public.statut_professionnel (crm_key, designation, active) VALUES
+  ('ETUDIANT', 'Étudiant', TRUE),
+  ('SALARIE', 'Salarié', TRUE),
+  ('PROFESSION_LIBERALE', 'Profession libérale', TRUE),
+  ('EN_RECHERCHE_EMPLOI', 'En recherche d''emploi', TRUE),
+  ('FONCTIONNAIRE', 'Fonctionnaire', TRUE),
+  ('RETRAITE', 'Retraité', TRUE)
+ON CONFLICT (crm_key) DO NOTHING;
+
+-- Modèles d'email (source : migration 022_email_template.sql, 07/10/2026 — UAT-08 D8). Textes repris
+-- à l'identique de ceux qui étaient figés dans le code ; l'administrateur les modifie ensuite depuis
+-- Admin > Modèle d'email.
+INSERT INTO public.email_template (email_type, libelle, objet, contenu, frequence_heures) VALUES
+  ('INVITATION_CANDIDAT', 'Invitation du candidat (création du compte)', 'Votre espace candidat DCC',
+'Bonjour {prenom},
+
+Votre espace candidat DCC est prêt.
+Identifiant : {identifiant}
+Mot de passe temporaire : {mot_de_passe}
+
+Connectez-vous puis changez ce mot de passe dès votre première connexion.', 0),
+  ('INVITATION_CM', 'Invitation du chargé de mission (import des postes)', 'Votre accès DCC',
+'Bonjour {prenom},
+
+Votre compte DCC (CM) est prêt.
+Identifiant : {identifiant}
+Mot de passe temporaire : {mot_de_passe}
+
+Connectez-vous puis changez ce mot de passe dès votre première connexion.', 0),
+  ('INVITATION_UTILISATEUR', 'Invitation d''un utilisateur créé par l''administrateur', 'Votre accès DCC',
+'Bonjour {prenom},
+
+Votre compte DCC ({role}) est prêt.
+Identifiant : {identifiant}
+Mot de passe temporaire : {mot_de_passe}
+
+Connectez-vous puis changez ce mot de passe dès votre première connexion.', 0),
+  ('NOTIFICATION_CM', 'Notifications groupées du chargé de mission', 'Nouvelles notifications Passerelle',
+'Bonjour {prenom},
+
+Vous avez de nouvelles notifications dans Passerelle que vous pouvez consulter sur votre Home page.
+
+Accéder à Passerelle : {lien}', 1),
+  ('CHANGEMENT_EMAIL', 'Changement d''adresse email (nouvel identifiant)', 'Votre identifiant Passerelle a changé',
+'Bonjour {prenom},
+
+L''adresse email de votre compte Passerelle a été mise à jour : votre identifiant de connexion est désormais {identifiant}.
+
+Vous pouvez choisir un nouveau mot de passe depuis la page de connexion, avec « Mot de passe oublié » :
+{lien}
+
+Si vous n''êtes pas à l''origine de cette modification, contactez la DCC.', 0),
+  ('REINITIALISATION_MDP', 'Réinitialisation du mot de passe', 'Réinitialisation de votre mot de passe DCC',
+'Bonjour {prenom},
+
+Une demande de réinitialisation a été effectuée pour votre espace DCC.
+Utilisez le lien ci-dessous dans les 30 minutes pour choisir un nouveau mot de passe :
+{lien}
+
+Si vous n’êtes pas à l’origine de cette demande, contactez la DCC.', 0)
+ON CONFLICT (email_type) DO NOTHING;
 
 COMMIT;

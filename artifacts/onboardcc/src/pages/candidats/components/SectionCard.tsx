@@ -49,7 +49,7 @@ const projetSections: { title: string; fields: Field[] }[] = [
   {
     title: 'B — Expérience personnelle et professionnelle',
     fields: [
-      ['profil_statut', 'Statut professionnel'], ['profil_statut_administration_de_tutelle', 'Administration de tutelle'],
+      ['id_statut_professionnel', 'Statut professionnel'], ['profil_statut_administration_de_tutelle', 'Administration de tutelle'],
       ['profil_experience_engagement', 'Expérience d’engagement'], ['profil_experience_engagement_detail', 'Détail des engagements'],
       ['domaines_formation', 'Domaines de formation'], ['domaines_experience', 'Domaines d’expérience'],
     ],
@@ -165,9 +165,13 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
   const keys = section === 'voeux' ? voeuxFields.map(([key]) => key) : allFields.map(([key]) => key);
   if (section === 'etat-civil') keys.push('perso_date_mariage');
   const [values, setValues] = useState<Record<string, any>>({});
+  const [localError, setLocalError] = useState('');
 
   useEffect(() => {
-    if (!editable) setValues(Object.fromEntries(keys.map((key) => [key, initialValue(key, detail)])));
+    if (!editable) {
+      setValues(Object.fromEntries(keys.map((key) => [key, initialValue(key, detail)])));
+      setLocalError('');
+    }
   }, [detail, editable, section]);
 
   useEffect(() => {
@@ -179,11 +183,21 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
     onDirtyChange?.(JSON.stringify(values) !== JSON.stringify(initial));
   }, [detail, editable, onDirtyChange, section, values]);
 
+  /* Statut professionnel (UAT-01) : « Administration de tutelle » est saisissable en permanence mais obligatoire
+     uniquement quand le statut choisi est Fonctionnaire (clé FONCTIONNAIRE du référentiel). */
+  const selectedStatutKey = refs?.statuts?.find((statut) => statut.id === values.id_statut_professionnel)?.crm_key
+    ?? (values.id_statut_professionnel && values.id_statut_professionnel === detail.id_statut_professionnel ? detail.statut_professionnel_crm_key : undefined);
+  const tutelleRequired = section === 'projet' && selectedStatutKey === 'FONCTIONNAIRE';
   const setValue = (key: string, value: unknown) => setValues((current) => ({ ...current, [key]: value }));
   const updateReference = (key: string, value: any[]) => setValue(key, value);
   const idOf = (item: any) => item.id ?? item.id_domaine ?? item.id_duree ?? item.id_environnement ?? item.id_hebergement;
 
   const handleSave = () => {
+    if (tutelleRequired && !String(values.profil_statut_administration_de_tutelle ?? '').trim()) {
+      setLocalError('L’administration de tutelle est obligatoire quand le statut professionnel est « Fonctionnaire ».');
+      return;
+    }
+    setLocalError('');
     const payload: Record<string, unknown> = { ...values };
     if (section === 'etat-civil') delete payload.pays;
     if (section === 'projet') {
@@ -221,6 +235,21 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
         </Select>
       );
     }
+    if (key === 'id_statut_professionnel') {
+      if (!allowed) return <dd className="text-sm" data-testid="text-statut-professionnel">{detail.statut_professionnel_designation ?? '—'}</dd>;
+      const options = refs?.statuts ?? [];
+      const current = values[key];
+      const known = options.some((option) => option.id === current);
+      return (
+        <Select value={current ? String(current) : undefined} onValueChange={(value) => setValue(key, Number(value))}>
+          <SelectTrigger className="bg-background" data-testid="select-statut-professionnel"><SelectValue placeholder="Sélectionner…" /></SelectTrigger>
+          <SelectContent>
+            {!known && current ? <SelectItem value={String(current)}>{detail.statut_professionnel_designation ?? String(current)}</SelectItem> : null}
+            {options.map((option) => <SelectItem key={option.id} value={String(option.id)}>{option.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      );
+    }
     if (iconBooleanFields.includes(key)) {
       return <BooleanControl value={nullableBool(values[key])} onChange={(value) => setValue(key, value)} disabled={!allowed} />;
     }
@@ -245,6 +274,11 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
         {section === 'voeux' && <FieldHelp text={refs?.aides[key]} label={label} />}
       </dt>
       {renderEditor(key, label, forcedReadOnly)}
+      {key === 'email_contact' && editable && canEdit
+        && String(values.email_contact ?? '').trim().toLowerCase() !== String(detail.email_contact ?? '').trim().toLowerCase()
+        && (detail.compte_actif === null || detail.compte_actif === undefined
+          ? <p className="mt-2 text-xs text-muted-foreground" data-testid="info-email-sans-compte">Le compte du candidat sera créé avec cette adresse à la validation du 1er appel.</p>
+          : <p className="mt-2 text-xs font-medium text-destructive" data-testid="warning-email-login">Modifier cette adresse modifie aussi l’identifiant de connexion du compte du candidat. Un email l’en informera.</p>)}
     </div>
   );
 
@@ -381,6 +415,7 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
         )}
       </CardHeader>
       <CardContent className="space-y-5">
+        {localError && <p className="rounded bg-destructive/10 p-3 text-sm text-destructive" data-testid="error-section">{localError}</p>}
         {section === 'etat-civil' ? (
           <>
             {etatCivilSections.map((group) => (
@@ -451,7 +486,8 @@ export function SectionCard({ section, detail, editable, canEdit, candidateMode,
                       </div>
                     );
                   }
-                  return fieldBlock(key, label, key === 'pays' || key === 'connait_la_dcc_par', longTextFields.includes(key) ? 'sm:col-span-2 lg:col-span-2' : '');
+                  const shownLabel = key === 'profil_statut_administration_de_tutelle' && editable && tutelleRequired ? `${label} (obligatoire)` : label;
+                  return fieldBlock(key, shownLabel, key === 'pays' || key === 'connait_la_dcc_par', longTextFields.includes(key) ? 'sm:col-span-2 lg:col-span-2' : '');
                 })}
               </dl>
             </section>

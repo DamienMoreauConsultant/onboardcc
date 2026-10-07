@@ -12,15 +12,37 @@ export type ReferentielResponse = {
   rows: ReferentielItem[];
 };
 
+export type InvitationStatus = 'sent' | 'pending_smtp_configuration' | 'failed';
+
 export type UserAccount = {
   id_user: number;
+  login: string;
+  id_contact: number;
+  crm_key: string | null;
   nom: string;
   prenom: string;
   email: string;
   role_applicatif: 'ADMIN' | 'RECRUTEUR' | 'CM' | 'CANDIDAT';
   role_contact: string;
   active: boolean;
-  invitation?: 'sent' | 'pending_smtp_configuration' | 'failed';
+  /** État du candidat (désignation) : renseigné uniquement pour les comptes CANDIDAT. */
+  etat_designation?: string | null;
+  etat_code?: string | null;
+  invitation?: InvitationStatus;
+};
+
+/** Champs modifiables d'un compte : le rôle applicatif ne l'est jamais. nom, prénom et email seulement pour un contact Admin ou Recruteur (REC). */
+export type UpdateUserAccountInput = Partial<{ login: string; active: boolean; nom: string; prenom: string; email: string }>;
+
+export type EmailTemplate = {
+  email_type: string;
+  libelle: string;
+  objet: string;
+  contenu: string;
+  frequence_heures: number;
+  variables: string[];
+  obligatoires: string[];
+  groupable: boolean;
 };
 
 export type CreateUserAccountInput = {
@@ -59,9 +81,34 @@ export const adminApi = {
     return data;
   },
 
-  setUtilisateurActif: async (id: number, active: boolean): Promise<UserAccount> => {
-    const action = active ? 'reactiver' : 'desactiver';
-    const { data } = await api.patch<UserAccount>(`/admin/utilisateurs/${id}/${action}`);
+  updateUtilisateur: async (id: number, payload: UpdateUserAccountInput): Promise<UserAccount> => {
+    const { data } = await api.patch<UserAccount>(`/admin/utilisateurs/${id}`, payload);
+    return data;
+  },
+
+  /** Désactivation en masse (candidats et CM uniquement). */
+  desactiverUtilisateurs: async (ids: number[]): Promise<{ desactives: number; deja_inactifs: number }> => {
+    const { data } = await api.post<{ desactives: number; deja_inactifs: number }>('/admin/utilisateurs/desactiver', { ids });
+    return data;
+  },
+
+  renvoyerInvitation: async (id: number): Promise<{ invitation: InvitationStatus }> => {
+    const { data } = await api.post<{ invitation: InvitationStatus }>(`/admin/utilisateurs/${id}/renvoyer-invitation`);
+    return data;
+  },
+
+  getModelesEmail: async (): Promise<{ smtp_configure: boolean; modeles: EmailTemplate[] }> => {
+    const { data } = await api.get<{ smtp_configure: boolean; modeles: EmailTemplate[] }>('/admin/modeles-email');
+    return data;
+  },
+
+  updateModeleEmail: async (type: string, payload: { objet: string; contenu: string; frequence_heures: number }): Promise<EmailTemplate> => {
+    const { data } = await api.patch<EmailTemplate>(`/admin/modeles-email/${type}`, payload);
+    return data;
+  },
+
+  testerModeleEmail: async (type: string, payload: { objet: string; contenu: string }): Promise<{ envoye_a: string }> => {
+    const { data } = await api.post<{ envoye_a: string }>(`/admin/modeles-email/${type}/tester`, payload);
     return data;
   },
 };

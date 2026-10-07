@@ -21,6 +21,7 @@ import candidatsRouter from "./candidats";
 import postesRouter from "./postes";
 import opportunitesRouter from "./opportunites";
 import recruteurRouter from "./recruteur";
+import notificationsRouter from "./notifications";
 
 const router: IRouter = Router();
 
@@ -43,5 +44,8 @@ router.use("/postes", postesRouter);
 router.use("/opportunites", opportunitesRouter);
 
 router.use("/recruteur", recruteurRouter);
+
+// Notifications des chargés de mission (UAT-06)
+router.use("/notifications", notificationsRouter);
 
 export default router;

@@ -18,9 +18,11 @@ import Papa from 'papaparse';
 import { requireRole } from '../middleware/requireRole';
 import pool from '../db-pg';
 import { nullableDate, parseFrenchDate } from '../lib/frenchDate';
-import { smtpIsConfigured } from '../lib/candidateInvitations';
+import { EmailConflictError, normalizeEmail } from '../lib/emailRules';
+import { changeContactEmail, sendEmailChangeNotices, type EmailChangeNotice } from '../services/emailChange';
 import {
   createAccountForContactIfMissing,
+  issueNewTemporaryPassword,
   sendPendingAccountInvitations,
   type PendingAccountInvitation,
 } from '../services/accountCreation';
@@ -50,7 +52,7 @@ const CSV_COLUMNS = [
   'administration_tutelle','experience_engagement','experience_engagement_detail','info_complementaire','disponibilites_contact',
   'sessions_choisir_preference','enfant_consolide',
 ];
-type Refs = Record<'duree'|'domaine'|'langue'|'niveau'|'notoriete', Record<string, number>>;
+type Refs = Record<'duree'|'domaine'|'langue'|'niveau'|'notoriete'|'statut', Record<string, number>>;
 const bool = (v?: string) => ['true', '1', 'oui', 'yes'].includes((v ?? '').trim().toLowerCase());
 const validBool = (v?: string) => ['true','false','oui','non','yes','no','1','0'].includes((v ?? '').trim().toLowerCase());
 const entries = (v?: string) => (v ?? '').split(';').map(x => x.trim()).filter(Boolean);
@@ -84,7 +86,7 @@ const CSV_LENGTH_RULES: CsvLengthRule[] = [
   { field: 'raison_depart_dcc', target: 'candidat.projet_raison_du_depart_avec_la_dcc', max: 250 },
   { field: 'attentes_dcc', target: 'candidat.projet_attente_de_la_dcc', max: 250 },
   { field: 'lien_autre_structure_detail', target: 'candidat.projet_lien_avec_une_autre_structure_detail', max: 250 },
-  { field: 'statut_professionnel', target: 'candidat.profil_statut', max: 20 },
+  { field: 'statut_professionnel', target: 'statut_professionnel.crm_key', max: 40 },
   { field: 'administration_tutelle', target: 'candidat.profil_statut_administration_de_tutelle', max: 50 },
   { field: 'experience_engagement_detail', target: 'candidat.profil_experience_engagement_detail', max: 1000 },
   { field: 'info_complementaire', target: 'candidat.candidature_information_du_candidat', max: 250 },
@@ -97,13 +99,14 @@ const mapRows = (rows: Array<{ crm_key?: string; designation?: string; id: numbe
 async function refs(): Promise<Refs> {
   // Un crm_key désactivé (active=false) doit être refusé à l'import comme un crm_key
   // inconnu, uniformément pour tous les référentiels (aligné sur postes.ts le 19/09/2026).
-  const [duree, domaine, langue, niveau, notoriete] = await Promise.all([
+  const [duree, domaine, langue, niveau, notoriete, statut] = await Promise.all([
     pool.query("SELECT COALESCE(to_jsonb(d)->>'designation',d.periode) AS designation,id_duree AS id FROM duree d WHERE COALESCE(active,true)"),
     pool.query('SELECT crm_key,id_domaine AS id FROM domaine WHERE COALESCE(active,true)'), pool.query('SELECT crm_key,id_langue AS id FROM langue WHERE COALESCE(active,true)'),
     pool.query('SELECT crm_key,id_niveau_langue AS id FROM niveau_langue WHERE COALESCE(active,true)'),
     pool.query('SELECT crm_key,id_notoriete_dcc AS id FROM notoriete_dcc WHERE COALESCE(active,true)'),
+    pool.query('SELECT crm_key,id_statut_professionnel AS id FROM statut_professionnel WHERE COALESCE(active,true)'),
   ]);
-  return { duree: mapRows(duree.rows), domaine: mapRows(domaine.rows), langue: mapRows(langue.rows), niveau: mapRows(niveau.rows), notoriete: mapRows(notoriete.rows) };
+  return { duree: mapRows(duree.rows), domaine: mapRows(domaine.rows), langue: mapRows(langue.rows), niveau: mapRows(niveau.rows), notoriete: mapRows(notoriete.rows), statut: mapRows(statut.rows) };
 }
 function headers(fields?: string[]): string | null {
   const actual = (fields ?? []).map(x => x.trim());
@@ -135,11 +138,13 @@ function validate(row: Record<string,string>, line: number, r: Refs) {
     if (niveauKey && !r.niveau[niveauKey]) errors.push(`Niveau de langue inconnu : crm_key=${niveauKey} — créez-le d'abord`);
   }
   for (const k of entries(row.connait_dcc_par)) if (!r.notoriete[k]) errors.push(`Notoriété DCC inconnue : crm_key=${k} — créez-la d'abord`);
+  const statutKey = row.statut_professionnel?.trim();
+  if (statutKey && !r.statut[statutKey]) errors.push(`Statut professionnel inconnu : crm_key=${statutKey} — créez-le d'abord (Admin > Référentiels)`);
   if (row.etat_de_vie?.trim() === 'Marié' && !row.date_mariage?.trim()) errors.push('date_mariage est requis lorsque etat_de_vie = Marié');
   if (bool(row.depart_en_couple) && !row.nom_prenom_conjoint?.trim()) errors.push('nom_prenom_conjoint est requis lorsque depart_en_couple = TRUE');
   if (bool(row.est_parent) && !row.pars_avec_enfants?.trim()) errors.push('pars_avec_enfants est requis lorsque est_parent = TRUE');
   if (bool(row.lien_autre_structure) && !row.lien_autre_structure_detail?.trim()) errors.push('lien_autre_structure_detail est requis lorsque lien_autre_structure = TRUE');
-  if (row.statut_professionnel?.trim() === 'Fonctionnaire' && !row.administration_tutelle?.trim()) errors.push('administration_tutelle est requis lorsque statut_professionnel = Fonctionnaire');
+  if (row.statut_professionnel?.trim() === 'FONCTIONNAIRE' && !row.administration_tutelle?.trim()) errors.push('administration_tutelle est requis lorsque statut_professionnel = FONCTIONNAIRE');
   if (bool(row.experience_engagement) && !row.experience_engagement_detail?.trim()) errors.push('experience_engagement_detail est requis lorsque experience_engagement = TRUE');
   return { ligne: line, statut: errors.length ? 'erreur' as const : 'ok' as const, message: errors.length ? errors.join(' | ') : '✓' };
 }
@@ -158,14 +163,7 @@ async function existingCandidateWebKeys(rows: Record<string,string>[]) {
   return new Set(existing.rows.map(row => row.web_key));
 }
 
-async function existingUserLogins(rows: Record<string,string>[]) {
-  const emails = [...new Set(rows.map(row => row.email?.trim()).filter(Boolean))];
-  if (!emails.length) return new Set<string>();
-  const existing = await pool.query<{ login: string }>('SELECT login FROM user_ WHERE login = ANY($1::text[])', [emails]);
-  return new Set(existing.rows.map(row => row.login));
-}
-
-function validateAll(rows: Record<string,string>[], r: Refs, existingWebKeys: Set<string>, existingLogins: Set<string>) {
+function validateAll(rows: Record<string,string>[], r: Refs, existingWebKeys: Set<string>) {
   const web = new Set<string>(), emails = new Set<string>();
   return rows.map((row,i) => {
     const result=validate(row,i+2,r);
@@ -178,12 +176,6 @@ function validateAll(rows: Record<string,string>[], r: Refs, existingWebKeys: Se
     const webKey = row.ref_candidat?.trim();
     if (webKey && existingWebKeys.has(webKey)) {
       const message = `Candidat déjà importé : ref_candidat=${webKey} — un candidat déjà en base ne doit jamais être réenvoyé, toute correction se fait depuis l'écran Recruteur.`;
-      result.statut = 'erreur';
-      result.message = result.message === '✓' ? message : `${result.message} | ${message}`;
-    }
-    const email = row.email?.trim();
-    if (email && existingLogins.has(email)) {
-      const message = `Email déjà utilisé comme identifiant d'un compte existant : ${email} — un même email ne peut pas servir à la fois pour un candidat et pour un autre compte (recruteur, CM, admin ou autre candidat).`;
       result.statut = 'erreur';
       result.message = result.message === '✓' ? message : `${result.message} | ${message}`;
     }
@@ -285,7 +277,7 @@ async function transition(client: any, id: string, state: string, actor: string,
 router.get('/import/template', requireRole(RECRUITERS), (_req,res) => { res.type('text/csv').attachment('template_candidats_dcc.csv').send(`${CSV_COLUMNS.join(',')}\n`); });
 router.post('/import/verifier', requireRole(RECRUITERS), upload.single('file'), async (req,res) => {
   if (!req.file) return void res.status(400).json({ error: 'Aucun fichier reçu.' });
-  try { const p = parsed(req); const h = headers(p.meta.fields); if (h) return void res.status(400).json({error:h}); if (p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`}); const [r, existingWebKeys, existingLogins]=await Promise.all([refs(),existingCandidateWebKeys(p.data),existingUserLogins(p.data)]); res.json({ lignes:validateAll(p.data,r,existingWebKeys,existingLogins) }); } catch (e) { console.error(e); res.status(500).json({error:'Erreur interne du serveur.'}); }
+  try { const p = parsed(req); const h = headers(p.meta.fields); if (h) return void res.status(400).json({error:h}); if (p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`}); const [r, existingWebKeys]=await Promise.all([refs(),existingCandidateWebKeys(p.data)]); res.json({ lignes:validateAll(p.data,r,existingWebKeys) }); } catch (e) { console.error(e); res.status(500).json({error:'Erreur interne du serveur.'}); }
 });
 
 /**
@@ -299,22 +291,22 @@ router.post('/import/executer', requireRole(RECRUITERS), upload.single('file'), 
   try {
     const p=parsed(req), h=headers(p.meta.fields); if(h) return void res.status(400).json({error:h});
     if(p.errors.length) return void res.status(400).json({error:`Erreur de parsing CSV : ${p.errors[0].message}`});
-    const [r, existingWebKeys, existingLogins]=await Promise.all([refs(),existingCandidateWebKeys(p.data),existingUserLogins(p.data)]);
-    const bad=validateAll(p.data,r,existingWebKeys,existingLogins).filter(x=>x.statut==='erreur');
+    const [r, existingWebKeys]=await Promise.all([refs(),existingCandidateWebKeys(p.data)]);
+    const bad=validateAll(p.data,r,existingWebKeys).filter(x=>x.statut==='erreur');
     if(bad.length) return void res.status(422).json({error:'Des erreurs de validation ont été détectées — import annulé.',lignes_en_erreur:bad});
-    await client.query('BEGIN'); const ids:number[]=[]; const invitations: PendingAccountInvitation[]=[];
+    await client.query('BEGIN'); const ids:number[]=[];
     for(const row of p.data) {
       const birth=parseFrenchDate(row.date_naissance).iso, marriage=parseFrenchDate(row.date_mariage).iso, available=parseFrenchDate(row.date_disponibilite).iso;
       const a=await client.query('INSERT INTO adresse(adresse1,adresse2,code_postal,ville,pays) VALUES($1,$2,$3,$4,$5) RETURNING id_adresse',[text(row.adresse1),text(row.adresse2),text(row.code_postal),text(row.ville),text(row.pays)]);
       const idAddress:number=a.rows[0].id_adresse;
-      const c=await client.query(`INSERT INTO contact(crm_key,role,genre,nom_contact,nom_naissance,prenom_contact,tel_contact,email_contact,date_naissance,lieu_naissance,nationalite,id_adresse) VALUES($1,'CAN',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id_contact`,[row.ref_candidat.trim(),text(row.genre),text(row.nom),text(row.nom_naissance),text(row.prenom),text(row.telephone),text(row.email),birth,text(row.lieu_naissance),text(row.nationalite),idAddress]);
+      const c=await client.query(`INSERT INTO contact(crm_key,role,genre,nom_contact,nom_naissance,prenom_contact,tel_contact,email_contact,date_naissance,lieu_naissance,nationalite,id_adresse) VALUES($1,'CAN',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id_contact`,[row.ref_candidat.trim(),text(row.genre),text(row.nom),text(row.nom_naissance),text(row.prenom),text(row.telephone),normalizeEmail(row.email)||null,birth,text(row.lieu_naissance),text(row.nationalite),idAddress]);
       const idContact:number=c.rows[0].id_contact;
-      const candidateValues=[row.ref_candidat.trim(),bool(row.depart_en_couple),text(row.nom_prenom_conjoint),text(row.etat_de_vie),marriage,bool(row.est_parent),bool(row.pars_avec_enfants),row.enfant_consolide || null,available,row.duree_souhaitee || null,text(row.references_offres),text(row.motivations),text(row.questionnements),text(row.avancement_demarche),text(row.experience_interculturelle),text(row.formation_dialogue_interculturel),text(row.experience_volontariat),text(row.raison_depart_dcc),text(row.attentes_dcc),bool(row.lien_autre_structure),text(row.lien_autre_structure_detail),text(row.statut_professionnel),text(row.administration_tutelle),bool(row.experience_engagement),text(row.experience_engagement_detail),text(row.info_complementaire),text(row.disponibilites_contact),text(row.sessions_choisir_preference),idContact];
-      const q=`INSERT INTO candidat(web_key,perso_depart_en_couple,perso_nom_prenom_conjoint,perso_etat_de_vie,perso_date_mariage,perso_est_parent,perso_pars_avec_enfants,perso_enfants_consolides,projet_date_depart_souhaitee,projet_duree_mission_souhaitee,projet_numero_offre_mission,projet_motivations,projet_questionnements,projet_avancement,projet_experience_interculturelle,projet_formation_dialogue_interculturel,projet_experience_de_volontariat,projet_raison_du_depart_avec_la_dcc,projet_attente_de_la_dcc,projet_lien_avec_une_autre_structure,projet_lien_avec_une_autre_structure_detail,profil_statut,profil_statut_administration_de_tutelle,profil_experience_engagement,profil_experience_engagement_detail,candidature_information_du_candidat,candidature_disponibilite_du_candidat,candidature_preference_session_choisir,id_contact,id_etat_candidat,date_revue) VALUES(${candidateValues.map((_,i)=>'$'+(i+1)).join(',')},'AP2',CURRENT_DATE+(SELECT delais_de_reponse FROM etat_candidat WHERE id_etat_candidat='AP2')) RETURNING id_candidat`;
+      const candidateValues=[row.ref_candidat.trim(),bool(row.depart_en_couple),text(row.nom_prenom_conjoint),text(row.etat_de_vie),marriage,bool(row.est_parent),bool(row.pars_avec_enfants),row.enfant_consolide || null,available,row.duree_souhaitee || null,text(row.references_offres),text(row.motivations),text(row.questionnements),text(row.avancement_demarche),text(row.experience_interculturelle),text(row.formation_dialogue_interculturel),text(row.experience_volontariat),text(row.raison_depart_dcc),text(row.attentes_dcc),bool(row.lien_autre_structure),text(row.lien_autre_structure_detail),r.statut[row.statut_professionnel.trim()],text(row.administration_tutelle),bool(row.experience_engagement),text(row.experience_engagement_detail),text(row.info_complementaire),text(row.disponibilites_contact),text(row.sessions_choisir_preference),idContact];
+      const q=`INSERT INTO candidat(web_key,perso_depart_en_couple,perso_nom_prenom_conjoint,perso_etat_de_vie,perso_date_mariage,perso_est_parent,perso_pars_avec_enfants,perso_enfants_consolides,projet_date_depart_souhaitee,projet_duree_mission_souhaitee,projet_numero_offre_mission,projet_motivations,projet_questionnements,projet_avancement,projet_experience_interculturelle,projet_formation_dialogue_interculturel,projet_experience_de_volontariat,projet_raison_du_depart_avec_la_dcc,projet_attente_de_la_dcc,projet_lien_avec_une_autre_structure,projet_lien_avec_une_autre_structure_detail,id_statut_professionnel,profil_statut_administration_de_tutelle,profil_experience_engagement,profil_experience_engagement_detail,candidature_information_du_candidat,candidature_disponibilite_du_candidat,candidature_preference_session_choisir,id_contact,id_etat_candidat,date_revue) VALUES(${candidateValues.map((_,i)=>'$'+(i+1)).join(',')},'AP1',CURRENT_DATE+(SELECT delais_de_reponse FROM etat_candidat WHERE id_etat_candidat='AP1')) RETURNING id_candidat`;
       const cr=await client.query(q,candidateValues);
       const idCandidate:number=cr.rows[0].id_candidat;
       await client.query('UPDATE candidat SET profil_experience_engagement_detail=$1 WHERE id_candidat=$2',[text(row.experience_engagement_detail),idCandidate]); ids.push(idCandidate);
-      await client.query(`INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES('Import CRM','Import initial','AP2',$1)`,[idCandidate]);
+      await client.query(`INSERT INTO etape(acteur,note_ecrite,id_etat_candidat,id_candidat) VALUES('Import CRM','Import initial','AP1',$1)`,[idCandidate]);
       const f=await client.query(`INSERT INTO fiche_de_voeux(id_candidat,part_seul,date_depart_souhaite) VALUES($1,$2,$3) ON CONFLICT(id_candidat) DO UPDATE SET part_seul=EXCLUDED.part_seul,date_depart_souhaite=EXCLUDED.date_depart_souhaite,date_modification=CURRENT_DATE RETURNING id_fiche_de_voeux`,[idCandidate,!bool(row.depart_en_couple),available]); const idF=f.rows[0].id_fiche_de_voeux;
       for (const table of ['veut_partir_pour','a_etudie_dans','a_travaille_dans','parle','connait_la_dcc_par']) {
         await client.query(
@@ -328,14 +320,9 @@ router.post('/import/executer', requireRole(RECRUITERS), upload.single('file'), 
       for(const k of entries(row.domaines_experience_pro)) await client.query('INSERT INTO a_travaille_dans VALUES($1,$2)',[idF,r.domaine[k]]);
       for(const item of entries(row.langues)){const [k,n]=item.split(':').map(x=>x.trim());await client.query('INSERT INTO parle(id_fiche_de_voeux,id_langue,id_niveau_langue) VALUES($1,$2,$3)',[idF,r.langue[k],r.niveau[n]]);}
       for(const k of entries(row.connait_dcc_par)) await client.query('INSERT INTO connait_la_dcc_par(id_candidat,id_notoriete_dcc,detail,autre_designation) VALUES($1,$2,$3,$4)',[idCandidate,r.notoriete[k],text(row.connait_dcc_detail),text(row.connait_dcc_detail)]);
-      const invitation=await createAccountForContactIfMissing(client,{
-        idContact,email:row.email.trim(),prenom:text(row.prenom),roleApplicatif:'CANDIDAT',active:true,emailMode:'candidat',
-      });
-      if(invitation) invitations.push(invitation);
     }
     await client.query('COMMIT');
-    await sendPendingAccountInvitations(invitations);
-    res.json({message:`Import réussi. ${ids.length} candidat(s) traité(s).`,nb_candidats:ids.length,ids_candidats:ids,invitations:invitations.length?(smtpIsConfigured()?'sent':'pending_smtp_configuration'):'not_required'});
+    res.json({message:`Import réussi. ${ids.length} candidat(s) importé(s) à l’état « 1er appel téléphonique » : leur compte sera créé à la validation du 1er appel.`,nb_candidats:ids.length,ids_candidats:ids});
   } catch(e) { await client.query('ROLLBACK'); console.error('Import candidats rollback',e); res.status(500).json({error:'Erreur interne — rollback complet effectué. Aucune donnée modifiée.'}); } finally { client.release(); }
 });
 
@@ -424,16 +411,17 @@ router.get('/filtres/:colonne', requireRole(RECRUITERS), async (req,res) => {
  */
 router.get('/referentiels/voeux', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async (_req,res) => {
   try {
-    const [durees, environnements, hebergements, competences, langues, niveauxLangue, regions, domaines, aides] = await Promise.all([
+    const [durees, environnements, hebergements, competences, langues, niveauxLangue, regions, domaines, aides, statuts] = await Promise.all([
       pool.query("SELECT id_duree AS id, periode AS label FROM duree WHERE COALESCE(active,true) ORDER BY periode"),
       pool.query("SELECT id_environnement AS id, designation AS label FROM environnement WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_hebergement AS id, designation AS label FROM hebergement WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_competences AS id, designation AS label, id_domaine FROM competences WHERE COALESCE(active,true) ORDER BY designation"),
-      pool.query("SELECT id_langue AS id, designation AS label FROM langue WHERE COALESCE(active,true) ORDER BY designation"),
+      pool.query("SELECT id_langue AS id, designation AS label, crm_key FROM langue WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_niveau_langue AS id, designation AS label FROM niveau_langue WHERE COALESCE(active,true) ORDER BY ordre"),
       pool.query("SELECT id_region AS id, designation AS label FROM region WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT id_domaine AS id, designation AS label FROM domaine WHERE COALESCE(active,true) ORDER BY designation"),
       pool.query("SELECT cle_champ, texte FROM aide_contextuelle WHERE active ORDER BY id_aide_contextuelle"),
+      pool.query("SELECT id_statut_professionnel AS id, designation AS label, crm_key FROM statut_professionnel WHERE COALESCE(active,true) ORDER BY id_statut_professionnel"),
     ]);
     res.json({
       durees: durees.rows,
@@ -445,6 +433,7 @@ router.get('/referentiels/voeux', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CAND
       regions: regions.rows,
       domaines: domaines.rows,
       aides: Object.fromEntries(aides.rows.map((item) => [item.cle_champ, item.texte])),
+      statuts: statuts.rows,
     });
   } catch (e) {
     console.error('Erreur GET référentiels vœux :', e);
@@ -462,7 +451,9 @@ router.get('/:id', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async 
   if (!(await cmCanAccessCandidate(req, req.params.id))) return void res.status(403).json({ error: 'Accès refusé à ce dossier.' });
   try {
     const result = await pool.query(
-      `SELECT c.*, co.nom_contact, co.prenom_contact, co.email_contact, co.tel_contact,
+      `SELECT c.*, sp.designation AS statut_professionnel_designation, sp.crm_key AS statut_professionnel_crm_key,
+               (SELECT u.active FROM user_ u WHERE u.id_contact=c.id_contact) AS compte_actif,
+               co.nom_contact, co.prenom_contact, co.email_contact, co.tel_contact,
                co.genre, co.date_naissance, co.nationalite,
                 co.nom_naissance,co.lieu_naissance, co.id_adresse,
                  a.adresse1,a.adresse2,a.code_postal,a.ville,a.pays AS pays_designation,
@@ -493,6 +484,7 @@ router.get('/:id', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async 
        JOIN contact co ON co.id_contact = c.id_contact
        JOIN etat_candidat ec ON ec.id_etat_candidat = c.id_etat_candidat
         LEFT JOIN adresse a ON a.id_adresse=co.id_adresse
+       LEFT JOIN statut_professionnel sp ON sp.id_statut_professionnel=c.id_statut_professionnel
        LEFT JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat
        WHERE c.id_candidat = $1`,
       [req.params.id]
@@ -510,26 +502,41 @@ router.get('/:id', requireRole(['RECRUTEUR', 'CM', 'ADMIN', 'CANDIDAT']), async 
 
 /** Recruiter edits are explicitly whitelisted; candidate columns are never writable by CAN. */
 router.patch('/:id/etat-civil', requireRole(RECRUITERS), async (req,res) => {
-  const contactFields=['genre','nom_contact','nom_naissance','prenom_contact','tel_contact','email_contact','date_naissance','lieu_naissance','nationalite'];
+  const contactFields=['genre','nom_contact','nom_naissance','prenom_contact','tel_contact','date_naissance','lieu_naissance','nationalite'];
   const candidateFields=['perso_depart_en_couple','perso_nom_prenom_conjoint','perso_etat_de_vie','perso_date_mariage','perso_est_parent','perso_pars_avec_enfants'];
   const addressFields=['adresse1','adresse2','code_postal','ville','pays'];
   const contacts=contactFields.filter(k=>k in req.body), candidates=candidateFields.filter(k=>k in req.body), addresses=addressFields.filter(k=>k in req.body);
-  if(!contacts.length&&!candidates.length&&!addresses.length) return void res.status(400).json({error:'Aucun champ modifiable.'});
+  const emailRequested='email_contact' in req.body;
+  if(!contacts.length&&!candidates.length&&!addresses.length&&!emailRequested) return void res.status(400).json({error:'Aucun champ modifiable.'});
+  if(emailRequested && normalizeEmail(req.body.email_contact) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(req.body.email_contact))) return void res.status(400).json({error:'Adresse email invalide.'});
   const client=await pool.connect();
+  const notices: EmailChangeNotice[]=[];
   try {
     await client.query('BEGIN');
     const row=await client.query('SELECT c.id_contact,co.id_adresse FROM candidat c JOIN contact co ON co.id_contact=c.id_contact WHERE c.id_candidat=$1 FOR UPDATE',[req.params.id]);
     if(!row.rows.length){await client.query('ROLLBACK');return void res.status(404).json({error:'Candidat non trouvé.'});}
     if(contacts.length) await client.query(`UPDATE contact SET ${contacts.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_contact=$${contacts.length+1}`,[...contacts.map(k=>formValue(k, req.body[k]) || null),row.rows[0].id_contact]);
+    if(emailRequested){
+      // Règle UAT-02 D5 : adresse unique parmi les comptes ; le contact ET le login du compte sont mis à jour ensemble.
+      const change=await changeContactEmail(client,row.rows[0].id_contact,req.body.email_contact);
+      if(change.notice) notices.push(change.notice);
+    }
     let idAdresse=row.rows[0].id_adresse;
     if(addresses.length&&!idAdresse){const created=await client.query("INSERT INTO adresse DEFAULT VALUES RETURNING id_adresse");idAdresse=created.rows[0].id_adresse;await client.query('UPDATE contact SET id_adresse=$1 WHERE id_contact=$2',[idAdresse,row.rows[0].id_contact]);}
     if(addresses.length) await client.query(`UPDATE adresse SET ${addresses.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_adresse=$${addresses.length+1}`,[...addresses.map(k=>req.body[k]||null),idAdresse]);
     if(candidates.length) await client.query(`UPDATE candidat SET ${candidates.map((k,i)=>`${k}=$${i+1}`).join(',')} WHERE id_candidat=$${candidates.length+1}`,[...candidates.map(k=>formValue(k, req.body[k])),req.params.id]);
-    await client.query('COMMIT');res.json({message:'État civil mis à jour.'});
-  } catch(e){await client.query('ROLLBACK');console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});} finally {client.release();}
+    await client.query('COMMIT');
+    await sendEmailChangeNotices(pool,notices);
+    res.json({message:notices.length?'État civil mis à jour. L’identifiant de connexion du candidat a été modifié et un email l’en informe.':'État civil mis à jour.'});
+  } catch(e:any){
+    try{await client.query('ROLLBACK');}catch{/* déjà terminée */}
+    if(e instanceof EmailConflictError) return void res.status(409).json({error:e.message});
+    if(e?.message==='EMAIL_REQUIRED') return void res.status(400).json({error:'L’adresse email est obligatoire : le candidat a un compte dont elle est l’identifiant.'});
+    console.error(e);res.status(500).json({error:'Erreur interne du serveur.'});
+  } finally {client.release();}
 });
 router.patch('/:id/projet', requireRole(RECRUITERS), async (req,res) => {
-  const allowed=['engagements','annonces_recherchees','perso_depart_en_couple','perso_nom_prenom_conjoint','perso_etat_de_vie','perso_date_mariage','perso_est_parent','perso_pars_avec_enfants','projet_date_depart_souhaitee','projet_duree_mission_souhaitee','projet_numero_offre_mission','projet_motivations','projet_questionnements','projet_avancement','projet_experience_interculturelle','projet_formation_dialogue_interculturel','projet_experience_de_volontariat','projet_raison_du_depart_avec_la_dcc','projet_attente_de_la_dcc','projet_lien_avec_une_autre_structure','projet_lien_avec_une_autre_structure_detail','profil_statut','profil_statut_administration_de_tutelle','profil_experience_engagement','profil_experience_engagement_detail','candidature_information_du_candidat','candidature_disponibilite_du_candidat','candidature_preference_session_choisir'];
+  const allowed=['engagements','annonces_recherchees','perso_depart_en_couple','perso_nom_prenom_conjoint','perso_etat_de_vie','perso_date_mariage','perso_est_parent','perso_pars_avec_enfants','projet_date_depart_souhaitee','projet_duree_mission_souhaitee','projet_numero_offre_mission','projet_motivations','projet_questionnements','projet_avancement','projet_experience_interculturelle','projet_formation_dialogue_interculturel','projet_experience_de_volontariat','projet_raison_du_depart_avec_la_dcc','projet_attente_de_la_dcc','projet_lien_avec_une_autre_structure','projet_lien_avec_une_autre_structure_detail','id_statut_professionnel','profil_statut_administration_de_tutelle','profil_experience_engagement','profil_experience_engagement_detail','candidature_information_du_candidat','candidature_disponibilite_du_candidat','candidature_preference_session_choisir'];
   const keys=allowed.filter(k=>k in req.body);
   const relationFields = ['domaines_formation', 'domaines_experience_pro'].filter((field) => Array.isArray(req.body[field]));
   if(!keys.length && !relationFields.length) return void res.status(400).json({error:'Aucun champ modifiable.'});
@@ -548,6 +555,25 @@ router.patch('/:id/projet', requireRole(RECRUITERS), async (req,res) => {
         [req.params.id],
       );
       idFiche = created.rows[0].id_fiche_de_voeux;
+    }
+    if (keys.includes('id_statut_professionnel') || keys.includes('profil_statut_administration_de_tutelle')) {
+      // Statut professionnel : liste fermée (référentiel) ; « Administration de tutelle » est saisissable
+      // en permanence mais obligatoire seulement si le statut est FONCTIONNAIRE (UAT-01).
+      const current = await client.query('SELECT id_statut_professionnel,profil_statut_administration_de_tutelle FROM candidat WHERE id_candidat=$1', [req.params.id]);
+      const rawStatut = keys.includes('id_statut_professionnel') ? req.body.id_statut_professionnel : current.rows[0].id_statut_professionnel;
+      const statutId = rawStatut === null || rawStatut === undefined || rawStatut === '' ? null : Number(rawStatut);
+      let statutKey: string | null = null;
+      if (statutId !== null) {
+        const statut = await client.query(
+          'SELECT crm_key FROM statut_professionnel WHERE id_statut_professionnel=$1 AND (COALESCE(active,true) OR id_statut_professionnel=$2)',
+          [statutId, current.rows[0].id_statut_professionnel],
+        );
+        if (!statut.rows.length) throw new Error('REF:statut_professionnel');
+        statutKey = statut.rows[0].crm_key;
+      }
+      const tutelle = keys.includes('profil_statut_administration_de_tutelle') ? req.body.profil_statut_administration_de_tutelle : current.rows[0].profil_statut_administration_de_tutelle;
+      if (statutKey === 'FONCTIONNAIRE' && !(typeof tutelle === 'string' && tutelle.trim())) throw new Error('ADMIN_TUTELLE');
+      if (keys.includes('id_statut_professionnel')) req.body.id_statut_professionnel = statutId;
     }
     if (keys.length) {
       await client.query(
@@ -576,6 +602,7 @@ router.patch('/:id/projet', requireRole(RECRUITERS), async (req,res) => {
     console.error('Erreur PATCH dossier de candidature :', {id:req.params.id, message:e.message});
     if (e.message === 'NOT_FOUND') return void res.status(404).json({error:'Candidat non trouvé.'});
     if (String(e.message).startsWith('REF:')) return void res.status(400).json({error:`Référence inconnue dans ${String(e.message).slice(4)}.`});
+    if (e.message === 'ADMIN_TUTELLE') return void res.status(400).json({error:'L’administration de tutelle est obligatoire quand le statut professionnel est « Fonctionnaire ».'});
     res.status(500).json({error:'Erreur interne du serveur.'});
   } finally {
     client.release();
@@ -597,18 +624,84 @@ router.get('/configuration/pieces-jointes', requireRole(['RECRUTEUR','ADMIN','CA
   res.json({storageUrl:process.env.PIECE_JOINTE_STORAGE_URL || null});
 });
 
+/**
+ * Actions du recruteur sur l'état du candidat. `target` = état visé :
+ *   AP2 = valider le 1er appel (crée le compte et envoie l'invitation), NEL = rejeter le candidat (depuis AP1 ou AP2),
+ *   CHO = valider le 2ème appel, ATA = valider la session Choisir, NCA = annuler la candidature.
+ * Un commentaire est obligatoire ; deux pièces jointes sont possibles.
+ */
 async function action(req:any,res:any,target:string, extra?: (c:any)=>Promise<void>) {
   const files=(req.files as Express.Multer.File[] | undefined) ?? [];
-  const client=await pool.connect(); try { await verifyUploadedFiles(files); if(files.length && !optionalText(req.body.pj_description))throw new Error('ATTACHMENT_DESCRIPTION'); await client.query('BEGIN'); const row=await client.query('SELECT c.id_etat_candidat,c.id_contact,f.id_fiche_de_voeux,f.flag_candidat_deja_mis_en_lien,f.flag_fiche_de_voeux_soumise,f.date_voeux_provisoires,f.date_voeux_definitifs FROM candidat c JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE',[req.params.id]); if(!row.rows.length)throw new Error('NOT_FOUND'); const c=row.rows[0];
-    if(!req.body?.commentaire?.trim())throw new Error('COMMENT'); if(target==='NEL'&&(c.id_etat_candidat!=='AP2'||c.flag_candidat_deja_mis_en_lien))throw new Error('PRE'); if(target==='CHO'&&(c.id_etat_candidat!=='AP2'||(!c.flag_fiche_de_voeux_soumise&&!c.date_voeux_provisoires)))throw new Error('VOEUX_PROVISOIRES'); if(target==='NCA'&&!['CHO','ATA'].includes(c.id_etat_candidat))throw new Error('PRE'); if(target==='ATA'&&(c.id_etat_candidat!=='CHO'||!c.date_voeux_definitifs))throw new Error('VOEUX_DEFINITIFS');
+  const client=await pool.connect();
+  let invitation: PendingAccountInvitation | null = null;
+  try {
+    await verifyUploadedFiles(files);
+    if(files.length && !optionalText(req.body.pj_description)) throw new Error('ATTACHMENT_DESCRIPTION');
+    await client.query('BEGIN');
+    const row=await client.query('SELECT c.id_etat_candidat,c.id_contact,f.id_fiche_de_voeux,f.flag_candidat_deja_mis_en_lien,f.flag_fiche_de_voeux_soumise,f.date_voeux_provisoires,f.date_voeux_definitifs FROM candidat c JOIN fiche_de_voeux f ON f.id_candidat=c.id_candidat WHERE c.id_candidat=$1 FOR UPDATE',[req.params.id]);
+    if(!row.rows.length) throw new Error('NOT_FOUND');
+    const c=row.rows[0];
+    if(!req.body?.commentaire?.trim()) throw new Error('COMMENT');
+    if(target==='AP2' && c.id_etat_candidat!=='AP1') throw new Error('PRE');
+    if(target==='NEL' && (!['AP1','AP2'].includes(c.id_etat_candidat) || c.flag_candidat_deja_mis_en_lien)) throw new Error('PRE');
+    if(target==='CHO' && (c.id_etat_candidat!=='AP2' || (!c.flag_fiche_de_voeux_soumise && !c.date_voeux_provisoires))) throw new Error('VOEUX_PROVISOIRES');
+    if(target==='NCA' && !['CHO','ATA'].includes(c.id_etat_candidat)) throw new Error('PRE');
+    if(target==='ATA' && (c.id_etat_candidat!=='CHO' || !c.date_voeux_definitifs)) throw new Error('VOEUX_DEFINITIFS');
     const uploadedUrls=uploadedFileUrls('candidats',String(req.params.id),files);
     const attachmentUrls=(uploadedUrls.length ? uploadedUrls : [req.body.url1_piece_jointe,req.body.url2_piece_jointe].map((value:unknown)=>optionalText(value))).slice(0,2);
     for(const url of attachmentUrls) if(url && (!/^https?:\/\//i.test(url)||url.length>250)) throw new Error('URL');
-    await transition(client,req.params.id,target,`${req.user!.prenom} ${req.user!.nom}`,req.body.commentaire); await client.query('UPDATE etape SET pj_description=$1,url1_piece_jointe=$2,url2_piece_jointe=$3 WHERE id_historique=(SELECT max(id_historique) FROM etape WHERE id_candidat=$4)',[optionalText(req.body.pj_description),attachmentUrls[0],attachmentUrls[1],req.params.id]); if(target==='CHO')await client.query('UPDATE fiche_de_voeux SET flag_fiche_de_voeux_soumise=false,verrouille=false,verrouille_par=NULL,date_verrouillage=NULL WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]); if(['NEL','NCA'].includes(target))await client.query('UPDATE user_ SET active=false WHERE id_contact=$1',[c.id_contact]); if(target==='NCA')await client.query('UPDATE opportunite SET flag_opportunite_non_retenu=true WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]); if(extra)await extra(c); await client.query('COMMIT');res.json({message:'Transition effectuée.',etat:target});
-  }catch(e:any){await client.query('ROLLBACK'); await cleanupUploadedFiles(files); const messages:Record<string,string>={NOT_FOUND:'Candidat non trouvé.',COMMENT:'Commentaire obligatoire.',ATTACHMENT_DESCRIPTION:'La description est obligatoire lorsqu’une pièce jointe est fournie.',URL:'Les pièces jointes doivent être des URL HTTP ou HTTPS valides.',VOEUX_PROVISOIRES:'La fiche de vœux provisoire doit être soumise avant de valider cet appel.',VOEUX_DEFINITIFS:'La fiche de vœux définitive doit être soumise avant de valider la session Choisir.'}; const msg=messages[e.message]??(e instanceof Error?e.message:'Transition non autorisée pour cet état.');res.status(e.message==='NOT_FOUND'?404:['COMMENT','URL','ATTACHMENT_DESCRIPTION'].includes(e.message)?400:409).json({error:msg});}finally{client.release();}}
+    if(target==='AP2') {
+      // Création du compte au passage en AP2 : l'adresse du candidat devient son identifiant, elle doit être libre (UAT-08 D3).
+      const contact=await client.query('SELECT email_contact,prenom_contact FROM contact WHERE id_contact=$1',[c.id_contact]);
+      const email=normalizeEmail(contact.rows[0]?.email_contact);
+      if(!email) throw new Error('EMAIL_MANQUANT');
+      invitation=await createAccountForContactIfMissing(client,{idContact:c.id_contact,email,prenom:contact.rows[0].prenom_contact??null,roleApplicatif:'CANDIDAT',active:true,emailMode:'candidat'});
+    }
+    await transition(client,req.params.id,target,`${req.user!.prenom} ${req.user!.nom}`,req.body.commentaire);
+    await client.query('UPDATE etape SET pj_description=$1,url1_piece_jointe=$2,url2_piece_jointe=$3 WHERE id_historique=(SELECT max(id_historique) FROM etape WHERE id_candidat=$4)',[optionalText(req.body.pj_description),attachmentUrls[0],attachmentUrls[1],req.params.id]);
+    if(target==='CHO') await client.query('UPDATE fiche_de_voeux SET flag_fiche_de_voeux_soumise=false,verrouille=false,verrouille_par=NULL,date_verrouillage=NULL WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]);
+    if(['NEL','NCA'].includes(target)) await client.query('UPDATE user_ SET active=false WHERE id_contact=$1',[c.id_contact]);
+    if(target==='NCA') await client.query('UPDATE opportunite SET flag_opportunite_non_retenu=true WHERE id_fiche_de_voeux=$1',[c.id_fiche_de_voeux]);
+    if(extra) await extra(c);
+    await client.query('COMMIT');
+    // Après la validation de la transaction : un échec d'envoi ne remet jamais l'étape en cause, il est seulement signalé.
+    const summary=invitation ? await sendPendingAccountInvitations(pool,[invitation]) : null;
+    res.json({message:'Transition effectuée.',etat:target,...(summary?{invitation:summary.status}:{})});
+  } catch(e:any) {
+    try{await client.query('ROLLBACK');}catch{/* déjà terminée */}
+    await cleanupUploadedFiles(files);
+    if(e instanceof EmailConflictError) return void res.status(409).json({error:`Impossible de créer le compte du candidat. ${e.message}`});
+    const messages:Record<string,string>={NOT_FOUND:'Candidat non trouvé.',COMMENT:'Commentaire obligatoire.',ATTACHMENT_DESCRIPTION:'La description est obligatoire lorsqu’une pièce jointe est fournie.',URL:'Les pièces jointes doivent être des URL HTTP ou HTTPS valides.',VOEUX_PROVISOIRES:'La fiche de vœux provisoire doit être soumise avant de valider cet appel.',VOEUX_DEFINITIFS:'La fiche de vœux définitive doit être soumise avant de valider la session Choisir.',PRE:'Cette action n’est pas autorisée à l’état actuel du candidat.',EMAIL_MANQUANT:'Le candidat n’a pas d’adresse email : renseignez-la dans l’onglet État civil avant de valider le 1er appel.'};
+    const msg=messages[e.message]??(e instanceof Error?e.message:'Transition non autorisée pour cet état.');
+    res.status(e.message==='NOT_FOUND'?404:['COMMENT','URL','ATTACHMENT_DESCRIPTION'].includes(e.message)?400:409).json({error:msg});
+  } finally {client.release();}
+}
+router.post('/:id/valider_appel1', requireRole(RECRUITERS), candidateActionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'AP2'));
 router.post('/:id/rejeter', requireRole(RECRUITERS), candidateActionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'NEL'));
 router.post('/:id/valider_appel2', requireRole(RECRUITERS), candidateActionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'CHO'));
 router.post('/:id/annulerCandidature', requireRole(RECRUITERS), candidateActionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'NCA'));
+
+/** « Renvoyer l'invitation » : nouveau mot de passe provisoire + email d'invitation du candidat (compte déjà créé). */
+router.post('/:id/renvoyer-invitation', requireRole(RECRUITERS), async (req,res) => {
+  const id=Number(req.params.id);
+  if(!Number.isInteger(id)||id<=0) return void res.status(400).json({error:'Identifiant candidat invalide.'});
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const account=await client.query('SELECT u.id_user FROM candidat c JOIN user_ u ON u.id_contact=c.id_contact WHERE c.id_candidat=$1',[id]);
+    if(!account.rows.length){await client.query('ROLLBACK');return void res.status(409).json({error:'Ce candidat n’a pas encore de compte : validez d’abord le 1er appel.'});}
+    const invitation=await issueNewTemporaryPassword(client,account.rows[0].id_user);
+    if(!invitation){await client.query('ROLLBACK');return void res.status(404).json({error:'Compte introuvable.'});}
+    if(!invitation.active){await client.query('ROLLBACK');return void res.status(409).json({error:'Le compte de ce candidat est désactivé : réactivez-le (Admin > Utilisateurs) avant de renvoyer l’invitation.'});}
+    await client.query('COMMIT');
+    const summary=await sendPendingAccountInvitations(pool,[invitation]);
+    res.json({invitation:summary.status==='sent'?'sent':summary.status==='pending_smtp_configuration'?'pending_smtp_configuration':'failed'});
+  } catch(e) {
+    try{await client.query('ROLLBACK');}catch{/* déjà terminée */}
+    console.error('Erreur renvoi d’invitation candidat :',e);
+    res.status(500).json({error:'Erreur interne du serveur.'});
+  } finally {client.release();}
+});
 router.post('/:id/valider_session_choisir', requireRole(RECRUITERS), candidateActionUpload.array('pieces_jointes',2), (req,res)=>action(req,res,'ATA'));
 
 /** Vœux are the only writable surface for a candidate, within the state-specific window. */
@@ -628,6 +721,8 @@ router.patch('/:id/voeux', requireRole(['CANDIDAT', ...RECRUITERS]), async (req,
     const relationFields=['environnements','regions','hebergements','competences','durees','langues'].filter(field=>Array.isArray(req.body[field]));
     const recruiterNotes: string[]=candidate ? [] : ['engagements','annonces_recherchees'].filter(field=>field in req.body);
     if(!keys.length && !relationFields.length && !recruiterNotes.length) throw new Error('EMPTY');
+    // Un champ jamais renseigné arrive de l'écran sous forme de texte vide : c'est « non renseigné », pas une erreur.
+    if(typeof req.body.fonctionnaire_dispo_demandee==='string' && !req.body.fonctionnaire_dispo_demandee.trim()) req.body.fonctionnaire_dispo_demandee=null;
     if(
       keys.includes('fonctionnaire_dispo_demandee')
       && ![null, 'OUI', 'NON', 'NON APPLICABLE'].includes(req.body.fonctionnaire_dispo_demandee)
@@ -758,7 +853,6 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
       date_depart_souhaite:'Date de départ souhaitée',
       nouveau_poste:'Nouveau poste',
       nouvelle_langue:'Nouvelle langue',
-      competences_a_developper:'Compétences à développer',
     };
     const missing = Object.entries(scalarLabels)
       .filter(([field]) => fiche[field] === null || fiche[field] === undefined || (typeof fiche[field] === 'string' && !fiche[field].trim()))
@@ -790,6 +884,19 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
       error.missing=missing;
       throw error;
     }
+    // UAT-05 : l'absence du français fait baisser la note des opportunités. La question est posée UNE fois,
+    // dans la fenêtre de l'écran ; sa réponse (« je ne parle pas du tout français ») accompagne la demande
+    // de soumission. Sans cette confirmation (appel direct de l'API, page ancienne), le serveur refuse.
+    // Aucune trace de la réponse n'est conservée. Contrôle ignoré si le français n'est plus dans le référentiel.
+    const confirmeSansFrancais = req.body?.confirme_sans_francais === true || req.body?.confirme_sans_francais === 'true';
+    if(!confirmeSansFrancais) {
+      const french=await client.query(
+        `SELECT EXISTS(SELECT 1 FROM langue WHERE crm_key='FR' AND COALESCE(active,true)) AS francais_actif,
+                EXISTS(SELECT 1 FROM parle p JOIN langue l ON l.id_langue=p.id_langue WHERE p.id_fiche_de_voeux=$1 AND l.crm_key='FR') AS parle_francais`,
+        [fiche.id_fiche_de_voeux],
+      );
+      if(french.rows[0].francais_actif && !french.rows[0].parle_francais) throw new Error('FRANCAIS_ABSENT');
+    }
     const author=`${req.user!.prenom} ${req.user!.nom}`;
     await client.query(
       definitive
@@ -817,6 +924,7 @@ async function submitVoeux(req: Request, res: Response, definitive: boolean) {
     if(e.message==='NOT_FOUND') return void res.status(404).json({error:'Candidat non trouvé.'});
     if(e.message==='PRE') return void res.status(400).json({error:definitive?'Soumission définitive non autorisée.':'Soumission provisoire non autorisée.'});
     if(e.message==='MISSING') return void res.status(400).json({error:`Champs obligatoires manquants : ${e.missing.join(', ')}.`,champs_manquants:e.missing});
+    if(e.message==='FRANCAIS_ABSENT') return void res.status(409).json({code:'FRANCAIS_ABSENT',error:'La langue française n’est pas indiquée dans la fiche de vœux : confirmez que le candidat ne la parle pas du tout, ou ajoutez-la dans « Langues parlées ».'});
     res.status(500).json({error:'Erreur interne du serveur.'});
   } finally {
     client.release();

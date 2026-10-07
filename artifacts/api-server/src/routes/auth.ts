@@ -20,7 +20,7 @@ import jwt from 'jsonwebtoken';
 import { createHash, randomBytes } from 'node:crypto';
 import pool from '../db-pg';
 import { requireRole } from '../middleware/requireRole';
-import { sendPasswordResetEmail, smtpIsConfigured } from '../lib/candidateInvitations';
+import { sendTemplatedEmail, smtpIsConfigured } from '../lib/emailTemplates';
 import { getJwtExpireHours, getJwtSecret } from '../lib/jwtConfig';
 import { logger } from '../lib/logger';
 
@@ -54,7 +54,7 @@ const PASSWORD_RULE_MESSAGE = 'Le mot de passe doit contenir au moins 12 caract�
 router.post('/login', async (req, res) => {
   const { login, password } = req.body as { login?: string; password?: string };
 
-  if (!login || !password) {
+  if (typeof login !== 'string' || typeof password !== 'string' || !login.trim() || !password) {
     res.status(400).json({ error: 'Identifiant et mot de passe requis.' });
     return;
   }
@@ -71,21 +71,27 @@ router.post('/login', async (req, res) => {
          c.nom_contact      AS nom,
          c.prenom_contact   AS prenom,
          -- Pour les candidats, récupère l'id_candidat (NULL pour les autres rôles)
-         cand.id_candidat
+         cand.id_candidat,
+         u.login AS login_enregistre
        FROM user_ u
        JOIN contact c ON c.id_contact = u.id_contact
        LEFT JOIN candidat cand ON cand.id_contact = c.id_contact
-       WHERE u.login = $1`,
-      [login]
+       WHERE lower(u.login) = lower($1)`,
+      [login.trim()]
     );
 
-    if (result.rows.length === 0) {
+    // Connexion insensible à la casse (UAT-02 D7, 07/10/2026) : on retient d'abord l'identifiant écrit
+    // EXACTEMENT comme saisi (aucun compte existant n'est bloqué, même si deux comptes ne diffèrent que
+    // par la casse), sinon l'unique compte qui correspond sans tenir compte de la casse. Si plusieurs
+    // comptes correspondent sans correspondance exacte, la connexion est refusée (cas ambigu).
+    const exact = result.rows.find((row) => row.login_enregistre === login.trim());
+    const user = exact ?? (result.rows.length === 1 ? result.rows[0] : undefined);
+
+    if (!user) {
       // Réponse volontairement vague pour ne pas révéler si le login existe
       res.status(401).json({ error: 'Identifiant ou mot de passe incorrect.' });
       return;
     }
-
-    const user = result.rows[0];
     if (user.active === false) {
       res.status(401).json({ error: 'Identifiant ou mot de passe incorrect.' });
       return;
@@ -163,6 +169,7 @@ router.post('/mot-de-passe-oublie', async (req, res) => {
       `SELECT u.id_user,u.active,c.email_contact,c.prenom_contact
        FROM user_ u JOIN contact c ON c.id_contact=u.id_contact
        WHERE lower(u.login)=lower($1) OR lower(c.email_contact)=lower($1)
+       ORDER BY (lower(u.login)=lower($1)) DESC, u.id_user
        LIMIT 1`,
       [login],
     );
@@ -187,7 +194,7 @@ router.post('/mot-de-passe-oublie', async (req, res) => {
     const frontendUrl=(process.env.FRONTEND_URL || '').replace(/\/$/,'');
     const resetUrl=`${frontendUrl}/login?reset_token=${encodeURIComponent(token)}`;
     try {
-      await sendPasswordResetEmail(found.rows[0].email_contact,found.rows[0].prenom_contact,resetUrl);
+      await sendTemplatedEmail(pool,'REINITIALISATION_MDP',found.rows[0].email_contact,{prenom:found.rows[0].prenom_contact ?? '',lien:resetUrl});
     } catch(error) {
       try {
         await pool.query('UPDATE user_ SET password_reset_nonce_hash=NULL WHERE id_user=$1',[found.rows[0].id_user]);

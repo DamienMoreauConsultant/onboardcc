@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { candidatsApi, type CandidatDetail as Detail } from '@/api/candidats';
 import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/hooks/use-toast';
 import { formatDateFR } from '@/lib/date';
 import { CandidatBanner } from './components/CandidatBanner';
 import { SectionCard } from './components/SectionCard';
@@ -22,6 +23,7 @@ type Props = { mode: 'recruteur' | 'cm' | 'candidat'; initialSection?: EditableS
 
 export default function CandidatDetail({ mode, initialSection }: Props) {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [, params] = useRoute(mode === 'cm' ? '/cm/candidats/:id' : '/recruteur/candidats/:id');
   const [, navigate] = useLocation();
   const id = mode === 'candidat' ? user?.id_candidat : Number(params?.id);
@@ -45,6 +47,9 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
   const [attachmentFiles, setAttachmentFiles] = useState<(File | null)[]>([null, null]);
   const [fileError, setFileError] = useState('');
   const [submitDefinitive, setSubmitDefinitive] = useState<boolean | null>(null);
+  /* UAT-05 : fenêtre « le français n'est pas indiqué » (posée une seule fois), puis confirmation habituelle. */
+  const [frenchPrompt, setFrenchPrompt] = useState<boolean | null>(null);
+  const [confirmeSansFrancais, setConfirmeSansFrancais] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reviewDate, setReviewDate] = useState('');
   const detailRequest = useRef(0);
@@ -143,10 +148,20 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     if (!detail || !action || !comment.trim()) return;
     setBusy(true);
     try {
-      await candidatsApi.transition(detail.id_candidat, action as 'rejeter' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', comment, {
+      const result = await candidatsApi.transition(detail.id_candidat, action as 'rejeter' | 'valider_appel1' | 'valider_appel2' | 'annulerCandidature' | 'valider_session_choisir', comment, {
         description:attachmentDescription,
         files:attachmentFiles.filter((f): f is File => f !== null),
       });
+      if (action === 'valider_appel1') {
+        toast({
+          title: '1er appel validé — compte créé',
+          description: result?.invitation === 'sent'
+            ? 'Le compte du candidat a été créé et l’invitation lui a été envoyée par email.'
+            : result?.invitation === 'failed'
+              ? 'Le compte a été créé, mais l’invitation n’a pas pu être envoyée. Vérifiez l’adresse email (onglet État civil) puis utilisez « Renvoyer invitation ».'
+              : 'Le compte a été créé. L’invitation reste à envoyer car la messagerie n’est pas configurée.',
+        });
+      }
       setAction(null);
       setComment('');
       setAttachmentDescription('');
@@ -164,11 +179,61 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
     if (!detail || submitDefinitive === null) return;
     setBusy(true);
     try {
-      await candidatsApi.submitVoeux(detail.id_candidat, submitDefinitive);
+      await candidatsApi.submitVoeux(detail.id_candidat, submitDefinitive, confirmeSansFrancais);
       setSubmitDefinitive(null);
+      setConfirmeSansFrancais(false);
       await reload(false);
     } catch (e: any) {
-      setError(e.response?.data?.error ?? 'Soumission impossible.');
+      if (e.response?.data?.code === 'FRANCAIS_ABSENT') {
+        // Filet de sécurité : le serveur a détecté l'absence du français que la page n'avait pas vue.
+        setFrenchPrompt(submitDefinitive);
+        setSubmitDefinitive(null);
+      } else {
+        setError(e.response?.data?.error ?? 'Soumission impossible.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /* UAT-05 : le français est la langue la plus demandée par les postes ; son absence fait baisser la note des
+     opportunités. Avant la fenêtre de confirmation, on vérifie qu'il figure dans les langues parlées. */
+  const frenchOption = refs?.langues.find((langue) => langue.crm_key === 'FR');
+  const speaksFrench = Boolean(frenchOption) && ((detail?.langues as unknown as any[] | undefined) ?? []).some((langue: any) => langue.crm_key === 'FR' || langue.id_langue === frenchOption?.id);
+  const requestSubmit = (definitive: boolean) => {
+    setConfirmeSansFrancais(false);
+    if (frenchOption && !speaksFrench) setFrenchPrompt(definitive);
+    else setSubmitDefinitive(definitive);
+  };
+  const answerFrenchSpeaker = () => {
+    // « Je parle français » : on ouvre directement l'édition des vœux pour ajouter la langue.
+    setFrenchPrompt(null);
+    setActiveTab('voeux');
+    setEditing('voeux');
+    if (mode === 'candidat') navigate('/candidat/voeux');
+  };
+  const answerNoFrench = () => {
+    const definitive = frenchPrompt;
+    setFrenchPrompt(null);
+    setConfirmeSansFrancais(true);
+    setSubmitDefinitive(definitive);
+  };
+
+  const resendInvitation = async () => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      const result = await candidatsApi.resendInvitation(detail.id_candidat);
+      toast({
+        title: 'Invitation',
+        description: result.invitation === 'sent'
+          ? 'Un nouveau mot de passe provisoire a été envoyé au candidat par email.'
+          : result.invitation === 'failed'
+            ? 'L’invitation n’a pas pu être envoyée (adresse refusée ou messagerie indisponible). Vérifiez l’adresse email dans l’onglet État civil.'
+            : 'L’invitation reste à envoyer car la messagerie n’est pas configurée.',
+      });
+    } catch (e: any) {
+      setError(e.response?.data?.error ?? 'Invitation impossible à renvoyer.');
     } finally {
       setBusy(false);
     }
@@ -260,7 +325,8 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
         onSave={(section, values) => void save(section, values)}
         onAction={setAction}
         onEditVoeux={() => setEditing('voeux')}
-        onSubmit={setSubmitDefinitive}
+        onSubmit={requestSubmit}
+        onResendInvitation={() => void resendInvitation()}
         refs={refs}
       />
 
@@ -430,7 +496,25 @@ export default function CandidatDetail({ mode, initialSection }: Props) {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={submitDefinitive !== null} onOpenChange={(open) => !open && setSubmitDefinitive(null)}>
+      <AlertDialog open={frenchPrompt !== null}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{mode === 'candidat' ? 'Le français n’est pas indiqué dans vos langues' : 'Le français n’est pas indiqué dans les langues du candidat'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {mode === 'candidat'
+                ? 'Le français est demandé par de nombreux postes : si vous le parlez, ne pas l’indiquer fait baisser la note de vos opportunités.'
+                : 'Le français est demandé par de nombreux postes : si le candidat le parle, ne pas l’indiquer fait baisser la note de ses opportunités.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 sm:flex-col sm:space-x-0">
+            <AlertDialogAction onClick={answerFrenchSpeaker} data-testid="button-parle-francais">{mode === 'candidat' ? 'Je parle français — compléter ma fiche' : 'Le candidat parle français — compléter la fiche'}</AlertDialogAction>
+            <Button variant="outline" onClick={answerNoFrench} data-testid="button-sans-francais">{mode === 'candidat' ? 'Je ne parle pas du tout français — continuer' : 'Le candidat ne parle pas du tout français — continuer'}</Button>
+            <AlertDialogCancel onClick={() => setFrenchPrompt(null)}>Annuler</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={submitDefinitive !== null} onOpenChange={(open) => { if (!open) { setSubmitDefinitive(null); setConfirmeSansFrancais(false); } }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{mode === 'recruteur' ? (submitDefinitive ? 'Soumettre vœux définitifs pour le candidat' : 'Soumettre vœux provisoires pour le candidat') : 'Soumettre la fiche de vœux'}</AlertDialogTitle>

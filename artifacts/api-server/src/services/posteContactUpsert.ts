@@ -1,4 +1,6 @@
 import type { PoolClient } from 'pg';
+import { normalizeEmail } from '../lib/emailRules';
+import { changeContactEmail, type EmailChangeNotice } from './emailChange';
 
 export type PosteContactRole = 'CM1' | 'CM2' | 'CHZ' | 'MIS' | 'PAR';
 
@@ -26,7 +28,7 @@ export type PosteContactInput = {
 export async function upsertPosteContact(
   client: PoolClient,
   input: PosteContactInput,
-): Promise<{ idContact: number; idAdresse: number | null; created: boolean }> {
+): Promise<{ idContact: number; idAdresse: number | null; created: boolean; emailNotice: EmailChangeNotice | null }> {
   const found = await client.query(
     'SELECT id_contact,id_adresse FROM contact WHERE crm_key=$1 FOR UPDATE',
     [input.crmKey],
@@ -35,6 +37,8 @@ export async function upsertPosteContact(
   let idContact: number;
   let idAdresse: number | null = found.rows[0]?.id_adresse ?? null;
   const created = found.rows.length === 0;
+  const email = normalizeEmail(input.email) || null;
+  let emailNotice: EmailChangeNotice | null = null;
 
   if (created) {
     if (input.adresse) {
@@ -54,22 +58,26 @@ export async function upsertPosteContact(
     const inserted = await client.query(
       `INSERT INTO contact(crm_key,nom_contact,prenom_contact,role,tel_contact,email_contact,id_adresse)
        VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id_contact`,
-      [input.crmKey, input.nom, input.prenom, input.role, input.telephone ?? null, input.email ?? null, idAdresse],
+      [input.crmKey, input.nom, input.prenom, input.role, input.telephone ?? null, email, idAdresse],
     );
     idContact = inserted.rows[0].id_contact;
   } else {
     idContact = found.rows[0].id_contact;
     if (input.role === 'MIS' || input.role === 'PAR') {
+      // Contacts sans compte : l'email est simplement mis à jour (rangé en minuscules).
       await client.query(
         `UPDATE contact SET nom_contact=$1,prenom_contact=$2,role=$3,tel_contact=$4,email_contact=$5
          WHERE id_contact=$6`,
-        [input.nom, input.prenom, input.role, input.telephone ?? null, input.email ?? null, idContact],
+        [input.nom, input.prenom, input.role, input.telephone ?? null, email, idContact],
       );
     } else {
       await client.query(
-        'UPDATE contact SET nom_contact=$1,prenom_contact=$2,role=$3,email_contact=$4 WHERE id_contact=$5',
-        [input.nom, input.prenom, input.role, input.email ?? null, idContact],
+        'UPDATE contact SET nom_contact=$1,prenom_contact=$2,role=$3 WHERE id_contact=$4',
+        [input.nom, input.prenom, input.role, idContact],
       );
+      // CM (CM1 comme CM2) et CZ : règle commune (UAT-02 D5) — adresse unique parmi les comptes, report
+      // sur le login du compte, email d'information envoyé après la validation de l'import.
+      if (email) emailNotice = (await changeContactEmail(client, idContact, email)).notice;
     }
 
     if (input.adresse) {
@@ -104,7 +112,7 @@ export async function upsertPosteContact(
     }
   }
 
-  return { idContact, idAdresse, created };
+  return { idContact, idAdresse, created, emailNotice };
 }
 
 export async function linkPosteContact(client: PoolClient, idPoste: number, idContact: number) {

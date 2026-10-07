@@ -20,7 +20,8 @@
 -- CE QUI EST SUPPRIMÉ :
 --   - Tous les postes (fiche_de_poste) et tout ce qui en dépend : opportunités,
 --     critères de score détaillés, langue_poste/evolue_dans/recherche,
---     gere_poste (liens vers CM/CZ/MIS/PAR), historique_poste.
+--     gere_poste (liens vers CM/CZ/MIS/PAR), historique_poste, notification_cm
+--     (notifications des chargés de mission, supprimées avec leurs opportunités).
 --   - Tous les candidats (candidat) et tout ce qui en dépend : fiche_de_voeux
 --     et toutes ses tables de préférences (langues, domaines, régions,
 --     hébergement, compétences...), etape (historique d'appels), inscrit_a,
@@ -37,7 +38,8 @@
 -- CE QUI N'EST PAS TOUCHÉ (référentiels administrables, volontairement) :
 --   pays, région, langue, niveau_langue, durée, domaine, compétences,
 --   environnement, hébergement, notoriete_dcc, etat_candidat, etat_poste,
---   etat_opportunite, type_billet_avion, aide_contextuelle, stages (sessions).
+--   etat_opportunite, type_billet_avion, aide_contextuelle, stages (sessions),
+--   statut_professionnel (liste du statut des candidats), email_template (textes des emails).
 --   → Si vous voulez aussi vider les sessions (stages), voir la note à la fin
 --     de la PARTIE 2.
 --

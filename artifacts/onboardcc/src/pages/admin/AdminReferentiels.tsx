@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { adminApi, ReferentielItem } from '@/api/admin';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -38,6 +38,7 @@ const TABLES = [
   { id: 'etat_poste', name: 'état de poste' },
   { id: 'stages', name: 'stages' },
   { id: 'notoriete_dcc', name: 'notoriété DCC' },
+  { id: 'statut_professionnel', name: 'statut professionnel' },
   { id: 'type_billet_avion', name: 'type de billet d’avion' },
   { id: 'etat_opportunite', name: 'état d\'opportunité' },
   { id: 'etat_candidat', name: 'état candidat' },
@@ -64,14 +65,24 @@ export default function AdminReferentiels() {
   const READ_ONLY_TABLES = ['etat_candidat', 'etat_poste', 'etat_opportunite'];
   const isReadOnly = READ_ONLY_TABLES.includes(selectedTable.id);
 
-  const fetchData = async () => {
-    setLoading(true);
+  /* Numéro de la dernière demande de chargement : une réponse arrivée après une demande plus récente (changement
+     rapide de référentiel, réseau lent) est ignorée, pour ne jamais afficher les colonnes d'une autre table (UAT-07). */
+  const lastRequest = useRef(0);
+
+  /* Recharge la liste depuis le serveur. Après chaque ajout, modification ou changement d'état, l'écran est
+     resynchronisé avec la base (UAT-07) ; le tableau reste affiché pendant ce rechargement (showSpinner = false). */
+  const fetchData = async (showSpinner = true) => {
+    const requestId = ++lastRequest.current;
+    const requestedTable = selectedTable.id;
+    if (showSpinner) setLoading(true);
     setError(null);
     try {
-      const result = await adminApi.getReferentiel(selectedTable.id);
+      const result = await adminApi.getReferentiel(requestedTable);
+      if (requestId !== lastRequest.current) return;
       setPkField(result.pk || 'id');
       setData(result.rows || []);
     } catch (err: any) {
+      if (requestId !== lastRequest.current) return;
       setError(err.message || 'Erreur lors du chargement des données');
       toast({
         title: 'Erreur',
@@ -79,12 +90,13 @@ export default function AdminReferentiels() {
         variant: 'destructive',
       });
     } finally {
-      setLoading(false);
+      if (requestId === lastRequest.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchData();
+    setData([]);
+    void fetchData();
   }, [selectedTable.id]);
 
   const handleToggleActive = async (item: ReferentielItem) => {
@@ -93,7 +105,7 @@ export default function AdminReferentiels() {
     try {
       const pkVal = item[pkField] as number;
       const updated = await adminApi.updateReferentiel(selectedTable.id, pkVal, { active: !item.active });
-      setData(prev => prev.map(row => row[pkField] === pkVal ? { ...row, active: updated.active } : row));
+      await fetchData(false);
       toast({
         title: 'Statut mis à jour',
         description: `L'élément a été ${updated.active ? 'activé' : 'désactivé'}.`,
@@ -141,20 +153,20 @@ export default function AdminReferentiels() {
     try {
       if (editingItem) {
         const pkVal = editingItem[pkField] as number;
-        const updated = await adminApi.updateReferentiel(selectedTable.id, pkVal, formData);
-        setData(prev => prev.map(row => row[pkField] === pkVal ? updated : row));
+        await adminApi.updateReferentiel(selectedTable.id, pkVal, formData);
+        await fetchData(false);
         toast({ title: 'Succès', description: 'Élément modifié avec succès.' });
       } else {
         const payload = { ...formData, active: formData.active ?? true };
-        const created = await adminApi.createReferentiel(selectedTable.id, payload);
-        setData(prev => [...prev, created]);
+        await adminApi.createReferentiel(selectedTable.id, payload);
+        await fetchData(false);
         toast({ title: 'Succès', description: 'Élément ajouté avec succès.' });
       }
       setIsFormOpen(false);
     } catch (err: any) {
       toast({
         title: 'Erreur',
-        description: 'Une erreur est survenue lors de l\'enregistrement.',
+        description: err?.response?.data?.error ?? 'Une erreur est survenue lors de l’enregistrement.',
         variant: 'destructive',
       });
     } finally {
@@ -223,7 +235,7 @@ export default function AdminReferentiels() {
                 <div className="flex flex-col items-center justify-center py-12 text-destructive">
                   <AlertCircle className="h-8 w-8 mb-2" />
                   <p>{error}</p>
-                  <Button variant="outline" className="mt-4" onClick={fetchData}>Réessayer</Button>
+                  <Button variant="outline" className="mt-4" onClick={() => void fetchData()}>Réessayer</Button>
                 </div>
               ) : data.length === 0 ? (
                 <div className="text-center py-12 text-muted-foreground">

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'wouter';
-import { AlertTriangle, CheckCircle2, ClipboardCheck, Link2, Loader2, Send } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ClipboardCheck, Link2, Loader2, Send, UserPlus } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { recruteurApi, type RecruiterCockpit } from '@/api/recruteur';
 
@@ -53,7 +53,15 @@ export default function Recruiter() {
 
       {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive" data-testid="status-recruiter-cockpit-error">{error}</p>}
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-5">
+        <KpiCard
+          title="Candidats à créer"
+          description="1er appel téléphonique à passer : le compte sera créé à sa validation"
+          value={cockpit?.kpis.candidats_a_creer}
+          icon={UserPlus}
+          testId="recruiter-a-creer"
+          href={`/recruteur/candidats?etat=${encodeURIComponent('1er appel')}`}
+        />
         <KpiCard
           title="Candidats à inviter en session Choisir"
           description="En 2ème appel téléphonique, vœux soumis"

@@ -2,7 +2,7 @@ import React from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
-import { LogOut, LayoutDashboard, Database, User, Briefcase, GraduationCap, Users } from 'lucide-react';
+import { LogOut, LayoutDashboard, Database, User, Briefcase, GraduationCap, Users, Mail } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 
@@ -34,6 +34,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         return [
           { label: 'Référentiels', href: '/admin/referentiels', icon: Database },
           { label: 'Utilisateurs', href: '/admin/utilisateurs', icon: Users },
+          { label: 'Modèle d’email', href: '/admin/modeles-email', icon: Mail },
         ];
       default:
         return [];
