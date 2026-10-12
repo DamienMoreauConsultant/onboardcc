@@ -1,11 +1,13 @@
 import * as React from 'react';
 import { cn } from '@/lib/utils';
 
+/* containerClassName : permet de limiter la hauteur du tableau (ex. max-h-96) ; le conteneur défile alors dans les deux
+   sens et sa barre de défilement horizontale reste visible en bas du cadre. */
 const Table = React.forwardRef<
   HTMLTableElement,
-  React.HTMLAttributes<HTMLTableElement>
->(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
+  React.HTMLAttributes<HTMLTableElement> & { containerClassName?: string }
+>(({ className, containerClassName, ...props }, ref) => (
+  <div className={cn('relative w-full overflow-auto', containerClassName)}>
     <table
       ref={ref}
       className={cn('w-full caption-bottom text-sm', className)}

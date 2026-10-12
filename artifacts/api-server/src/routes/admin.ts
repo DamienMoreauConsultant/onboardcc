@@ -91,7 +91,7 @@ function validUserPayload(body: unknown): { value?: { nom: string; prenom: strin
 /** Une ligne de la liste des comptes (même forme pour la liste et après modification). */
 const USER_SELECT = `
   SELECT u.id_user,u.login,u.active,u.role_applicatif,u.id_contact,
-         c.crm_key,c.nom_contact AS nom,c.prenom_contact AS prenom,c.email_contact AS email,
+         c.crm_key,cand.crm_key AS candidat_crm_key,c.nom_contact AS nom,c.prenom_contact AS prenom,c.email_contact AS email,
          c.tel_contact AS telephone,c.genre,c.role AS role_contact,
          ec.id_etat_candidat AS etat_code,ec.designation AS etat_designation
   FROM user_ u

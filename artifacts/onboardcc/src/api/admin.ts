@@ -18,7 +18,10 @@ export type UserAccount = {
   id_user: number;
   login: string;
   id_contact: number;
+  /** CRM_KEY du contact (tous les comptes). */
   crm_key: string | null;
+  /** CRM_KEY du candidat : renseigné uniquement pour les comptes CANDIDAT (UAT-09). */
+  candidat_crm_key?: string | null;
   nom: string;
   prenom: string;
   email: string;

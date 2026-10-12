@@ -45,7 +45,7 @@ function contactRoleOptions(role: ApplicationRole) {
 const EDITABLE_CONTACT_ROLES = ['ADMIN', 'REC'];
 /* Désactivation en masse : candidats et CM uniquement (les comptes Admin et Recruteur se désactivent un par un). */
 const BULK_ROLES = ['CANDIDAT', 'CM'];
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 25;
 const ALL = '__tous__';
 const NO_STATE = '__aucun__';
 
@@ -113,7 +113,7 @@ export default function AdminUtilisateurs() {
       if (roleFilter !== ALL && a.role_applicatif !== roleFilter) return false;
       if (stateFilter === NO_STATE ? Boolean(a.etat_designation) : stateFilter !== ALL && a.etat_designation !== stateFilter) return false;
       if (activeFilter !== ALL && a.active !== (activeFilter === 'oui')) return false;
-      if (needle && ![a.login, a.nom, a.prenom, a.email].some((v) => (v ?? '').toLowerCase().includes(needle))) return false;
+      if (needle && ![a.login, a.nom, a.prenom, a.email, a.crm_key, a.candidat_crm_key].some((v) => (v ?? '').toLowerCase().includes(needle))) return false;
       return true;
     });
   }, [accounts, roleFilter, stateFilter, activeFilter, search]);
@@ -251,7 +251,7 @@ export default function AdminUtilisateurs() {
               <Label htmlFor="user-search" className="text-xs">Recherche</Label>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input id="user-search" className="pl-8" placeholder="Login, nom, prénom, e-mail…" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-user-search" />
+                <Input id="user-search" className="pl-8" placeholder="Login, nom, prénom, e-mail, CRM_KEY…" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-user-search" />
               </div>
             </div>
             <div className="w-44">
@@ -298,9 +298,9 @@ export default function AdminUtilisateurs() {
             <p className="py-12 text-center text-muted-foreground" data-testid="empty-users">Aucun compte ne correspond à ces critères.</p>
           ) : (
             <>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader className="bg-muted/50">
+              {/* Hauteur limitée : la liste défile dans son cadre (en-tête figé) et la barre de défilement horizontale reste toujours visible en bas du cadre (UAT-09). */}
+              <Table containerClassName="max-h-[calc(100vh-24rem)] min-h-64">
+                  <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted">
                     <TableRow>
                       <TableHead className="w-10">
                         <Checkbox
@@ -312,6 +312,7 @@ export default function AdminUtilisateurs() {
                         />
                       </TableHead>
                       <TableHead>Login</TableHead><TableHead>Nom</TableHead><TableHead>Prénom</TableHead><TableHead>E-mail</TableHead>
+                      <TableHead className="whitespace-nowrap">CRM_KEY contact</TableHead><TableHead className="whitespace-nowrap">CRM_KEY candidat</TableHead>
                       <TableHead>Rôle applicatif</TableHead><TableHead>Rôle contact</TableHead><TableHead>État</TableHead><TableHead>Actif</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -328,6 +329,8 @@ export default function AdminUtilisateurs() {
                         <TableCell className="font-medium" data-testid={`text-user-name-${account.id_user}`}>{account.nom}</TableCell>
                         <TableCell>{account.prenom}</TableCell>
                         <TableCell>{account.email}</TableCell>
+                        <TableCell className="whitespace-nowrap font-mono text-xs" data-testid={`text-user-crmkey-${account.id_user}`}>{account.crm_key ?? ''}</TableCell>
+                        <TableCell className="whitespace-nowrap font-mono text-xs" data-testid={`text-user-candidat-crmkey-${account.id_user}`}>{account.candidat_crm_key ?? ''}</TableCell>
                         <TableCell><Badge data-testid={`badge-application-role-${account.id_user}`}>{account.role_applicatif}</Badge></TableCell>
                         <TableCell><Badge variant="outline" data-testid={`badge-contact-role-${account.id_user}`}>{account.role_contact}</Badge></TableCell>
                         <TableCell className="text-sm" data-testid={`text-user-etat-${account.id_user}`}>{account.etat_designation ?? ''}</TableCell>
@@ -336,8 +339,7 @@ export default function AdminUtilisateurs() {
                       </TableRow>
                     ))}
                   </TableBody>
-                </Table>
-              </div>
+              </Table>
               <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm text-muted-foreground">
                 <span>{filtered.length} compte(s){selected.size > 0 ? ` — ${selected.size} sélectionné(s)` : ''}</span>
                 <div className="flex items-center gap-2">
@@ -408,7 +410,10 @@ export default function AdminUtilisateurs() {
                 <Label>Contact associé</Label>
                 <div className="overflow-hidden rounded-md border text-sm">
                   <dl className="divide-y">
-                    <div className="grid grid-cols-3 items-center gap-2 px-3 py-2"><dt className="text-muted-foreground">CRM_KEY</dt><dd className="col-span-2 font-mono text-xs" data-testid="text-edit-crmkey">{editing.crm_key ?? '—'}</dd></div>
+                    <div className="grid grid-cols-3 items-center gap-2 px-3 py-2"><dt className="text-muted-foreground">CRM_KEY contact</dt><dd className="col-span-2 font-mono text-xs" data-testid="text-edit-crmkey">{editing.crm_key ?? '—'}</dd></div>
+                    {editing.role_applicatif === 'CANDIDAT' && (
+                      <div className="grid grid-cols-3 items-center gap-2 px-3 py-2"><dt className="text-muted-foreground">CRM_KEY candidat</dt><dd className="col-span-2 font-mono text-xs" data-testid="text-edit-candidat-crmkey">{editing.candidat_crm_key ?? '—'}</dd></div>
+                    )}
                     <div className="grid grid-cols-3 items-center gap-2 px-3 py-2"><dt className="text-muted-foreground">Nom</dt><dd className="col-span-2">{contactEditable ? <Input value={editNom} onChange={(e) => setEditNom(e.target.value)} data-testid="input-edit-nom" /> : editing.nom}</dd></div>
                     <div className="grid grid-cols-3 items-center gap-2 px-3 py-2"><dt className="text-muted-foreground">Prénom</dt><dd className="col-span-2">{contactEditable ? <Input value={editPrenom} onChange={(e) => setEditPrenom(e.target.value)} data-testid="input-edit-prenom" /> : editing.prenom}</dd></div>
                     <div className="grid grid-cols-3 items-center gap-2 px-3 py-2"><dt className="text-muted-foreground">Adresse e-mail</dt><dd className="col-span-2">{contactEditable ? <Input type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} data-testid="input-edit-email" /> : editing.email}</dd></div>
